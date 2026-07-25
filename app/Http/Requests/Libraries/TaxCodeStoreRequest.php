@@ -1,0 +1,37 @@
+<?php
+
+namespace App\Http\Requests\Libraries;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class TaxCodeStoreRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('rate_percent') && ! $this->has('rate')) {
+            $this->merge([
+                'rate' => round((float) $this->input('rate_percent') / 100, 4),
+            ]);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        return [
+            'code' => ['required', 'string', 'max:50', 'unique:tax_codes,code'],
+            'name' => ['required', 'string', 'max:255'],
+            'rate' => ['required', 'numeric', 'min:0', 'max:1'],
+            'type' => ['required', 'string', 'max:50'],
+            'account_id' => ['nullable', 'integer', 'exists:accounts,id'],
+            'is_active' => ['boolean'],
+        ];
+    }
+}
