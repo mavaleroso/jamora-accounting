@@ -24,6 +24,10 @@ enum PermissionEnum: string
     case ReportsIncomeStatementView = 'reports.income-statement.view';
     case ReportsBalanceSheetView = 'reports.balance-sheet.view';
     case ReportsCashFlowView = 'reports.cash-flow.view';
+    case ReportsArAgingView = 'reports.ar-aging.view';
+    case ReportsApAgingView = 'reports.ap-aging.view';
+    case ReportsVatSummaryView = 'reports.vat-summary.view';
+    case ReportsDailySalesView = 'reports.daily-sales.view';
     case ReportsExport = 'reports.export';
     case IntegrationOpticalView = 'integration.optical.view';
     case IntegrationOpticalSync = 'integration.optical.sync';
@@ -32,8 +36,34 @@ enum PermissionEnum: string
     case LibrariesJournalsManage = 'libraries.journals.manage';
     case LibrariesCostCentersManage = 'libraries.cost-centers.manage';
     case LibrariesTaxCodesManage = 'libraries.tax-codes.manage';
+    case LibrariesEmployeesManage = 'libraries.employees.manage';
+    case LibrariesPartnersManage = 'libraries.partners.manage';
+    case LibrariesVendorsManage = 'libraries.vendors.manage';
+    case BillingView = 'billing.view';
+    case BillingManage = 'billing.manage';
+    case BillingCollect = 'billing.collect';
+    case PayrollView = 'payroll.view';
+    case PayrollManage = 'payroll.manage';
+    case PayrollRun = 'payroll.run';
+    case ApView = 'ap.view';
+    case ApManage = 'ap.manage';
+    case ApPay = 'ap.pay';
+    case BanksView = 'banks.view';
+    case BanksManage = 'banks.manage';
+    case BanksReconcile = 'banks.reconcile';
     case AdminUsersManage = 'admin.users.manage';
     case AdminRolesPermissionsManage = 'admin.roles-permissions.manage';
     case AdminAuditTrailsView = 'admin.audit-trails.view';
     case SettingsProfileManage = 'settings.profile.manage';
+
+    // Employee Management Permissions
+    case AttendanceView = 'attendance.view';
+    case AttendancePunch = 'attendance.punch';
+    case AttendanceManage = 'attendance.manage';
+    case LeaveView = 'leave.view';
+    case LeaveFile = 'leave.file';
+    case LeaveApprove = 'leave.approve';
+    case RosterView = 'roster.view';
+    case RosterManage = 'roster.manage';
+    case PortalView = 'portal.view';
 }

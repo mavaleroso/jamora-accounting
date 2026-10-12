@@ -11,29 +11,68 @@ use App\Http\Controllers\Reports\IncomeStatementController;
 use App\Http\Controllers\Reports\JournalRegisterController;
 use App\Http\Controllers\Reports\TrialBalanceController;
 use App\Http\Controllers\Admin\AuditTrailsController;
+use App\Http\Controllers\Ap\BillsController;
+use App\Http\Controllers\Billing\DepositsController;
+use App\Http\Controllers\Billing\InvoicesController;
+use App\Http\Controllers\Banks\BankAccountsController;
+use App\Http\Controllers\Banks\ReconciliationsController;
+use App\Http\Controllers\EntitiesController;
 use App\Http\Controllers\Libraries\AccountTypesController;
 use App\Http\Controllers\Libraries\CostCentersController;
+use App\Http\Controllers\Libraries\EmployeesController;
 use App\Http\Controllers\Libraries\JournalsController;
+use App\Http\Controllers\Libraries\PartnersController;
 use App\Http\Controllers\Libraries\TaxCodesController;
+use App\Http\Controllers\Libraries\VendorsController;
+use App\Http\Controllers\Payroll\DtrController;
+use App\Http\Controllers\Payroll\PayrollPeriodsController;
+use App\Http\Controllers\Payroll\PayrollRunsController;
+use App\Http\Controllers\Reports\ApAgingController;
+use App\Http\Controllers\Reports\ArAgingController;
+use App\Http\Controllers\Accounting\CashBankTransactionsController;
 use App\Http\Controllers\Admin\PermissionsController;
 use App\Http\Controllers\Admin\RolesController;
 use App\Http\Controllers\Admin\UsersController;
+use App\Http\Controllers\EmployeeManagement\AttendanceController;
+use App\Http\Controllers\EmployeeManagement\BenefitsAdministrationController;
+use App\Http\Controllers\EmployeeManagement\ComplianceController;
+use App\Http\Controllers\EmployeeManagement\EmployeePortalController;
+use App\Http\Controllers\EmployeeManagement\LeaveManagementController;
+use App\Http\Controllers\EmployeeManagement\PeopleAccessController;
+use App\Http\Controllers\EmployeeManagement\PeopleReportsController;
+use App\Http\Controllers\EmployeeManagement\ShiftRosterController;
+use App\Http\Controllers\Integration\InventoryIntegrationController;
 use App\Http\Controllers\Integration\OpticalSyncController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::get('/', function () {
     if (auth()->check()) {
+        $user = auth()->user();
+        if ($user->can('dashboard.view')) {
+            return redirect()->route('dashboard');
+        }
+        if ($user->can('portal.view')) {
+            return redirect()->route('employee-management.portal.index');
+        }
+        if ($user->can('attendance.view')) {
+            return redirect()->route('employee-management.attendance.index');
+        }
         return redirect()->route('dashboard');
     }
 
     return redirect()->route('login');
 })->name('home');
 
+Route::get('/dashboard', function () {
+    return redirect()->route('dashboard');
+});
+
 Route::middleware(['auth', 'verified'])->group(function () {
+    Route::post('/entities/switch', [EntitiesController::class, 'switch'])->name('entities.switch');
+
     Route::get('/accounting/dashboard', [DashboardController::class, 'index'])
-        ->name('dashboard')
-        ->middleware('permission:dashboard.view');
+        ->name('dashboard');
     Route::post('/accounting/dashboard/data', [DashboardController::class, 'data'])
         ->name('dashboard.data')
         ->middleware('permission:dashboard.view');
@@ -70,6 +109,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('{period}/close', 'close')->name('close')->middleware('permission:periods.close');
             Route::post('{period}/reopen', 'reopen')->name('reopen')->middleware('permission:periods.reopen');
         });
+
+        Route::controller(CashBankTransactionsController::class)->prefix('cash-bank-records')->name('cash-bank.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:banks.view|journals.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:banks.manage|journals.create');
+        });
     });
 
     Route::prefix('reports')->name('reports.')->group(function () {
@@ -102,6 +146,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('list', 'list')->name('list')->middleware('permission:reports.journal-register.view');
             Route::get('export', 'export')->name('export')->middleware('permission:reports.export|reports.journal-register.view');
         });
+
+        Route::controller(ArAgingController::class)->prefix('ar-aging')->name('ar-aging.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:reports.ar-aging.view');
+            Route::post('data', 'data')->name('data')->middleware('permission:reports.ar-aging.view');
+        });
+
+        Route::controller(ApAgingController::class)->prefix('ap-aging')->name('ap-aging.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:reports.ap-aging.view');
+            Route::post('data', 'data')->name('data')->middleware('permission:reports.ap-aging.view');
+        });
     });
 
     Route::prefix('libraries')->group(function () {
@@ -132,6 +186,85 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::put('{taxCode}', 'update')->name('update');
             Route::delete('{taxCode}', 'destroy')->name('destroy');
         });
+
+        Route::controller(PartnersController::class)->prefix('partners')->name('partners.')->middleware('permission:libraries.partners.manage')->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::post('/', 'store')->name('store');
+            Route::put('{partner}', 'update')->name('update');
+            Route::delete('{partner}', 'destroy')->name('destroy');
+        });
+
+        Route::controller(EmployeesController::class)->prefix('employees')->name('employees.')->middleware('permission:libraries.employees.manage')->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::post('/', 'store')->name('store');
+            Route::put('{employee}', 'update')->name('update');
+            Route::delete('{employee}', 'destroy')->name('destroy');
+        });
+
+        Route::controller(VendorsController::class)->prefix('vendors')->name('vendors.')->middleware('permission:libraries.vendors.manage')->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::post('/', 'store')->name('store');
+            Route::put('{vendor}', 'update')->name('update');
+            Route::delete('{vendor}', 'destroy')->name('destroy');
+        });
+    });
+
+    Route::prefix('billing')->name('billing.')->group(function () {
+        Route::controller(InvoicesController::class)->prefix('invoices')->name('invoices.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:billing.view');
+            Route::get('create', 'create')->name('create')->middleware('permission:billing.manage');
+            Route::post('/', 'store')->name('store')->middleware('permission:billing.manage');
+            Route::get('{invoice}', 'show')->name('show')->middleware('permission:billing.view');
+            Route::post('{invoice}/confirm', 'confirm')->name('confirm')->middleware('permission:billing.manage');
+            Route::post('{invoice}/collect', 'collect')->name('collect')->middleware('permission:billing.collect');
+        });
+
+        Route::controller(DepositsController::class)->prefix('deposits')->name('deposits.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:billing.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:billing.manage');
+        });
+    });
+
+    Route::prefix('payroll')->name('payroll.')->group(function () {
+        Route::controller(PayrollPeriodsController::class)->prefix('periods')->name('periods.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:payroll.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:payroll.manage');
+        });
+
+        Route::controller(DtrController::class)->prefix('dtr')->name('dtr.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:payroll.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:payroll.manage');
+            Route::post('import', 'import')->name('import')->middleware('permission:payroll.manage');
+        });
+
+        Route::controller(PayrollRunsController::class)->prefix('runs')->name('runs.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:payroll.view');
+            Route::post('compute', 'compute')->name('compute')->middleware('permission:payroll.run');
+            Route::post('{payrollRun}/post', 'post')->name('post')->middleware('permission:payroll.run');
+        });
+    });
+
+    Route::prefix('ap')->name('ap.')->group(function () {
+        Route::controller(BillsController::class)->prefix('bills')->name('bills.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:ap.view');
+            Route::get('create', 'create')->name('create')->middleware('permission:ap.manage');
+            Route::post('/', 'store')->name('store')->middleware('permission:ap.manage');
+            Route::post('{bill}/post', 'post')->name('post')->middleware('permission:ap.manage');
+            Route::post('{bill}/pay', 'pay')->name('pay')->middleware('permission:ap.pay');
+        });
+    });
+
+    Route::prefix('banks')->name('banks.')->group(function () {
+        Route::controller(BankAccountsController::class)->prefix('accounts')->name('accounts.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:banks.view');
+        });
+
+        Route::controller(ReconciliationsController::class)->prefix('reconciliations')->name('reconciliations.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:banks.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:banks.reconcile');
+            Route::post('transactions/{bankTransaction}/clear', 'clearTransaction')->name('transactions.clear')->middleware('permission:banks.reconcile');
+            Route::post('{bankReconciliation}/complete', 'complete')->name('complete')->middleware('permission:banks.reconcile');
+        });
     });
 
     Route::prefix('admin')->group(function () {
@@ -160,6 +293,61 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(AuditTrailsController::class)->prefix('audit-trails')->name('audit-trails.')->middleware('permission:admin.audit-trails.view')->group(function () {
             Route::get('/', 'index')->name('index');
             Route::post('list', 'list')->name('list');
+        });
+    });
+
+    Route::prefix('integration/inventory')->name('integration.inventory.')->group(function () {
+        Route::controller(InventoryIntegrationController::class)->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::post('movements', 'recordMovement')->name('movements.store');
+            Route::post('movements/{movement}/review', 'markReviewed')->name('movements.review');
+        });
+    });
+
+    Route::prefix('employee-management')->name('employee-management.')->group(function () {
+        Route::controller(ShiftRosterController::class)->prefix('roster')->name('roster.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:roster.view|payroll.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:roster.manage|payroll.manage');
+            Route::post('publish', 'publish')->name('publish')->middleware('permission:roster.manage|payroll.manage');
+            Route::delete('{roster}', 'destroy')->name('destroy')->middleware('permission:roster.manage|payroll.manage');
+        });
+
+        Route::controller(AttendanceController::class)->prefix('attendance')->name('attendance.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:attendance.view|payroll.view');
+            Route::post('punch', 'recordPunch')->name('punch')->middleware('permission:attendance.punch|payroll.manage');
+            Route::post('geofence', 'updateGeofence')->name('geofence')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('{dtr}/verify', 'verifyPunch')->name('verify')->middleware('permission:attendance.manage|payroll.manage');
+        });
+
+        Route::controller(LeaveManagementController::class)->prefix('leave')->name('leave.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:leave.view|payroll.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:leave.file|payroll.manage');
+            Route::post('{leaveRequest}/status', 'updateStatus')->name('status')->middleware('permission:leave.approve|payroll.manage');
+        });
+
+        Route::controller(BenefitsAdministrationController::class)->prefix('benefits')->name('benefits.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:payroll.manage|libraries.employees.manage');
+            Route::post('programs', 'storeProgram')->name('programs.store')->middleware('permission:payroll.manage|libraries.employees.manage');
+            Route::post('enroll', 'enroll')->name('enroll')->middleware('permission:payroll.manage|libraries.employees.manage');
+        });
+
+        Route::controller(EmployeePortalController::class)->prefix('portal')->name('portal.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:portal.view|payroll.view');
+            Route::post('leave-request', 'fileLeave')->name('file-leave')->middleware('permission:leave.file|payroll.manage');
+        });
+
+        Route::controller(PeopleReportsController::class)->prefix('reports')->name('reports.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:payroll.view|dashboard.view');
+        });
+
+        Route::controller(PeopleAccessController::class)->prefix('access')->name('access.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:admin.roles-permissions.manage|admin.users.manage');
+        });
+
+        Route::controller(ComplianceController::class)->prefix('compliance')->name('compliance.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:periods.view|dashboard.view|ap.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:periods.view|dashboard.view|ap.view');
+            Route::post('{complianceItem}/verify', 'verify')->name('verify')->middleware('permission:periods.view|dashboard.view|ap.view');
         });
     });
 

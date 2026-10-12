@@ -23,7 +23,7 @@ class OpticalSyncController extends Controller
     public function index(Request $request): Response
     {
         $runs = SyncRun::query()
-            ->with('triggeredByUser:id,name')
+            ->with('triggeredByUser:id,firstname,lastname,username')
             ->orderByDesc('started_at')
             ->limit(50)
             ->get()
@@ -49,6 +49,7 @@ class OpticalSyncController extends Controller
             'runs' => $runs,
             'lastRun' => $lastRun,
             'failedCount' => $failedCount,
+            'syncDriver' => 'db',
         ]);
     }
 

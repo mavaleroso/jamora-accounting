@@ -1,136 +1,106 @@
 import { usePage } from '@inertiajs/react';
 import {
+    BadgeCheck,
+    Banknote,
+    BarChart3,
     BookOpen,
+    Building2,
     Calculator,
+    CalendarCheck,
+    CalendarOff,
     CalendarRange,
+    ClipboardList,
+    Clock,
+    CreditCard,
     FileSpreadsheet,
+    HeartHandshake,
     HistoryIcon,
+    KeyRound,
     Landmark,
     LayoutGrid,
     Link2,
     ListTree,
+    Package,
     Receipt,
     Scale,
     Shield,
+    UserCheck,
+    UserRound,
     Users,
     Wallet,
 } from 'lucide-react';
-import AppLogo from '@/components/app-logo';
+import { EntitySwitcher } from '@/components/entity-switcher';
 import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
-import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader } from '@/components/ui/sidebar';
 import { hasAnyPermission, hasPermission } from '@/lib/permissions';
 import type { NavItem, SharedData } from '@/types';
-import { Link } from '@inertiajs/react';
 
 const accountingNavItems: NavItem[] = [
-    {
-        title: 'Dashboard',
-        href: '/accounting/dashboard',
-        icon: LayoutGrid,
-    },
-    {
-        title: 'Journal Entries',
-        href: '/accounting/journal-entries',
-        icon: Receipt,
-    },
-    {
-        title: 'Chart of Accounts',
-        href: '/accounting/chart-of-accounts',
-        icon: BookOpen,
-    },
-    {
-        title: 'General Ledger',
-        href: '/accounting/general-ledger',
-        icon: Landmark,
-    },
-    {
-        title: 'Accounting Periods',
-        href: '/accounting/periods',
-        icon: CalendarRange,
-    },
+    { title: 'Dashboard', href: '/accounting/dashboard', icon: LayoutGrid },
+    { title: 'Non-Cash Journals', href: '/accounting/journal-entries', icon: Receipt },
+    { title: 'Cash & Bank Records', href: '/accounting/cash-bank-records', icon: Wallet },
+    { title: 'Chart of Accounts', href: '/accounting/chart-of-accounts', icon: BookOpen },
+    { title: 'General Ledger', href: '/accounting/general-ledger', icon: Landmark },
+    { title: 'Accounting Periods', href: '/accounting/periods', icon: CalendarRange },
+];
+
+const billingNavItems: NavItem[] = [
+    { title: 'Invoices & Billing', href: '/billing/invoices', icon: Receipt },
+    { title: 'Customer Deposits', href: '/billing/deposits', icon: Wallet },
+];
+
+const inventoryNavItems: NavItem[] = [
+    { title: 'Inventory Movements', href: '/integration/inventory', icon: Package },
+    { title: 'Optical Sync', href: '/integration/optical', icon: Link2 },
+    { title: 'Sync Rules', href: '/integration/optical/rules', icon: ListTree },
+];
+
+const apNavItems: NavItem[] = [
+    { title: 'Bills & Payables', href: '/ap/bills', icon: CreditCard },
+];
+
+const banksNavItems: NavItem[] = [
+    { title: 'Bank Accounts', href: '/banks/accounts', icon: Landmark },
+    { title: 'Reconciliations', href: '/banks/reconciliations', icon: Scale },
+];
+
+const employeeMgmtNavItems: NavItem[] = [
+    { title: 'Employee Directory', href: '/libraries/employees', icon: UserRound },
+    { title: 'Shift & Roster', href: '/employee-management/roster', icon: CalendarCheck },
+    { title: 'Time & Attendance', href: '/employee-management/attendance', icon: Clock },
+    { title: 'Leave & Absence', href: '/employee-management/leave', icon: CalendarOff },
+    { title: 'Payroll Runs', href: '/payroll/runs', icon: Banknote },
+    { title: 'Benefits Admin', href: '/employee-management/benefits', icon: HeartHandshake },
+    { title: 'Employee Portal', href: '/employee-management/portal', icon: UserCheck },
+    { title: 'People Reports', href: '/employee-management/reports', icon: BarChart3 },
+    { title: 'People Access', href: '/employee-management/access', icon: KeyRound },
+    { title: 'Compliance Mgmt', href: '/employee-management/compliance', icon: BadgeCheck },
 ];
 
 const reportsNavItems: NavItem[] = [
-    {
-        title: 'Trial Balance',
-        href: '/reports/trial-balance',
-        icon: Scale,
-    },
-    {
-        title: 'Income Statement',
-        href: '/reports/income-statement',
-        icon: FileSpreadsheet,
-    },
-    {
-        title: 'Balance Sheet',
-        href: '/reports/balance-sheet',
-        icon: Wallet,
-    },
-    {
-        title: 'Cash Flow',
-        href: '/reports/cash-flow',
-        icon: Calculator,
-    },
-    {
-        title: 'Journal Register',
-        href: '/reports/journal-register',
-        icon: ListTree,
-    },
+    { title: 'Trial Balance', href: '/reports/trial-balance', icon: Scale },
+    { title: 'Income Statement', href: '/reports/income-statement', icon: FileSpreadsheet },
+    { title: 'Balance Sheet', href: '/reports/balance-sheet', icon: Wallet },
+    { title: 'Cash Flow', href: '/reports/cash-flow', icon: Calculator },
+    { title: 'Journal Register', href: '/reports/journal-register', icon: ListTree },
+    { title: 'AR Aging', href: '/reports/ar-aging', icon: FileSpreadsheet },
+    { title: 'AP Aging', href: '/reports/ap-aging', icon: FileSpreadsheet },
 ];
 
 const librariesNavItems: NavItem[] = [
-    {
-        title: 'Account Types',
-        href: '/libraries/account-types',
-        icon: BookOpen,
-    },
-    {
-        title: 'Journal Types',
-        href: '/libraries/journal-types',
-        icon: Receipt,
-    },
-    {
-        title: 'Cost Centers',
-        href: '/libraries/cost-centers',
-        icon: Landmark,
-    },
-    {
-        title: 'Tax Codes',
-        href: '/libraries/tax-codes',
-        icon: Calculator,
-    },
-];
-
-const integrationNavItems: NavItem[] = [
-    {
-        title: 'Optical Sync',
-        href: '/integration/optical',
-        icon: Link2,
-    },
-    {
-        title: 'Sync Rules',
-        href: '/integration/optical/rules',
-        icon: ListTree,
-    },
+    { title: 'Account Types', href: '/libraries/account-types', icon: BookOpen },
+    { title: 'Journal Types', href: '/libraries/journal-types', icon: Receipt },
+    { title: 'Cost Centers', href: '/libraries/cost-centers', icon: Landmark },
+    { title: 'Tax Codes', href: '/libraries/tax-codes', icon: Calculator },
+    { title: 'Partners', href: '/libraries/partners', icon: Users },
+    { title: 'Vendors', href: '/libraries/vendors', icon: Building2 },
 ];
 
 const adminNavItems: NavItem[] = [
-    {
-        title: 'Users',
-        href: '/admin/users',
-        icon: Users,
-    },
-    {
-        title: 'Roles & Permissions',
-        href: '/admin/roles',
-        icon: Shield,
-    },
-    {
-        title: 'Audit Trails',
-        href: '/admin/audit-trails',
-        icon: HistoryIcon,
-    },
+    { title: 'Users', href: '/admin/users', icon: Users },
+    { title: 'Roles & Permissions', href: '/admin/roles', icon: Shield },
+    { title: 'Audit Trails', href: '/admin/audit-trails', icon: HistoryIcon },
 ];
 
 export function AppSidebar() {
@@ -145,19 +115,15 @@ export function AppSidebar() {
     const syncExceptionCount = props.syncExceptionCount ?? 0;
 
     const filteredAccounting = accountingNavItems
-        .map((item) => {
-            if (item.href === '/accounting/journal-entries') {
-                return { ...item, count: journalEntryCount };
-            }
-
-            return item;
-        })
+        .map((item) => (item.href === '/accounting/journal-entries' ? { ...item, count: journalEntryCount } : item))
         .filter((item) => {
             switch (item.href) {
                 case '/accounting/dashboard':
                     return can('dashboard.view');
                 case '/accounting/journal-entries':
                     return canAny(['journals.view', 'journals.create', 'journals.update', 'journals.post']);
+                case '/accounting/cash-bank-records':
+                    return canAny(['banks.view', 'journals.view', 'banks.manage', 'journals.create']);
                 case '/accounting/chart-of-accounts':
                     return canAny(['accounts.view', 'accounts.manage']);
                 case '/accounting/general-ledger':
@@ -168,6 +134,20 @@ export function AppSidebar() {
                     return true;
             }
         });
+
+    const filteredBilling = billingNavItems.filter((item) => {
+        switch (item.href) {
+            case '/billing/invoices':
+            case '/billing/deposits':
+                return canAny(['billing.view', 'billing.manage', 'billing.collect']);
+            default:
+                return true;
+        }
+    });
+
+    const filteredAp = apNavItems.filter(() => canAny(['ap.view', 'ap.manage', 'ap.pay']));
+
+    const filteredBanks = banksNavItems.filter(() => canAny(['banks.view', 'banks.manage', 'banks.reconcile']));
 
     const filteredReports = reportsNavItems.filter((item) => {
         switch (item.href) {
@@ -181,6 +161,10 @@ export function AppSidebar() {
                 return can('reports.cash-flow.view');
             case '/reports/journal-register':
                 return can('reports.journal-register.view');
+            case '/reports/ar-aging':
+                return can('reports.ar-aging.view');
+            case '/reports/ap-aging':
+                return can('reports.ap-aging.view');
             default:
                 return true;
         }
@@ -196,21 +180,23 @@ export function AppSidebar() {
                 return can('libraries.cost-centers.manage');
             case '/libraries/tax-codes':
                 return can('libraries.tax-codes.manage');
+            case '/libraries/partners':
+                return can('libraries.partners.manage');
+            case '/libraries/employees':
+                return can('libraries.employees.manage');
+            case '/libraries/vendors':
+                return can('libraries.vendors.manage');
             default:
                 return true;
         }
     });
 
-    const filteredIntegration = integrationNavItems
-        .map((item) => {
-            if (item.href === '/integration/optical') {
-                return { ...item, count: syncExceptionCount };
-            }
-
-            return item;
-        })
+    const filteredIntegration = inventoryNavItems
+        .map((item) => (item.href === '/integration/optical' ? { ...item, count: syncExceptionCount } : item))
         .filter((item) => {
             switch (item.href) {
+                case '/integration/inventory':
+                    return canAny(['integration.optical.view', 'journals.view', 'billing.view']);
                 case '/integration/optical':
                     return canAny(['integration.optical.view', 'integration.optical.sync']);
                 case '/integration/optical/rules':
@@ -220,16 +206,38 @@ export function AppSidebar() {
             }
         });
 
+    const filteredEmployeeMgmt = employeeMgmtNavItems.filter((item) => {
+        switch (item.href) {
+            case '/libraries/employees':
+                return can('libraries.employees.manage');
+            case '/employee-management/roster':
+                return canAny(['roster.view', 'roster.manage', 'payroll.view', 'payroll.manage']);
+            case '/employee-management/attendance':
+                return canAny(['attendance.view', 'attendance.punch', 'attendance.manage', 'payroll.view', 'payroll.manage']);
+            case '/employee-management/leave':
+                return canAny(['leave.view', 'leave.file', 'leave.approve', 'payroll.view', 'payroll.manage']);
+            case '/payroll/runs':
+                return canAny(['payroll.view', 'payroll.run']);
+            case '/employee-management/benefits':
+                return canAny(['payroll.manage', 'libraries.employees.manage']);
+            case '/employee-management/portal':
+                return canAny(['portal.view', 'payroll.view', 'payroll.manage']);
+            case '/employee-management/reports':
+                return canAny(['payroll.view', 'dashboard.view']);
+            case '/employee-management/access':
+                return canAny(['admin.roles-permissions.manage', 'admin.users.manage']);
+            case '/employee-management/compliance':
+                return canAny(['periods.view', 'dashboard.view', 'ap.view']);
+            default:
+                return true;
+        }
+    });
+
     const filteredAdmin = adminNavItems
         .map((item) => {
-            switch (item.href) {
-                case '/admin/users':
-                    return { ...item, count: userCount };
-                case '/admin/roles':
-                    return { ...item, count: roleCount };
-                default:
-                    return item;
-            }
+            if (item.href === '/admin/users') return { ...item, count: userCount };
+            if (item.href === '/admin/roles') return { ...item, count: roleCount };
+            return item;
         })
         .filter((item) => {
             switch (item.href) {
@@ -247,22 +255,18 @@ export function AppSidebar() {
     return (
         <Sidebar collapsible="icon" variant="inset">
             <SidebarHeader>
-                <SidebarMenu>
-                    <SidebarMenuItem>
-                        <SidebarMenuButton size="lg" asChild>
-                            <Link href="/accounting/dashboard" prefetch>
-                                <AppLogo />
-                            </Link>
-                        </SidebarMenuButton>
-                    </SidebarMenuItem>
-                </SidebarMenu>
+                <EntitySwitcher />
             </SidebarHeader>
 
             <SidebarContent>
                 {filteredAccounting.length > 0 && <NavMain items={filteredAccounting} title="Accounting" />}
+                {filteredBilling.length > 0 && <NavMain items={filteredBilling} title="Billing" />}
+                {filteredIntegration.length > 0 && <NavMain items={filteredIntegration} title="Inventory Integration" />}
+                {filteredAp.length > 0 && <NavMain items={filteredAp} title="Accounts Payable" />}
+                {filteredBanks.length > 0 && <NavMain items={filteredBanks} title="Banks" />}
+                {filteredEmployeeMgmt.length > 0 && <NavMain items={filteredEmployeeMgmt} title="Employee Management" />}
                 {filteredReports.length > 0 && <NavMain items={filteredReports} title="Reports" />}
                 {filteredLibraries.length > 0 && <NavMain items={filteredLibraries} title="Libraries" />}
-                {filteredIntegration.length > 0 && <NavMain items={filteredIntegration} title="Integration" />}
                 {filteredAdmin.length > 0 && <NavMain items={filteredAdmin} title="Admin" />}
             </SidebarContent>
 

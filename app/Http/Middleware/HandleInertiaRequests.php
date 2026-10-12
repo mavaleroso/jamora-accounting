@@ -2,7 +2,9 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Entity;
 use App\Models\User;
+use App\Support\EntityContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -11,49 +13,53 @@ use Spatie\Permission\Models\Role;
 
 class HandleInertiaRequests extends Middleware
 {
-    /**
-     * The root template that's loaded on the first page visit.
-     *
-     * @see https://inertiajs.com/server-side-setup#root-template
-     *
-     * @var string
-     */
     protected $rootView = 'app';
 
-    /**
-     * Determines the current asset version.
-     *
-     * @see https://inertiajs.com/asset-versioning
-     */
     public function version(Request $request): ?string
     {
         return parent::version($request);
     }
 
-    /**
-     * Define the props that are shared by default.
-     *
-     * @see https://inertiajs.com/shared-data
-     *
-     * @return array<string, mixed>
-     */
     public function share(Request $request): array
     {
+        $entityContext = app(EntityContext::class);
+        $user = $request->user();
+        $current = $entityContext->current();
+
+        $available = [];
+        if ($user) {
+            $available = $user->hasRole('Admin')
+                ? Entity::query()->where('is_active', true)->orderBy('name')->get(['id', 'code', 'name'])
+                : $user->entities()->where('entities.is_active', true)->orderBy('entities.name')->get(['entities.id', 'entities.code', 'entities.name']);
+        }
+
         return [
             ...parent::share($request),
             'name' => config('app.name'),
             'auth' => [
-                'user' => $request->user() ? array_merge(
-                    $request->user()->toArray(),
+                'user' => $user ? array_merge(
+                    $user->toArray(),
                     [
-                        'avatar' => $request->user()->avatar
-                            ? asset('storage/'.$request->user()->avatar)
+                        'avatar' => $user->avatar
+                            ? asset('storage/'.$user->avatar)
                             : null,
-                        'position' => $request->user()->position,
-                        'roles' => $request->user()->getRoleNames()->values()->all(),
-                        'permissions' => $request->user()->getAllPermissions()->pluck('name')->values()->all(),
+                        'position' => $user->position,
+                        'roles' => $user->getRoleNames()->values()->all(),
+                        'permissions' => $user->getAllPermissions()->pluck('name')->values()->all(),
                     ]
                 ) : null,
+            ],
+            'entity' => [
+                'current' => $current ? [
+                    'id' => $current->id,
+                    'code' => $current->code,
+                    'name' => $current->name,
+                ] : null,
+                'available' => collect($available)->map(fn ($e) => [
+                    'id' => $e->id,
+                    'code' => $e->code,
+                    'name' => $e->name,
+                ])->values()->all(),
             ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
             'errors' => fn () => collect($request->session()->get('errors')?->getBag('default')->getMessages() ?? [])
@@ -64,38 +70,44 @@ class HandleInertiaRequests extends Middleware
                 'error' => $request->session()->get('error'),
                 'openListTab' => $request->session()->get('openListTab'),
             ],
-            'userCount' => $request->user() ? User::query()->count() : 0,
-            'roleCount' => $request->user() ? Role::query()->count() : 0,
-            'journalEntryCount' => $request->user() ? $this->journalEntryCount() : 0,
-            'syncExceptionCount' => $request->user() ? $this->syncExceptionCount() : 0,
+            'userCount' => $user ? User::query()->count() : 0,
+            'roleCount' => $user ? Role::query()->count() : 0,
+            'journalEntryCount' => $user ? $this->journalEntryCount($current?->id) : 0,
+            'syncExceptionCount' => $user ? $this->syncExceptionCount($current?->id) : 0,
         ];
     }
 
-    private function journalEntryCount(): int
+    private function journalEntryCount(?int $entityId): int
     {
         try {
             if (! Schema::hasTable('journal_entries')) {
                 return 0;
             }
 
-            return (int) DB::table('journal_entries')
-                ->whereIn('status', ['draft', 'pending'])
-                ->count();
+            $query = DB::table('journal_entries')->whereIn('status', ['draft', 'pending']);
+            if ($entityId) {
+                $query->where('entity_id', $entityId);
+            }
+
+            return (int) $query->count();
         } catch (\Throwable) {
             return 0;
         }
     }
 
-    private function syncExceptionCount(): int
+    private function syncExceptionCount(?int $entityId): int
     {
         try {
             if (! Schema::hasTable('sync_documents')) {
                 return 0;
             }
 
-            return (int) DB::table('sync_documents')
-                ->where('status', 'failed')
-                ->count();
+            $query = DB::table('sync_documents')->where('status', 'failed');
+            if ($entityId) {
+                $query->where('entity_id', $entityId);
+            }
+
+            return (int) $query->count();
         } catch (\Throwable) {
             return 0;
         }

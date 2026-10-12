@@ -26,6 +26,8 @@ import { DataTableFilter } from '@/components/data-table/data-table-filter';
 import { DataTablePagination } from '@/components/data-table/data-table-pagination';
 import { DataTableViewOptions } from '@/components/data-table/data-table-view-options';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
+import { FilterIcon } from 'lucide-react';
 
 export interface DataTableServerSidePaginationProps {
     /** Total number of rows on the server (for "Showing X–Y of Z" and page count) */
@@ -67,8 +69,12 @@ export interface DataTableProps<TData, TValue> {
     serverSidePagination?: DataTableServerSidePaginationProps;
     /** Optional content rendered in the toolbar beside the column visibility toggle (e.g. Export button) */
     toolbarExtra?: React.ReactNode;
+    /** Optional content rendered below the search row, still inside the Search & filter card */
+    toolbarFilterExtra?: React.ReactNode;
     /** Initial column sorting (e.g. newest first on created_at) */
     initialSorting?: SortingState;
+    /** Optional class names for each body row */
+    getRowClassName?: (row: TData) => string | undefined;
 }
 
 export function DataTable<TData, TValue>({
@@ -84,7 +90,9 @@ export function DataTable<TData, TValue>({
     onRowSelectionChange: onRowSelectionChangeProp,
     serverSidePagination,
     toolbarExtra,
+    toolbarFilterExtra,
     initialSorting = [],
+    getRowClassName,
 }: DataTableProps<TData, TValue>) {
     const hasFilterableColumns =
         filterableColumns && Object.keys(filterableColumns).length > 0;
@@ -168,97 +176,145 @@ export function DataTable<TData, TValue>({
         }
     }, [rowSelection, data, onRowSelectionChangeProp]);
 
+    const showFilters = hasFilterableColumns || Boolean(hasLegacyFilter);
+
     return (
         <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-4 pt-4">
-                <div className="flex flex-wrap items-center gap-4">
-                    {hasFilterableColumns ? (
-                        <DataTableFilter
+            <div className="rounded-xl border-2 border-border bg-muted/50 p-3 shadow-sm sm:p-4">
+                {showFilters ? (
+                    <div className="mb-3 flex items-center gap-2 border-b border-border/80 pb-2">
+                        <span className="inline-flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <FilterIcon className="size-3.5" aria-hidden />
+                        </span>
+                        <div>
+                            <p className="text-sm font-semibold text-foreground">Search &amp; filter</p>
+                            <p className="text-xs text-muted-foreground">
+                                Find records, then refine columns or clear to reset.
+                            </p>
+                        </div>
+                    </div>
+                ) : null}
+                <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-end gap-4">
+                        {hasFilterableColumns ? (
+                            <DataTableFilter
+                                table={table}
+                                filterableColumns={filterableColumns}
+                                placeholder={filterPlaceholder}
+                                hasActiveFilters={
+                                    isServerSide
+                                        ? (currentServerSearch?.length ?? 0) > 0
+                                        : columnFilters.length > 0
+                                }
+                                appliedSearchValue={
+                                    isServerSide ? currentServerSearch : undefined
+                                }
+                                selectedColumnId={filterColumnId}
+                                onSelectedColumnIdChange={onFilterColumnChange}
+                                onSearchApplied={
+                                    isServerSide
+                                        ? (_columnId, value) => {
+                                              serverSidePagination!.onPaginationChange(
+                                                  {
+                                                      pageIndex: 0,
+                                                      pageSize:
+                                                          serverSidePagination!
+                                                              .pageSize,
+                                                      search: value || undefined,
+                                                  },
+                                              );
+                                          }
+                                        : undefined
+                                }
+                                onReset={
+                                    isServerSide
+                                        ? () => {
+                                              serverSidePagination!.onPaginationChange(
+                                                  {
+                                                      pageIndex: 0,
+                                                      pageSize:
+                                                          serverSidePagination!
+                                                              .pageSize,
+                                                      search: '',
+                                                  },
+                                              );
+                                          }
+                                        : undefined
+                                }
+                            />
+                        ) : hasLegacyFilter ? (
+                            <div className="space-y-1">
+                                <label
+                                    htmlFor="data-table-legacy-filter"
+                                    className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                                >
+                                    Search
+                                </label>
+                                <Input
+                                    id="data-table-legacy-filter"
+                                    placeholder={filterPlaceholder}
+                                    value={
+                                        (table
+                                            .getColumn(filterColumn)
+                                            ?.getFilterValue() as string) ?? ''
+                                    }
+                                    onChange={(event) =>
+                                        table
+                                            .getColumn(filterColumn)
+                                            ?.setFilterValue(event.target.value)
+                                    }
+                                    className="h-10 max-w-sm border-border bg-background shadow-sm"
+                                />
+                            </div>
+                        ) : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pb-0.5">
+                        {toolbarExtra}
+                        <DataTableViewOptions
                             table={table}
-                            filterableColumns={filterableColumns}
-                            placeholder={filterPlaceholder}
-                            hasActiveFilters={
-                                isServerSide
-                                    ? (currentServerSearch?.length ?? 0) > 0
-                                    : columnFilters.length > 0
-                            }
-                            appliedSearchValue={
-                                isServerSide ? currentServerSearch : undefined
-                            }
-                            selectedColumnId={filterColumnId}
-                            onSelectedColumnIdChange={onFilterColumnChange}
-                            onSearchApplied={
-                                isServerSide
-                                    ? (_columnId, value) => {
-                                          serverSidePagination!.onPaginationChange(
-                                              {
-                                                  pageIndex: 0,
-                                                  pageSize:
-                                                      serverSidePagination!
-                                                          .pageSize,
-                                                  search: value || undefined,
-                                              },
-                                          );
-                                      }
-                                    : undefined
-                            }
-                            onReset={
-                                isServerSide
-                                    ? () => {
-                                          serverSidePagination!.onPaginationChange(
-                                              {
-                                                  pageIndex: 0,
-                                                  pageSize:
-                                                      serverSidePagination!
-                                                          .pageSize,
-                                                  search: '',
-                                              },
-                                          );
-                                      }
-                                    : undefined
-                            }
+                            columnLabels={columnLabels}
                         />
-                    ) : hasLegacyFilter ? (
-                        <Input
-                            placeholder={filterPlaceholder}
-                            value={
-                                (table
-                                    .getColumn(filterColumn)
-                                    ?.getFilterValue() as string) ?? ''
-                            }
-                            onChange={(event) =>
-                                table
-                                    .getColumn(filterColumn)
-                                    ?.setFilterValue(event.target.value)
-                            }
-                            className="max-w-sm"
-                        />
-                    ) : null}
+                    </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    {toolbarExtra}
-                    <DataTableViewOptions
-                        table={table}
-                        columnLabels={columnLabels}
-                    />
-                </div>
+                {toolbarFilterExtra ? (
+                    <div className="mt-3 border-t border-border/80 pt-3">
+                        {toolbarFilterExtra}
+                    </div>
+                ) : null}
             </div>
-            <div className="overflow-hidden rounded-md border">
+            <div className="overflow-hidden rounded-xl border-2 border-border bg-card shadow-sm">
                 <Table>
                     <TableHeader>
                         {table.getHeaderGroups().map((headerGroup) => (
                             <TableRow key={headerGroup.id}>
-                                {headerGroup.headers.map((header) => (
-                                    <TableHead key={header.id}>
-                                        {header.isPlaceholder
-                                            ? null
-                                            : flexRender(
-                                                  header.column.columnDef
-                                                      .header,
-                                                  header.getContext(),
-                                              )}
-                                    </TableHead>
-                                ))}
+                                {headerGroup.headers.map((header) => {
+                                    const meta = header.column.columnDef.meta as
+                                        | { width?: number; minWidth?: number }
+                                        | undefined;
+                                    return (
+                                        <TableHead
+                                            key={header.id}
+                                            style={
+                                                meta?.width || meta?.minWidth
+                                                    ? {
+                                                          width: meta.width,
+                                                          minWidth:
+                                                              meta.minWidth ??
+                                                              meta.width,
+                                                      }
+                                                    : undefined
+                                            }
+                                        >
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                      header.column.columnDef
+                                                          .header,
+                                                      header.getContext(),
+                                                  )}
+                                        </TableHead>
+                                    );
+                                })}
                             </TableRow>
                         ))}
                     </TableHeader>
@@ -270,15 +326,38 @@ export function DataTable<TData, TValue>({
                                     data-state={
                                         row.getIsSelected() && 'selected'
                                     }
+                                    className={cn(getRowClassName?.(row.original))}
                                 >
-                                    {row.getVisibleCells().map((cell) => (
-                                        <TableCell key={cell.id}>
-                                            {flexRender(
-                                                cell.column.columnDef.cell,
-                                                cell.getContext(),
-                                            )}
-                                        </TableCell>
-                                    ))}
+                                    {row.getVisibleCells().map((cell) => {
+                                        const meta = cell.column.columnDef
+                                            .meta as
+                                            | {
+                                                  width?: number;
+                                                  minWidth?: number;
+                                              }
+                                            | undefined;
+                                        return (
+                                            <TableCell
+                                                key={cell.id}
+                                                style={
+                                                    meta?.width ||
+                                                    meta?.minWidth
+                                                        ? {
+                                                              width: meta.width,
+                                                              minWidth:
+                                                                  meta.minWidth ??
+                                                                  meta.width,
+                                                          }
+                                                        : undefined
+                                                }
+                                            >
+                                                {flexRender(
+                                                    cell.column.columnDef.cell,
+                                                    cell.getContext(),
+                                                )}
+                                            </TableCell>
+                                        );
+                                    })}
                                 </TableRow>
                             ))
                         ) : (

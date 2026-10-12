@@ -1,0 +1,451 @@
+<?php
+
+use App\Models\Account;
+use App\Models\AccountType;
+use App\Models\BankAccount;
+use App\Models\BankTransaction;
+use App\Models\BenefitProgram;
+use App\Models\ComplianceItem;
+use App\Models\DtrEntry;
+use App\Models\Employee;
+use App\Models\Entity;
+use App\Models\InventoryItem;
+use App\Models\InventoryMovement;
+use App\Models\ShiftRoster;
+use App\Models\User;
+use App\Support\EntityContext;
+use Carbon\Carbon;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
+
+beforeEach(function () {
+    // Setup Entity
+    $this->entity = Entity::create([
+        'code' => 'JAM-OPT',
+        'name' => 'JAM Opticus Group Corp.',
+        'is_active' => true,
+    ]);
+
+    // Setup Permissions & Role & User
+    $perms = [
+        'banks.view', 'banks.manage',
+        'journals.view', 'journals.create',
+        'integration.optical.view', 'integration.optical.sync',
+        'libraries.employees.manage',
+    ];
+    foreach ($perms as $p) {
+        Permission::findOrCreate($p, 'web');
+    }
+
+    $this->role = Role::findOrCreate('Super Admin', 'web');
+    $this->role->givePermissionTo($perms);
+
+    $this->user = User::factory()->create();
+    $this->user->assignRole($this->role);
+    $this->user->entities()->attach($this->entity->id, ['is_default' => true]);
+
+    // Setup AccountTypes
+    $assetType = AccountType::create([
+        'name' => 'Current Assets',
+        'classification' => 'asset',
+        'normal_balance' => 'debit',
+        'statement' => 'balance_sheet',
+    ]);
+
+    $expenseType = AccountType::create([
+        'name' => 'Cost of Sales',
+        'classification' => 'expense',
+        'normal_balance' => 'debit',
+        'statement' => 'income_statement',
+    ]);
+
+    // Setup Cash/Bank and Inventory GL Accounts
+    $this->cashAccount = Account::create([
+        'entity_id' => $this->entity->id,
+        'account_type_id' => $assetType->id,
+        'code' => '1010',
+        'name' => 'Cash in Bank - BDO Operating',
+        'type' => 'asset',
+        'is_active' => true,
+        'is_postable' => true,
+    ]);
+
+    $this->bankAccount = BankAccount::create([
+        'code' => 'BDO-01',
+        'name' => 'BDO Operating Account',
+        'bank_name' => 'Banco de Oro',
+        'account_number' => '1092-3847-9201',
+        'gl_account_id' => $this->cashAccount->id,
+        'is_active' => true,
+    ]);
+    $this->bankAccount->entities()->attach($this->entity->id);
+
+    $this->cogsAccount = Account::create([
+        'entity_id' => $this->entity->id,
+        'account_type_id' => $expenseType->id,
+        'code' => '5000',
+        'name' => 'Cost of Goods Sold - Optical',
+        'type' => 'expense',
+        'is_active' => true,
+        'is_postable' => true,
+    ]);
+
+    $this->invAccount = Account::create([
+        'entity_id' => $this->entity->id,
+        'account_type_id' => $assetType->id,
+        'code' => '1200',
+        'name' => 'Merchandise Inventory - Frames & Lenses',
+        'type' => 'asset',
+        'is_active' => true,
+        'is_postable' => true,
+    ]);
+
+    // Set entity context in container
+    $entityContext = app(EntityContext::class);
+    $entityContext->set($this->entity);
+});
+
+test('cash and bank records register can be accessed and transactions recorded', function () {
+    $this->actingAs($this->user);
+
+    // 1. Visit cash bank register
+    $response = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/accounting/cash-bank-records');
+    $response->assertOk();
+
+    // 2. Record an inflow transaction
+    $postResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/accounting/cash-bank-records', [
+            'bank_account_id' => $this->bankAccount->id,
+            'direction' => 'in',
+            'txn_date' => '2026-09-15',
+            'amount' => 45000.00,
+            'reference' => 'CR-2026-001',
+            'source_type' => 'customer_payment',
+            'description' => 'Prescription eyewear payment',
+        ]);
+
+    $postResponse->assertSessionHas('status');
+
+    $this->assertDatabaseHas('bank_transactions', [
+        'entity_id' => $this->entity->id,
+        'bank_account_id' => $this->bankAccount->id,
+        'reference' => 'CR-2026-001',
+        'amount' => 45000.00,
+        'direction' => 'in',
+    ]);
+});
+
+test('inventory movements post correctly and update stock and exception status', function () {
+    $this->actingAs($this->user);
+
+    $item = InventoryItem::create([
+        'entity_id' => $this->entity->id,
+        'sku' => 'FRM-TEST-001',
+        'name' => 'Titanium Eyeglass Frame',
+        'category' => 'frame',
+        'unit_cost' => 1200.00,
+        'selling_price' => 3800.00,
+        'qty_on_hand' => 10,
+        'reorder_level' => 3,
+        'asset_account_id' => $this->invAccount->id,
+        'cogs_account_id' => $this->cogsAccount->id,
+    ]);
+
+    // 1. Visit inventory integration page
+    $response = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/integration/inventory');
+    $response->assertOk();
+
+    // 2. Post a stock movement (Edging loss exception)
+    $postResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/integration/inventory/movements', [
+            'inventory_item_id' => $item->id,
+            'movement_type' => 'edging_loss',
+            'quantity' => 1,
+            'unit_cost' => 1200.00,
+            'accounting_link_type' => 'cogs',
+            'notes' => 'Lens fractured during bevel edging',
+        ]);
+
+    $postResponse->assertSessionHas('status');
+
+    $this->assertDatabaseHas('inventory_movements', [
+        'inventory_item_id' => $item->id,
+        'movement_type' => 'edging_loss',
+        'quantity' => 1,
+        'review_status' => 'needs_review',
+    ]);
+
+    // Qty on hand should have decreased from 10 to 9
+    expect($item->fresh()->qty_on_hand)->toBe(9);
+});
+
+test('employee management roster, attendance, and compliance operate seamlessly', function () {
+    $this->actingAs($this->user);
+
+    $employee = Employee::create([
+        'entity_id' => $this->entity->id,
+        'user_id' => $this->user->id,
+        'employee_code' => 'EMP-TEST-01',
+        'firstname' => 'Dr. Maria',
+        'lastname' => 'Santos',
+        'position' => 'Lead Optometrist',
+        'department' => 'Clinical Optometry',
+        'biometric_id' => 'BIO-TEST-01',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 45000.00,
+        'vacation_leave_credits' => 15,
+        'sick_leave_credits' => 15,
+        'is_active' => true,
+    ]);
+
+    // 1. Test Shift Roster
+    $rosterResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/roster', [
+            'employee_id' => $employee->id,
+            'roster_date' => '2026-09-15',
+            'shift_name' => 'Clinic Optometrist Shift (10am-7pm)',
+            'shift_start' => '10:00',
+            'shift_end' => '19:00',
+            'is_rest_day' => false,
+            'notes' => 'SM Mall of Asia Clinic',
+        ]);
+    $rosterResponse->assertSessionHas('status');
+
+    $roster = ShiftRoster::where('employee_id', $employee->id)
+        ->where('shift_name', 'Clinic Optometrist Shift (10am-7pm)')
+        ->first();
+    expect($roster)->not->toBeNull();
+    expect($roster->notes)->toBe('SM Mall of Asia Clinic');
+
+    // 2. Test Biometric Attendance Punch
+    $punchResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'entry_date' => '2026-09-15',
+            'time_in' => '10:05',
+            'time_out' => '19:00',
+            'biometric_device_id' => 'BIO-DEV-01',
+        ]);
+    $punchResponse->assertSessionHas('status');
+
+    $dtr = DtrEntry::where('employee_id', $employee->id)->first();
+    expect($dtr)->not->toBeNull();
+    expect(\Carbon\Carbon::parse($dtr->work_date)->toDateString())->toBe('2026-09-15');
+    expect($dtr->time_in)->toContain('10:05');
+
+    // 3. Test Statutory Compliance Item Creation and Verification
+    $complianceResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/compliance', [
+            'title' => 'BIR Form 1601-C (Withholding Tax)',
+            'category' => 'statutory_tax',
+            'period' => 'September 2026',
+            'due_date' => '2026-10-10',
+            'owner_role' => 'Finance & Accounting',
+            'status' => 'submitted',
+            'reference_no' => 'EFPS-1601C-001',
+            'amount' => 15000.00,
+        ]);
+    $complianceResponse->assertSessionHas('status');
+
+    $item = ComplianceItem::where('reference_no', 'EFPS-1601C-001')->first();
+    expect($item)->not->toBeNull();
+    expect($item->status)->toBe('submitted');
+
+    // Verify compliance item
+    $verifyResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post("/employee-management/compliance/{$item->id}/verify", [
+            'reference_no' => 'EFPS-1601C-001-SETTLED',
+            'amount' => 15000.00,
+            'notes' => 'Settled via BDO auto-debit',
+        ]);
+    $verifyResponse->assertSessionHas('status');
+
+    expect($item->fresh()->status)->toBe('verified');
+    expect($item->fresh()->verified_by)->toBe($this->user->id);
+});
+
+test('benefits administration page renders and programs can be created and enrolled', function () {
+    $this->actingAs($this->user);
+
+    $employee = Employee::create([
+        'entity_id' => $this->entity->id,
+        'user_id' => $this->user->id,
+        'employee_code' => 'EMP-BEN-01',
+        'firstname' => 'Pedro',
+        'lastname' => 'Penduko',
+        'position' => 'Optical Technician & Edger',
+        'department' => 'Optical Sales & Lab',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 28000.00,
+        'vacation_leave_credits' => 10,
+        'sick_leave_credits' => 10,
+        'is_active' => true,
+    ]);
+
+    // 1. Visit benefits administration page
+    $response = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/employee-management/benefits');
+    $response->assertOk();
+
+    // 2. Create a Benefit Program
+    $programResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/benefits/programs', [
+            'code' => 'OPT-SUBSIDY',
+            'name' => 'Prescription Eyewear Subsidy',
+            'category' => 'company_allowance',
+            'employee_share_default' => 0.00,
+            'employer_share_default' => 500.00,
+            'description' => 'Semi-annual clinic allowance for prescription frames & lenses',
+        ]);
+    $programResponse->assertSessionHas('status');
+
+    $program = BenefitProgram::where('code', 'OPT-SUBSIDY')->first();
+    expect($program)->not->toBeNull();
+
+    // 3. Enroll employee
+    $enrollResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/benefits/enroll', [
+            'employee_id' => $employee->id,
+            'benefit_program_id' => $program->id,
+            'employee_share' => 0.00,
+            'employer_share' => 500.00,
+            'payroll_treatment' => 'non_taxable_benefit',
+            'participation_status' => 'active',
+        ]);
+    $enrollResponse->assertSessionHas('status');
+
+    $this->assertDatabaseHas('employee_benefits', [
+        'employee_id' => $employee->id,
+        'benefit_program_id' => $program->id,
+        'employer_share' => 500.00,
+    ]);
+
+    // 4. Re-visit page to verify totals calculation
+    $responseAfterEnroll = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/employee-management/benefits');
+    $responseAfterEnroll->assertOk();
+});
+
+test('all employee management module pages render successfully', function () {
+    $this->actingAs($this->user);
+
+    $pages = [
+        '/employee-management/roster',
+        '/employee-management/attendance',
+        '/employee-management/leave',
+        '/employee-management/portal',
+        '/employee-management/reports',
+        '/employee-management/access',
+        '/employee-management/compliance',
+    ];
+
+    foreach ($pages as $url) {
+        $response = $this->withSession(['current_entity_id' => $this->entity->id])->get($url);
+        $response->assertOk();
+    }
+});
+
+test('coordinates-based attendance check-in, break-out, break-in, and check-out enforce geofencing and calculate hours', function () {
+    $this->actingAs($this->user);
+
+    // Branch location: SM Mall of Asia (14.5352, 120.9822), 250m radius
+    $this->entity->update([
+        'latitude' => 14.5352,
+        'longitude' => 120.9822,
+        'geofence_radius' => 250,
+        'geofence_enforced' => true,
+    ]);
+
+    $employee = Employee::create([
+        'entity_id' => $this->entity->id,
+        'user_id' => $this->user->id,
+        'employee_code' => 'EMP-OPT-02',
+        'firstname' => 'Juan',
+        'lastname' => 'Dela Cruz',
+        'position' => 'Optician',
+        'department' => 'Optical Dispensing',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 30000.00,
+    ]);
+
+    $today = Carbon::today()->toDateString();
+
+    // 1. Out-of-bounds Check-In rejection (e.g. Quezon City: 14.6760, 121.0437 is ~20km away)
+    $outOfBoundsResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'check_in',
+            'latitude' => 14.6760,
+            'longitude' => 121.0437,
+            'punch_time' => $today.' 08:50:00',
+        ]);
+    $outOfBoundsResponse->assertSessionHasErrors('location');
+
+    // 2. Valid In-bounds Check-In (e.g. 14.5353, 120.9823 is ~15m away)
+    $checkInResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'check_in',
+            'latitude' => 14.5353,
+            'longitude' => 120.9823,
+            'punch_time' => $today.' 08:55:00',
+        ]);
+    $checkInResponse->assertSessionHas('status');
+
+    $dtr = DtrEntry::where('employee_id', $employee->id)->whereDate('work_date', $today)->first();
+    expect($dtr)->not->toBeNull();
+    expect($dtr->time_in)->toBe('08:55:00');
+    expect($dtr->location_status)->toBe('verified');
+    expect($dtr->distance_meters)->toBeLessThan(50);
+    expect((float) $dtr->tardiness_minutes)->toBe(0.0);
+
+    // 3. Break-Out at 12:00:00
+    $breakOutResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'break_out',
+            'latitude' => 14.5353,
+            'longitude' => 120.9823,
+            'punch_time' => $today.' 12:00:00',
+        ]);
+    $breakOutResponse->assertSessionHas('status');
+
+    $dtr->refresh();
+    expect($dtr->break_out)->toBe('12:00:00');
+
+    // 4. Break-In at 13:00:00 (1 hour lunch break)
+    $breakInResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'break_in',
+            'latitude' => 14.5353,
+            'longitude' => 120.9823,
+            'punch_time' => $today.' 13:00:00',
+        ]);
+    $breakInResponse->assertSessionHas('status');
+
+    $dtr->refresh();
+    expect($dtr->break_in)->toBe('13:00:00');
+
+    // 5. Check-Out at 18:00:00 (Total elapsed: 08:55 to 18:00 = 9h 5m minus 1h break = 8h 5m)
+    $checkOutResponse = $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'check_out',
+            'latitude' => 14.5353,
+            'longitude' => 120.9823,
+            'punch_time' => $today.' 18:00:00',
+        ]);
+    $checkOutResponse->assertSessionHas('status');
+
+    $dtr->refresh();
+    expect($dtr->time_out)->toBe('18:00:00');
+    expect((float) $dtr->regular_hours)->toBe(8.0);
+    expect((float) $dtr->ot_hours)->toBeGreaterThan(0.0);
+});
+

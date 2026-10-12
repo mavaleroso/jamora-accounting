@@ -12,6 +12,7 @@ use App\Models\JournalEntryLine;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -20,8 +21,19 @@ use Inertia\Response;
 
 class DashboardController extends Controller
 {
-    public function index(): Response
+    public function index(Request $request): Response|RedirectResponse
     {
+        $user = $request->user();
+        if ($user && ! $user->can('dashboard.view')) {
+            if ($user->can('portal.view')) {
+                return redirect()->route('employee-management.portal.index');
+            }
+            if ($user->can('attendance.view')) {
+                return redirect()->route('employee-management.attendance.index');
+            }
+            abort(403, 'Unauthorized.');
+        }
+
         return Inertia::render('accounting/dashboard/page', $this->dashboardData());
     }
 
@@ -56,6 +68,15 @@ class DashboardController extends Controller
                 ->where('status', 'failed')
                 ->count(),
             'cashPosition' => round($this->cashPosition($openPeriod, $yearStart, $yearEnd), 2),
+            'arBalance' => round((float) \App\Models\PartnerBalance::query()
+                ->whereHas('partner')
+                ->sum('balance'), 2),
+            'apBalance' => round((float) \App\Models\Bill::query()
+                ->whereIn('status', ['posted', 'partially_paid'])
+                ->sum('balance_due'), 2),
+            'depositsLiability' => round((float) \App\Models\CustomerDeposit::query()
+                ->where('status', 'open')
+                ->sum(DB::raw('amount - applied_amount')), 2),
             'revenueMTD' => round($this->classificationTotal('revenue', $monthStart, $monthEnd), 2),
             'revenueYTD' => round($this->classificationTotal('revenue', $yearStart, $yearEnd), 2),
             'expenseMTD' => round($this->classificationTotal('expense', $monthStart, $monthEnd), 2),

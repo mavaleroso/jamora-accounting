@@ -12,6 +12,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import { TableShell } from '@/components/ui/table-shell';
 import AppLayout from '@/layouts/app-layout';
 import { hasPermission } from '@/lib/permissions';
 import type {
@@ -128,7 +129,7 @@ export default function AccountingPeriods({
                     </div>
                 )}
 
-                <div className="rounded-md border">
+                <TableShell>
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -229,7 +230,7 @@ export default function AccountingPeriods({
                             )}
                         </TableBody>
                     </Table>
-                </div>
+                </TableShell>
             </div>
         </AppLayout>
     );

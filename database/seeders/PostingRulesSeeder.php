@@ -4,14 +4,21 @@ namespace Database\Seeders;
 
 use App\Models\Account;
 use App\Models\PostingRule;
+use App\Support\EntityContext;
 use Illuminate\Database\Seeder;
 
 class PostingRulesSeeder extends Seeder
 {
     public function run(): void
     {
-        $accounts = Account::query()
-            ->whereIn('code', ['1000', '1020', '1100', '2100', '4000', '4100'])
+        $entityId = app(EntityContext::class)->id();
+        if (! $entityId) {
+            return;
+        }
+
+        $accounts = Account::withoutGlobalScope('entity')
+            ->where('entity_id', $entityId)
+            ->whereIn('code', ['1000', '1020', '1100', '1200', '2000', '2100', '4000', '4100', '5000'])
             ->pluck('id', 'code');
 
         $rules = [
@@ -57,6 +64,20 @@ class PostingRulesSeeder extends Seeder
                 'credit_code' => '1100',
                 'sort_order' => 60,
             ],
+            [
+                'event' => 'cogs',
+                'name' => 'Cost of Goods Sold',
+                'debit_code' => '5000',
+                'credit_code' => '1200',
+                'sort_order' => 70,
+            ],
+            [
+                'event' => 'purchase_inventory',
+                'name' => 'Inventory Purchase',
+                'debit_code' => '1200',
+                'credit_code' => '2000',
+                'sort_order' => 80,
+            ],
         ];
 
         foreach ($rules as $rule) {
@@ -67,8 +88,8 @@ class PostingRulesSeeder extends Seeder
                 continue;
             }
 
-            PostingRule::updateOrCreate(
-                ['event' => $rule['event']],
+            PostingRule::withoutGlobalScope('entity')->updateOrCreate(
+                ['entity_id' => $entityId, 'event' => $rule['event']],
                 [
                     'name' => $rule['name'],
                     'debit_account_id' => $debitId,

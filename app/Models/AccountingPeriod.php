@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Support\EntityContext;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -17,6 +19,16 @@ class AccountingPeriod extends Model
         'closed_by',
         'closed_at',
     ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope('entity', function (Builder $builder): void {
+            $entityId = app(EntityContext::class)->id();
+            if ($entityId !== null) {
+                $builder->whereHas('fiscalYear', fn (Builder $q) => $q->where('entity_id', $entityId));
+            }
+        });
+    }
 
     protected function casts(): array
     {

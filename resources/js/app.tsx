@@ -6,7 +6,7 @@ import { Toaster } from '@/components/ui/sonner';
 import '../css/app.css';
 import { initializeTheme } from './hooks/use-appearance';
 
-const appName = import.meta.env.VITE_APP_NAME || 'Jamora Accounting';
+const appName = import.meta.env.VITE_APP_NAME || 'Jamora BMS';
 
 createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),

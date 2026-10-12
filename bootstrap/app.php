@@ -20,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
             \Illuminate\Foundation\Http\Middleware\TrimStrings::class,
             \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
             HandleAppearance::class,
+            \App\Http\Middleware\SetCurrentEntity::class,
             HandleInertiaRequests::class,
             \App\Http\Middleware\AuditTrailMiddleware::class,
             AddLinkHeadersForPreloadedAssets::class,

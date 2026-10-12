@@ -16,6 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { formatPhpCurrency } from '@/lib/currency';
 import type { JournalEntry, JournalEntryStatus } from '@/types';
+import { TableShell } from '@/components/ui/table-shell';
 
 type Props = {
     open: boolean;
@@ -108,7 +109,7 @@ export function JournalEntryViewDialog({ open, onOpenChange, journalEntry, loadi
                             </div>
                         </div>
 
-                        <div className="overflow-hidden rounded-md border">
+                        <TableShell>
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -155,7 +156,7 @@ export function JournalEntryViewDialog({ open, onOpenChange, journalEntry, loadi
                                     )}
                                 </TableBody>
                             </Table>
-                        </div>
+                        </TableShell>
 
                         <div className="flex flex-wrap justify-end gap-6 text-sm">
                             <div>

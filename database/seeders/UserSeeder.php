@@ -35,5 +35,27 @@ class UserSeeder extends Seeder
         );
 
         $user->syncRoles([RoleEnum::Admin->value]);
+
+        $employeeUser = User::query()->updateOrCreate(
+            ['username' => 'employee'],
+            [
+                'email' => 'employee@jamora.local',
+                'email_verified_at' => now(),
+                'password' => Hash::make('password'),
+                'firstname' => 'Staff',
+                'middlename' => 'Demo',
+                'lastname' => 'Employee',
+                'avatar' => null,
+                'address' => 'Iloilo City',
+                'sex' => 'Female',
+                'contact_number' => '09170001122',
+                'birthdate' => '1995-04-12',
+                'position' => 'Optical Staff / Assistant',
+                'date_started' => '2024-01-01',
+                'status' => true,
+            ]
+        );
+
+        $employeeUser->syncRoles([RoleEnum::Employee->value]);
     }
 }

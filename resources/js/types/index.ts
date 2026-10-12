@@ -20,5 +20,9 @@ export type SharedData = {
     roleCount?: number;
     journalEntryCount?: number;
     syncExceptionCount?: number;
+    entity?: {
+        current: { id: number; code: string; name: string } | null;
+        available: Array<{ id: number; code: string; name: string }>;
+    };
     [key: string]: unknown;
 };

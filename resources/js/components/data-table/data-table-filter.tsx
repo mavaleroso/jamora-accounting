@@ -1,5 +1,5 @@
 import type { Table } from '@tanstack/react-table';
-import { RotateCcwIcon, SearchIcon } from 'lucide-react';
+import { FilterIcon, RotateCcwIcon, SearchIcon } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -102,53 +102,75 @@ export function DataTableFilter<TData>({
     };
 
     return (
-        <div className="flex flex-wrap items-center gap-2">
-            <Input
-                placeholder={placeholder}
-                value={searchValue}
-                onChange={(e) => setSearchValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="h-9 w-[200px] lg:w-[240px]"
-                aria-label="Search"
-            />
-            <Select
-                value={effectiveSelectedColumnId}
-                onValueChange={setSelectedColumnId}
-            >
-                <SelectTrigger className="h-9 w-[140px] lg:w-[160px]">
-                    <SelectValue placeholder="Column" />
-                </SelectTrigger>
-                <SelectContent>
-                    {columnIds.map((id) => (
-                        <SelectItem key={id} value={id}>
-                            {filterableColumns[id]}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
+        <div className="flex flex-wrap items-end gap-2">
+            <div className="space-y-1">
+                <label htmlFor="data-table-search" className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Search
+                </label>
+                <Input
+                    id="data-table-search"
+                    placeholder={placeholder}
+                    value={searchValue}
+                    onChange={(e) => setSearchValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    className="h-10 w-[200px] border-border bg-background shadow-sm lg:w-[260px]"
+                    aria-label="Search"
+                />
+            </div>
+            {columnIds.length > 1 ? (
+                <div className="space-y-1">
+                    <label htmlFor="data-table-search-column" className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Search in
+                    </label>
+                    <Select
+                        value={effectiveSelectedColumnId}
+                        onValueChange={setSelectedColumnId}
+                    >
+                        <SelectTrigger
+                            id="data-table-search-column"
+                            className="h-10 w-[140px] border-border bg-background shadow-sm lg:w-[170px]"
+                        >
+                            <SelectValue placeholder="Column" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {columnIds.map((id) => (
+                                <SelectItem key={id} value={id}>
+                                    {filterableColumns[id]}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            ) : null}
             <Button
                 type="button"
-                variant="secondary"
-                size="icon"
-                className="h-9 w-9 shrink-0"
+                size="default"
+                className="h-10 shrink-0 gap-1.5 px-4 shadow-sm"
                 onClick={handleSearch}
                 aria-label="Search"
             >
                 <SearchIcon className="size-4" />
+                Search
             </Button>
             {hasActiveFilters && (
                 <Button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
+                    variant="outline"
+                    className="h-10 shrink-0 gap-1.5 border-border bg-background px-3 shadow-sm"
                     onClick={handleReset}
                     aria-label="Clear filters"
                     title="Clear filters"
                 >
                     <RotateCcwIcon className="size-4" />
+                    Clear
                 </Button>
             )}
+            {!hasActiveFilters ? (
+                <span className="hidden items-center gap-1.5 pb-2 text-xs text-muted-foreground sm:inline-flex">
+                    <FilterIcon className="size-3.5" />
+                    Press Enter or Search
+                </span>
+            ) : null}
         </div>
     );
 }

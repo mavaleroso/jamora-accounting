@@ -34,15 +34,15 @@ class JournalEntryResource extends JsonResource
             'source_system' => $this->source_system,
             'prepared_by' => $this->prepared_by,
             'posted_by' => $this->posted_by,
-            'posted_at' => optional($this->posted_at)
+            'posted_at' => $this->posted_at
                 ?->copy()
-                ->timezone('Asia/Manila')
-                ->toIso8601String(),
+                ?->timezone('Asia/Manila')
+                ?->toIso8601String(),
             'voided_by' => $this->voided_by,
-            'voided_at' => optional($this->voided_at)
+            'voided_at' => $this->voided_at
                 ?->copy()
-                ->timezone('Asia/Manila')
-                ->toIso8601String(),
+                ?->timezone('Asia/Manila')
+                ?->toIso8601String(),
             'prepared_by_user' => $this->whenLoaded('preparedByUser', function () {
                 return [
                     'id' => $this->preparedByUser?->id,
@@ -82,14 +82,14 @@ class JournalEntryResource extends JsonResource
                     ] : null,
                 ])->values()->all();
             }),
-            'created_at' => optional($this->created_at)
+            'created_at' => $this->created_at
                 ?->copy()
-                ->timezone('Asia/Manila')
-                ->toIso8601String(),
-            'updated_at' => optional($this->updated_at)
+                ?->timezone('Asia/Manila')
+                ?->toIso8601String(),
+            'updated_at' => $this->updated_at
                 ?->copy()
-                ->timezone('Asia/Manila')
-                ->toIso8601String(),
+                ?->timezone('Asia/Manila')
+                ?->toIso8601String(),
         ];
     }
 }

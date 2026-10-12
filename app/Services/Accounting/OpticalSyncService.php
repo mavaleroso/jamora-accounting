@@ -6,13 +6,19 @@ use App\Models\CostCenter;
 use App\Models\Journal;
 use App\Models\Optical\Order;
 use App\Models\Optical\OrderPayment;
+use App\Models\Partner;
+use App\Models\PartnerBalance;
 use App\Models\PostingRule;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
 use App\Models\User;
+use App\Support\EntityContext;
+use App\Support\OpticalEntityMapper;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class OpticalSyncService
 {
@@ -23,12 +29,14 @@ class OpticalSyncService
     protected Collection $costCenters;
 
     public function __construct(
-        protected JournalPostingService $journalPostingService
+        protected JournalPostingService $journalPostingService,
+        protected EntityContext $entityContext,
     ) {}
 
     public function sync(?Carbon $from = null, ?Carbon $to = null, ?User $triggeredBy = null): SyncRun
     {
         $run = SyncRun::create([
+            'entity_id' => $this->entityContext->id(),
             'started_at' => now(),
             'status' => 'running',
             'from_date' => $from?->toDateString(),
@@ -42,13 +50,14 @@ class OpticalSyncService
         try {
             $this->syncOrders($run, $from, $to);
             $this->syncPayments($run, $from, $to);
+            $this->syncCogsFromInventory($run, $from, $to);
 
             $run->refresh();
 
             $run->update([
                 'finished_at' => now(),
                 'status' => $run->failed > 0 ? 'completed_with_errors' : 'completed',
-                'message' => "Processed {$run->processed} documents.",
+                'message' => "Processed {$run->processed} documents from optical database.",
             ]);
         } catch (\Throwable $e) {
             Log::error('Optical sync failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
@@ -69,6 +78,7 @@ class OpticalSyncService
         $this->loadCostCenters();
 
         $run = SyncRun::create([
+            'entity_id' => $this->entityContext->id(),
             'started_at' => now(),
             'status' => 'running',
             'triggered_by' => $triggeredBy?->id,
@@ -115,8 +125,8 @@ class OpticalSyncService
 
     protected function syncOrders(SyncRun $run, ?Carbon $from, ?Carbon $to): void
     {
-        $query = Order::query()
-            ->whereNotNull('completed');
+        $query = Order::query()->whereNotNull('completed');
+        $this->applyEntityOrderFilter($query);
 
         if ($from) {
             $query->where(function ($q) use ($from) {
@@ -134,6 +144,9 @@ class OpticalSyncService
 
         $query->orderBy('id')->chunk(100, function ($orders) use ($run) {
             foreach ($orders as $order) {
+                if (! OpticalEntityMapper::matchesCurrentEntity($order)) {
+                    continue;
+                }
                 $this->processOrder($order, $run);
             }
         });
@@ -142,8 +155,12 @@ class OpticalSyncService
     protected function syncPayments(SyncRun $run, ?Carbon $from, ?Carbon $to): void
     {
         $query = OrderPayment::query()
+            ->with('order')
             ->where('status', 'paid')
-            ->whereHas('order', fn ($q) => $q->whereNotNull('completed'));
+            ->whereHas('order', function ($q) {
+                $q->whereNotNull('completed');
+                $this->applyEntityOrderFilter($q);
+            });
 
         if ($from) {
             $query->where(function ($q) use ($from) {
@@ -161,9 +178,179 @@ class OpticalSyncService
 
         $query->orderBy('id')->chunk(100, function ($payments) use ($run) {
             foreach ($payments as $payment) {
+                $order = $payment->order;
+                if (! $order || ! OpticalEntityMapper::matchesCurrentEntity($order)) {
+                    continue;
+                }
                 $this->processPayment($payment, $run);
             }
         });
+    }
+
+    protected function syncCogsFromInventory(SyncRun $run, ?Carbon $from, ?Carbon $to): void
+    {
+        $entity = $this->entityContext->current();
+        if (! $entity || $entity->code !== OpticalEntityMapper::JAM_OPTICUS) {
+            return;
+        }
+
+        $cogsRule = $this->postingRules->get('cogs');
+        if (! $cogsRule) {
+            return;
+        }
+
+        foreach (['frames', 'lens', 'accessories', 'solutions'] as $table) {
+            if (! Schema::connection('optical')->hasTable($table)) {
+                continue;
+            }
+
+            $query = DB::connection('optical')->table($table)->whereNotNull('is_sold');
+
+            if ($from) {
+                $query->whereDate('is_sold', '>=', $from);
+            }
+            if ($to) {
+                $query->whereDate('is_sold', '<=', $to);
+            }
+
+            $query->orderBy('id')->chunkById(100, function ($items) use ($run, $table, $cogsRule) {
+                foreach ($items as $item) {
+                    $this->processSoldInventoryRow($item, $table, $cogsRule, $run);
+                }
+            });
+        }
+    }
+
+    protected function processSoldInventoryRow(object $item, string $table, PostingRule $cogsRule, SyncRun $run): void
+    {
+        $run->increment('processed');
+        $sourceId = "{$table}:{$item->id}";
+        $cost = $this->resolveInventoryCostFromRow($item);
+        $soldAt = $item->is_sold ?? null;
+        $payloadHash = hash('sha256', json_encode([
+            'table' => $table,
+            'id' => $item->id,
+            'cost' => $cost,
+            'is_sold' => $soldAt,
+            'item_cost_code' => $item->item_cost_code ?? null,
+        ]));
+
+        $existing = SyncDocument::query()
+            ->where('source_system', 'optical')
+            ->where('source_type', 'inventory_cogs')
+            ->where('source_id', $sourceId)
+            ->first();
+
+        if ($existing && $existing->payload_hash === $payloadHash && in_array($existing->status, ['posted', 'pending'], true)) {
+            $run->increment('skipped');
+
+            return;
+        }
+
+        if ($cost <= 0) {
+            $run->increment('skipped');
+            $this->upsertSyncDocument([
+                'source_type' => 'inventory_cogs',
+                'source_id' => $sourceId,
+                'payload_hash' => $payloadHash,
+                'journal_entry_id' => null,
+                'status' => 'skipped',
+                'error' => 'No resolvable inventory cost.',
+            ]);
+
+            return;
+        }
+
+        try {
+            $journal = Journal::query()->where('code', 'GJ')->firstOrFail();
+            $entryDate = $soldAt ? Carbon::parse($soldAt)->toDateString() : now()->toDateString();
+            $entry = $this->journalPostingService->create([
+                'journal_id' => $journal->id,
+                'entry_date' => $entryDate,
+                'reference' => $item->delivery_receipt ?? $sourceId,
+                'memo' => "COGS {$table} #{$item->id}",
+                'source_system' => 'optical',
+                'source_type' => 'inventory_cogs',
+                'source_id' => $sourceId,
+            ], [
+                [
+                    'account_id' => $cogsRule->debit_account_id,
+                    'debit' => $cost,
+                    'credit' => 0,
+                    'memo' => 'COGS',
+                ],
+                [
+                    'account_id' => $cogsRule->credit_account_id,
+                    'debit' => 0,
+                    'credit' => $cost,
+                    'memo' => 'Inventory',
+                ],
+            ]);
+
+            $this->upsertSyncDocument([
+                'source_type' => 'inventory_cogs',
+                'source_id' => $sourceId,
+                'payload_hash' => $payloadHash,
+                'journal_entry_id' => $entry->id,
+                'status' => 'posted',
+                'error' => null,
+            ]);
+            $run->increment('created_entries');
+        } catch (\Throwable $e) {
+            $run->increment('failed');
+            $this->upsertSyncDocument([
+                'source_type' => 'inventory_cogs',
+                'source_id' => $sourceId,
+                'payload_hash' => $payloadHash,
+                'journal_entry_id' => null,
+                'status' => 'failed',
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function resolveInventoryCostFromRow(object $item): float
+    {
+        foreach (['wholesale', 'item_cost_code', 'price'] as $field) {
+            $raw = $item->{$field} ?? null;
+            if ($raw === null || $raw === '') {
+                continue;
+            }
+            if (is_numeric($raw)) {
+                return round((float) $raw, 2);
+            }
+        }
+
+        return 0.0;
+    }
+
+    protected function applyEntityOrderFilter($query): void
+    {
+        $entity = $this->entityContext->current();
+        if (! $entity) {
+            return;
+        }
+
+        match ($entity->code) {
+            OpticalEntityMapper::JAM_OPTICUS => $query->where('is_wholesale_order', true),
+            OpticalEntityMapper::AL_JAMORA => $query
+                ->where(function ($q) {
+                    $q->where('is_wholesale_order', false)->orWhereNull('is_wholesale_order');
+                })
+                ->where(function ($q) {
+                    $q->whereRaw('LOWER(TRIM(branch)) = ?', ['a.l. jamora'])
+                        ->orWhereRaw('LOWER(TRIM(branch)) = ?', ['al jamora']);
+                }),
+            default => $query
+                ->where(function ($q) {
+                    $q->where('is_wholesale_order', false)->orWhereNull('is_wholesale_order');
+                })
+                ->where(function ($q) {
+                    $q->whereNull('branch')
+                        ->orWhereRaw('LOWER(TRIM(branch)) = ?', ['a.jamora'])
+                        ->orWhereRaw('LOWER(TRIM(branch)) NOT IN (?, ?)', ['a.l. jamora', 'al jamora']);
+                }),
+        };
     }
 
     protected function processOrder(Order $order, SyncRun $run, bool $force = false): void
@@ -184,7 +371,8 @@ class OpticalSyncService
         }
 
         try {
-            $lines = $this->buildOrderJournalLines($order);
+            $partner = $this->upsertPartnerFromOrder($order);
+            $lines = $this->buildOrderJournalLines($order, $partner);
             if ($lines === []) {
                 $run->increment('skipped');
                 $this->upsertSyncDocument([
@@ -220,6 +408,12 @@ class OpticalSyncService
                 'source_type' => 'order',
                 'source_id' => (string) $order->id,
             ], $lines, null);
+
+            if ($partner) {
+                $gross = max(0, round((float) $order->total_amount - (float) $order->doctors_discount_amount, 2));
+                PartnerBalance::query()->firstOrCreate(['partner_id' => $partner->id], ['balance' => 0]);
+                PartnerBalance::query()->where('partner_id', $partner->id)->increment('balance', $gross);
+            }
 
             $this->upsertSyncDocument([
                 'source_type' => 'order',
@@ -345,7 +539,7 @@ class OpticalSyncService
     /**
      * @return list<array<string, mixed>>
      */
-    protected function buildOrderJournalLines(Order $order): array
+    protected function buildOrderJournalLines(Order $order, ?Partner $partner = null): array
     {
         $vatRate = (float) config('accounting.vat_rate', 0.12);
         $totalAmount = (float) $order->total_amount;
@@ -358,10 +552,8 @@ class OpticalSyncService
         }
 
         $discountAmount = round(max(0, $orderedAmount - $totalAmount) + $doctorsDiscount, 2);
-
         $salesExclusive = round($gross / (1 + $vatRate), 2);
         $vatAmount = round($gross - $salesExclusive, 2);
-
         $totalDebit = round($gross + $discountAmount, 2);
         $totalCredit = round($salesExclusive + $vatAmount, 2);
         $roundingDiff = round($totalDebit - $totalCredit, 2);
@@ -378,6 +570,8 @@ class OpticalSyncService
                 'debit' => $gross,
                 'credit' => 0,
                 'memo' => 'Accounts receivable',
+                'partner_type' => $partner ? Partner::class : null,
+                'partner_id' => $partner?->id,
             ],
             [
                 'account_id' => $salesRule->credit_account_id,
@@ -403,6 +597,29 @@ class OpticalSyncService
         }
 
         return $lines;
+    }
+
+    protected function upsertPartnerFromOrder(Order $order): ?Partner
+    {
+        $name = $order->wholesale_client_name
+            ?: ($order->wholesaleClient?->name)
+            ?: ('Optical Customer '.$order->id);
+
+        $code = 'OPT-'.($order->wholesale_client_id ?: $order->id);
+
+        return Partner::query()->updateOrCreate(
+            [
+                'entity_id' => $this->entityContext->id(),
+                'code' => $code,
+            ],
+            [
+                'name' => $name,
+                'type' => $order->is_wholesale_order ? 'wholesale' : 'patient',
+                'external_source' => 'optical',
+                'external_id' => (string) ($order->wholesale_client_id ?: $order->id),
+                'is_active' => true,
+            ]
+        );
     }
 
     protected function getPostingRule(string $event): PostingRule
@@ -525,6 +742,7 @@ class OpticalSyncService
     {
         return SyncDocument::updateOrCreate(
             [
+                'entity_id' => $this->entityContext->id(),
                 'source_system' => 'optical',
                 'source_type' => $data['source_type'],
                 'source_id' => $data['source_id'],

@@ -32,7 +32,7 @@
         }
     </style>
 
-    <title inertia>{{ config('app.name', 'Jamora Accounting') }}</title>
+    <title inertia>{{ config('app.name', 'Jamora BMS') }}</title>
 
     <link rel="icon" href="/jamora_favicon.png" sizes="any">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">

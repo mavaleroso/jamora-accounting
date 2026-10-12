@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToEntity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PostingRule extends Model
 {
+    use BelongsToEntity;
+
     protected $fillable = [
+        'entity_id',
         'event',
         'name',
         'debit_account_id',

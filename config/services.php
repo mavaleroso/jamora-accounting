@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'optical_api' => [
+        'base_url' => env('OPTICAL_API_BASE_URL', 'http://optical-new.test'),
+        'token' => env('OPTICAL_API_TOKEN'),
+    ],
+
 ];

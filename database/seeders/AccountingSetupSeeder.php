@@ -6,9 +6,11 @@ use App\Models\Account;
 use App\Models\AccountingPeriod;
 use App\Models\AccountType;
 use App\Models\CostCenter;
+use App\Models\Entity;
 use App\Models\FiscalYear;
 use App\Models\Journal;
 use App\Models\TaxCode;
+use App\Support\EntityContext;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 
@@ -17,12 +19,25 @@ class AccountingSetupSeeder extends Seeder
     public function run(): void
     {
         $accountTypes = $this->seedAccountTypes();
-        $this->seedChartOfAccounts($accountTypes);
-        $this->seedJournals();
-        $this->seedTaxCodes();
-        $this->seedCostCenters();
-        $this->seedFiscalYearAndPeriods();
-        $this->call(PostingRulesSeeder::class);
+        $context = app(EntityContext::class);
+
+        foreach (Entity::query()->orderBy('id')->get() as $entity) {
+            $context->set($entity);
+            $this->seedChartOfAccounts($accountTypes, $entity);
+            $this->seedJournals($entity);
+            $this->seedTaxCodes($entity);
+            $this->seedCostCenters($entity);
+            $this->seedFiscalYearAndPeriods($entity);
+            $this->callWithEntity(PostingRulesSeeder::class, $entity);
+        }
+
+        $context->clear();
+    }
+
+    protected function callWithEntity(string $seeder, Entity $entity): void
+    {
+        app(EntityContext::class)->set($entity);
+        $this->call($seeder);
     }
 
     protected function seedAccountTypes(): array
@@ -51,12 +66,13 @@ class AccountingSetupSeeder extends Seeder
         return $result;
     }
 
-    protected function seedChartOfAccounts(array $types): void
+    protected function seedChartOfAccounts(array $types, Entity $entity): void
     {
         $accounts = [
             ['code' => '1000', 'name' => 'Cash on Hand', 'type' => 'Current Assets', 'cash_flow_section' => 'operating'],
             ['code' => '1010', 'name' => 'Cash in Bank', 'type' => 'Current Assets', 'cash_flow_section' => 'operating'],
             ['code' => '1020', 'name' => 'Card Clearing', 'type' => 'Current Assets', 'cash_flow_section' => 'operating'],
+            ['code' => '1030', 'name' => 'GCash Clearing', 'type' => 'Current Assets', 'cash_flow_section' => 'operating'],
             ['code' => '1100', 'name' => 'Accounts Receivable', 'type' => 'Current Assets', 'cash_flow_section' => 'operating'],
             ['code' => '1200', 'name' => 'Inventory', 'type' => 'Current Assets'],
             ['code' => '1300', 'name' => 'Input VAT', 'type' => 'Current Assets'],
@@ -64,9 +80,16 @@ class AccountingSetupSeeder extends Seeder
             ['code' => '2000', 'name' => 'Accounts Payable', 'type' => 'Current Liabilities', 'cash_flow_section' => 'operating'],
             ['code' => '2100', 'name' => 'Output VAT', 'type' => 'Current Liabilities'],
             ['code' => '2200', 'name' => 'Accrued Expenses', 'type' => 'Current Liabilities', 'cash_flow_section' => 'operating'],
+            ['code' => '2300', 'name' => 'Customer Deposits', 'type' => 'Current Liabilities'],
+            ['code' => '2400', 'name' => 'SSS Payable', 'type' => 'Current Liabilities'],
+            ['code' => '2410', 'name' => 'PhilHealth Payable', 'type' => 'Current Liabilities'],
+            ['code' => '2420', 'name' => 'Pag-IBIG Payable', 'type' => 'Current Liabilities'],
+            ['code' => '2430', 'name' => 'Withholding Tax Payable', 'type' => 'Current Liabilities'],
+            ['code' => '2500', 'name' => 'Salaries Payable', 'type' => 'Current Liabilities'],
             ['code' => '3000', 'name' => 'Capital', 'type' => 'Equity', 'cash_flow_section' => 'financing'],
             ['code' => '3100', 'name' => 'Retained Earnings', 'type' => 'Equity'],
             ['code' => '4000', 'name' => 'Sales Revenue', 'type' => 'Operating Revenue'],
+            ['code' => '4010', 'name' => 'Service Revenue', 'type' => 'Operating Revenue'],
             ['code' => '4100', 'name' => 'Sales Discounts', 'type' => 'Operating Revenue', 'description' => 'Contra revenue account'],
             ['code' => '5000', 'name' => 'Cost of Goods Sold', 'type' => 'Cost of Sales'],
             ['code' => '6000', 'name' => 'Salaries and Wages', 'type' => 'Operating Expenses'],
@@ -77,8 +100,8 @@ class AccountingSetupSeeder extends Seeder
         ];
 
         foreach ($accounts as $account) {
-            Account::firstOrCreate(
-                ['code' => $account['code']],
+            Account::withoutGlobalScope('entity')->firstOrCreate(
+                ['entity_id' => $entity->id, 'code' => $account['code']],
                 [
                     'name' => $account['name'],
                     'account_type_id' => $types[$account['type']]->id,
@@ -91,9 +114,12 @@ class AccountingSetupSeeder extends Seeder
         }
     }
 
-    protected function seedJournals(): void
+    protected function seedJournals(Entity $entity): void
     {
-        $cashOnHand = Account::where('code', '1000')->first();
+        $cashOnHand = Account::withoutGlobalScope('entity')
+            ->where('entity_id', $entity->id)
+            ->where('code', '1000')
+            ->first();
 
         $journals = [
             ['code' => 'GJ', 'name' => 'General Journal', 'type' => 'general', 'sequence_prefix' => 'GJ'],
@@ -104,8 +130,8 @@ class AccountingSetupSeeder extends Seeder
         ];
 
         foreach ($journals as $journal) {
-            Journal::firstOrCreate(
-                ['code' => $journal['code']],
+            Journal::withoutGlobalScope('entity')->firstOrCreate(
+                ['entity_id' => $entity->id, 'code' => $journal['code']],
                 [
                     'name' => $journal['name'],
                     'type' => $journal['type'],
@@ -117,13 +143,15 @@ class AccountingSetupSeeder extends Seeder
         }
     }
 
-    protected function seedTaxCodes(): void
+    protected function seedTaxCodes(Entity $entity): void
     {
-        $outputVatAccount = Account::where('code', '2100')->first();
-        $inputVatAccount = Account::where('code', '1300')->first();
+        $outputVatAccount = Account::withoutGlobalScope('entity')
+            ->where('entity_id', $entity->id)->where('code', '2100')->first();
+        $inputVatAccount = Account::withoutGlobalScope('entity')
+            ->where('entity_id', $entity->id)->where('code', '1300')->first();
 
-        TaxCode::firstOrCreate(
-            ['code' => 'OVAT'],
+        TaxCode::withoutGlobalScope('entity')->firstOrCreate(
+            ['entity_id' => $entity->id, 'code' => 'OVAT'],
             [
                 'name' => 'Output VAT 12%',
                 'rate' => config('accounting.vat_rate', 0.12),
@@ -133,8 +161,8 @@ class AccountingSetupSeeder extends Seeder
             ]
         );
 
-        TaxCode::firstOrCreate(
-            ['code' => 'IVAT'],
+        TaxCode::withoutGlobalScope('entity')->firstOrCreate(
+            ['entity_id' => $entity->id, 'code' => 'IVAT'],
             [
                 'name' => 'Input VAT 12%',
                 'rate' => config('accounting.vat_rate', 0.12),
@@ -145,7 +173,7 @@ class AccountingSetupSeeder extends Seeder
         );
     }
 
-    protected function seedCostCenters(): void
+    protected function seedCostCenters(Entity $entity): void
     {
         $centers = [
             ['code' => 'MAIN', 'name' => 'Main'],
@@ -156,8 +184,8 @@ class AccountingSetupSeeder extends Seeder
         ];
 
         foreach ($centers as $center) {
-            CostCenter::firstOrCreate(
-                ['code' => $center['code']],
+            CostCenter::withoutGlobalScope('entity')->firstOrCreate(
+                ['entity_id' => $entity->id, 'code' => $center['code']],
                 [
                     'name' => $center['name'],
                     'is_active' => true,
@@ -166,12 +194,12 @@ class AccountingSetupSeeder extends Seeder
         }
     }
 
-    protected function seedFiscalYearAndPeriods(): void
+    protected function seedFiscalYearAndPeriods(Entity $entity): void
     {
         $year = (int) now()->year;
 
-        $fiscalYear = FiscalYear::firstOrCreate(
-            ['code' => "FY{$year}"],
+        $fiscalYear = FiscalYear::withoutGlobalScope('entity')->firstOrCreate(
+            ['entity_id' => $entity->id, 'code' => "FY{$year}"],
             [
                 'start_date' => Carbon::create($year, 1, 1)->toDateString(),
                 'end_date' => Carbon::create($year, 12, 31)->toDateString(),
