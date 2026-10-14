@@ -259,6 +259,49 @@ class AttendanceCalculator
         return $dtr;
     }
 
+    /**
+     * Approved official business stretches the day to cover the time away (missing punches are filled,
+     * an earlier start or later end replaces the punch). Recomputes; does not save.
+     */
+    public function applyOfficialBusiness(?DtrEntry $dtr, Employee $employee, AttendanceRequest $ob): DtrEntry
+    {
+        $dtr ??= new DtrEntry([
+            'entity_id' => $ob->entity_id,
+            'employee_id' => $employee->id,
+            'work_date' => $ob->work_date->toDateString(),
+        ]);
+
+        $obIn = $this->normalizeTime($ob->requested_time_in);
+        $obOut = $this->normalizeTime($ob->requested_time_out);
+        $in = $this->normalizeTime($dtr->time_in);
+        $out = $this->normalizeTime($dtr->time_out);
+
+        if ($obIn && (! $in || $obIn < $in)) {
+            $dtr->time_in = $obIn;
+        }
+        if ($obOut && (! $out || $obOut > $out)) {
+            $dtr->time_out = $obOut;
+        }
+
+        $dtr->source = $dtr->source ?: 'official_business';
+        $dtr->notes = trim(($dtr->notes ?? '')." [Official business: {$ob->destination}]");
+
+        return $this->compute($dtr, $employee);
+    }
+
+    public function approvedOfficialBusiness(int $employeeId, CarbonInterface|string $date): ?AttendanceRequest
+    {
+        $dateStr = $date instanceof CarbonInterface ? $date->toDateString() : Carbon::parse($date)->toDateString();
+
+        return AttendanceRequest::query()
+            ->withoutEntityScope()
+            ->where('employee_id', $employeeId)
+            ->whereDate('work_date', $dateStr)
+            ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
+            ->where('status', 'approved')
+            ->first();
+    }
+
     public function approvedOtHours(int $employeeId, CarbonInterface|string $date): float
     {
         $dateStr = $date instanceof CarbonInterface ? $date->toDateString() : Carbon::parse($date)->toDateString();
@@ -277,15 +320,16 @@ class AttendanceCalculator
      *  - working day, no punch, no approved leave  -> absent (no work, no pay)
      *  - regular holiday (unworked)                 -> holiday (paid per Art. 94)
      *  - approved leave                             -> on_leave
+     *  - approved official business (filed ahead)  -> punches filled from the OB window
      *  - rest day / special non-working day         -> no row (no work, no pay; not an absence)
      *
-     * @return array{absent:int, holiday:int, on_leave:int, skipped:int}
+     * @return array{absent:int, holiday:int, on_leave:int, official_business:int, skipped:int}
      */
     public function closeDay(int $entityId, CarbonInterface|string $date): array
     {
         $date = $date instanceof CarbonInterface ? $date->copy()->startOfDay() : Carbon::parse($date)->startOfDay();
         $dateStr = $date->toDateString();
-        $result = ['absent' => 0, 'holiday' => 0, 'on_leave' => 0, 'skipped' => 0];
+        $result = ['absent' => 0, 'holiday' => 0, 'on_leave' => 0, 'official_business' => 0, 'skipped' => 0];
 
         $employees = Employee::query()
             ->withoutEntityScope()
@@ -307,6 +351,14 @@ class AttendanceCalculator
 
             if ($dtr && ($dtr->isLocked() || filled($dtr->time_in) || filled($dtr->time_out) || $dtr->leave_request_id)) {
                 $result['skipped']++;
+
+                continue;
+            }
+
+            // Approved official business filed ahead of the day: the employee was working off-site.
+            if ($ob = $this->approvedOfficialBusiness($employee->id, $dateStr)) {
+                $this->applyOfficialBusiness($dtr, $employee, $ob)->save();
+                $result['official_business']++;
 
                 continue;
             }

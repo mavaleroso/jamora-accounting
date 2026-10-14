@@ -9,6 +9,7 @@ use App\Models\Employee;
 use App\Models\Entity;
 use App\Models\LeaveRequest;
 use App\Services\People\AttendanceCalculator;
+use App\Services\People\AttendanceRequestService;
 use App\Services\People\EmployeeResolver;
 use App\Support\EntityContext;
 use Carbon\Carbon;
@@ -35,7 +36,8 @@ class AttendanceController extends Controller
 
     public function __construct(
         protected AttendanceCalculator $attendanceCalculator,
-        protected EmployeeResolver $employeeResolver
+        protected EmployeeResolver $employeeResolver,
+        protected AttendanceRequestService $attendanceRequests
     ) {}
 
     /**
@@ -527,7 +529,7 @@ class AttendanceController extends Controller
     }
 
     /**
-     * File an attendance correction or overtime approval request.
+     * File a day-level request (correction, overtime, official business, undertime, change of schedule).
      */
     public function storeRequest(Request $request, EntityContext $entityContext): RedirectResponse
     {
@@ -535,21 +537,10 @@ class AttendanceController extends Controller
         $user = $request->user();
         $isManager = $this->employeeResolver->isHr($user, 'attendance.manage');
 
-        $validated = $request->validate([
-            'employee_id' => ['required', 'exists:employees,id'],
-            'dtr_entry_id' => ['nullable', 'exists:dtr_entries,id'],
-            'request_type' => ['required', 'in:correction,overtime'],
-            'work_date' => ['required', 'date', 'before_or_equal:today'],
-            'requested_time_in' => ['nullable', 'date_format:H:i'],
-            'requested_break_out' => ['nullable', 'date_format:H:i'],
-            'requested_break_in' => ['nullable', 'date_format:H:i'],
-            'requested_time_out' => ['nullable', 'date_format:H:i'],
-            'requested_ot_hours' => ['nullable', 'required_if:request_type,overtime', 'numeric', 'min:0.5', 'max:12'],
-            'reason' => ['required', 'string', 'min:5', 'max:500'],
-        ], [
-            'requested_ot_hours.required_if' => 'Enter the overtime hours you rendered.',
-            'work_date.before_or_equal' => 'You can only file requests for today or past days.',
-        ]);
+        $validated = $request->validate(
+            ['employee_id' => ['required', 'exists:employees,id'], ...$this->attendanceRequests->rules()],
+            $this->attendanceRequests->messages(),
+        );
 
         if (! $isManager) {
             $currentUserEmployee = $this->employeeResolver->forUser($user, $entityId);
@@ -559,62 +550,8 @@ class AttendanceController extends Controller
             $validated['employee_id'] = $currentUserEmployee->id;
         }
 
-        $times = collect(['requested_time_in', 'requested_break_out', 'requested_break_in', 'requested_time_out'])
-            ->mapWithKeys(fn ($k) => [$k => filled($validated[$k] ?? null) ? Carbon::parse($validated[$k])->format('H:i:s') : null]);
-
-        if ($validated['request_type'] === AttendanceRequest::TYPE_CORRECTION && $times->filter()->isEmpty()) {
-            throw ValidationException::withMessages([
-                'requested_time_in' => 'Enter at least one corrected time.',
-            ]);
-        }
-
-        $dtr = DtrEntry::query()
-            ->where('employee_id', $validated['employee_id'])
-            ->whereDate('work_date', $validated['work_date'])
-            ->first();
-
-        $this->attendanceCalculator->assertEditable($dtr, 'work_date');
-
-        if ($validated['request_type'] === AttendanceRequest::TYPE_OVERTIME) {
-            $rendered = (float) ($dtr?->ot_hours ?? 0);
-            $remaining = max(0, $rendered - $this->attendanceCalculator->approvedOtHours($validated['employee_id'], $validated['work_date']));
-
-            if ((float) $validated['requested_ot_hours'] > $remaining) {
-                throw ValidationException::withMessages([
-                    'requested_ot_hours' => $remaining > 0
-                        ? "Only {$remaining} OT hours rendered on this day are not yet approved."
-                        : ($rendered > 0
-                            ? 'All overtime rendered on this day is already approved.'
-                            : 'Your time record shows no overtime rendered on this day. File a time correction first if your punches are wrong.'),
-                ]);
-            }
-        }
-
-        $duplicate = AttendanceRequest::query()
-            ->where('employee_id', $validated['employee_id'])
-            ->whereDate('work_date', $validated['work_date'])
-            ->where('request_type', $validated['request_type'])
-            ->where('status', 'pending')
-            ->exists();
-
-        if ($duplicate) {
-            throw ValidationException::withMessages([
-                'work_date' => 'There is already a pending '.$validated['request_type'].' request for this day.',
-            ]);
-        }
-
-        AttendanceRequest::create([
-            'entity_id' => $entityId,
-            'employee_id' => $validated['employee_id'],
-            'dtr_entry_id' => $dtr?->id ?? ($validated['dtr_entry_id'] ?? null),
-            'request_type' => $validated['request_type'],
-            'work_date' => $validated['work_date'],
-            ...$times->all(),
-            'requested_ot_hours' => $validated['request_type'] === AttendanceRequest::TYPE_OVERTIME ? $validated['requested_ot_hours'] : null,
-            'reason' => $validated['reason'],
-            'status' => 'pending',
-            'filed_by' => $user?->id,
-        ]);
+        $employee = Employee::query()->where('entity_id', $entityId)->findOrFail($validated['employee_id']);
+        $this->attendanceRequests->file($employee, $validated, $user);
 
         return redirect()->back()->with('status', 'Request filed. You will see the decision under Requests.');
     }
@@ -631,65 +568,9 @@ class AttendanceController extends Controller
             'review_remarks.required_if' => 'Tell the employee why the request was rejected.',
         ]);
 
-        if ($attendanceRequest->status !== 'pending') {
-            throw ValidationException::withMessages([
-                'status' => "This request was already {$attendanceRequest->status}.",
-            ]);
-        }
+        $this->attendanceRequests->review($attendanceRequest, $request->user(), $validated['status'], $validated['review_remarks'] ?? null);
 
-        $status = $validated['status'];
-        $user = $request->user();
-
-        if ($status === 'approved') {
-            $employee = $attendanceRequest->employee;
-            $workDate = $attendanceRequest->work_date;
-
-            $dtr = DtrEntry::where('employee_id', $employee->id)
-                ->whereDate('work_date', $workDate)
-                ->first();
-
-            $this->attendanceCalculator->assertEditable($dtr, 'status');
-
-            if (! $dtr) {
-                $dtr = new DtrEntry([
-                    'entity_id' => $attendanceRequest->entity_id,
-                    'employee_id' => $employee->id,
-                    'work_date' => $workDate,
-                ]);
-            }
-
-            if ($attendanceRequest->request_type === AttendanceRequest::TYPE_CORRECTION) {
-                foreach (['time_in', 'break_out', 'break_in', 'time_out'] as $field) {
-                    if ($attendanceRequest->{'requested_'.$field}) {
-                        $dtr->{$field} = $attendanceRequest->{'requested_'.$field};
-                    }
-                }
-                $dtr->source = $dtr->source ?: 'correction';
-                $dtr->notes = trim(($dtr->notes ?? '')." [Correction approved: {$attendanceRequest->reason}]");
-                $this->attendanceCalculator->compute($dtr, $employee)->save();
-            }
-        }
-
-        $attendanceRequest->fill([
-            'status' => $status,
-            'reviewed_by' => $user?->id,
-            'reviewed_at' => now(),
-            'review_remarks' => $validated['review_remarks'] ?? null,
-        ]);
-        if (isset($dtr) && $dtr->exists) {
-            $attendanceRequest->dtr_entry_id ??= $dtr->id;
-        }
-        $attendanceRequest->save();
-
-        // The request must be saved as approved first: payable OT is derived from approved requests.
-        // (No record yet means no OT rendered, so there is nothing to pay — don't create an empty day.)
-        if ($status === 'approved' && $attendanceRequest->request_type === AttendanceRequest::TYPE_OVERTIME && isset($dtr) && $dtr->exists) {
-            $this->attendanceCalculator->syncApprovedOt($dtr);
-            $dtr->notes = trim(($dtr->notes ?? '')." [OT approved: {$attendanceRequest->requested_ot_hours} hrs]");
-            $dtr->save();
-        }
-
-        return redirect()->back()->with('status', 'Request '.$status.' for '.$attendanceRequest->employee?->name.'.');
+        return redirect()->back()->with('status', 'Request '.$validated['status'].' for '.$attendanceRequest->employee?->name.'.');
     }
 
     /**
@@ -705,11 +586,7 @@ class AttendanceController extends Controller
             abort(403);
         }
 
-        if ($attendanceRequest->status !== 'pending') {
-            throw ValidationException::withMessages(['status' => 'Only pending requests can be cancelled.']);
-        }
-
-        $attendanceRequest->update(['status' => 'cancelled']);
+        $this->attendanceRequests->cancel($attendanceRequest);
 
         return redirect()->back()->with('status', 'Request cancelled.');
     }
@@ -731,7 +608,7 @@ class AttendanceController extends Controller
         $summary = $this->attendanceCalculator->closeDay($entityId, $date);
         $label = Carbon::parse($date)->format('M j, Y');
 
-        return redirect()->back()->with('status', "Day closed for {$label}: {$summary['absent']} absent, {$summary['on_leave']} on leave, {$summary['holiday']} holiday, {$summary['skipped']} already recorded.");
+        return redirect()->back()->with('status', "Day closed for {$label}: {$summary['absent']} absent, {$summary['on_leave']} on leave, {$summary['official_business']} on official business, {$summary['holiday']} holiday, {$summary['skipped']} already recorded.");
     }
 
     /**

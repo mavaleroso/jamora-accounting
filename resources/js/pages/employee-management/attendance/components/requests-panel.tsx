@@ -1,4 +1,4 @@
-import { router } from '@inertiajs/react';
+import { Link, router } from '@inertiajs/react';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, FilePenLine, Inbox, Plus, Timer, X } from 'lucide-react';
 import * as React from 'react';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -37,6 +37,14 @@ const TABS = [
     { id: 'rejected', label: 'Rejected' },
     { id: 'all', label: 'All' },
 ] as const;
+
+const TYPE_LABEL: Record<AttendanceRequestRow['request_type'], string> = {
+    correction: 'Correction',
+    overtime: 'Overtime',
+    official_business: 'Official business',
+    undertime: 'Undertime',
+    schedule_change: 'Change of schedule',
+};
 
 const PUNCHES = [
     ['time_in', 'In'],
@@ -102,7 +110,15 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                     <p className="text-sm font-medium">
                         {filters.request_status === 'pending' ? (canManage ? 'Inbox zero — nothing waiting on you.' : 'No pending requests.') : 'No requests here.'}
                     </p>
-                    {!canViewTeam && <p className="text-xs text-muted-foreground">Missed a punch or worked overtime? File a request from your timesheet.</p>}
+                    {!canViewTeam && (
+                        <p className="text-xs text-muted-foreground">
+                            Missed a punch? Request a correction from your timesheet. Overtime (filed in advance), leave and other requests are in{' '}
+                            <Link href="/employee-management/requests" className="text-primary hover:underline">
+                                My Requests
+                            </Link>
+                            .
+                        </p>
+                    )}
                 </div>
             ) : (
                 <ul className="space-y-3">
@@ -122,7 +138,7 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                                                 {canViewTeam && <span className="font-medium">{fullName(r.employee)}</span>}
                                                 <Badge variant="outline" className={cn('gap-1', isOt ? TONE.violet : TONE.sky)}>
                                                     {isOt ? <Timer className="size-3" /> : <FilePenLine className="size-3" />}
-                                                    {isOt ? 'Overtime' : 'Correction'}
+                                                    {TYPE_LABEL[r.request_type]}
                                                 </Badge>
                                                 <span className="text-sm text-muted-foreground">{fmtDate(r.work_date, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
                                                 <Badge variant="outline" className={TONE[st.tone]}>
@@ -131,7 +147,22 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                                             </div>
 
                                             {/* What changes */}
-                                            {isOt ? (
+                                            {r.request_type === 'official_business' ? (
+                                                <div className="text-sm">
+                                                    <span className="font-semibold">
+                                                        {fmtTime(r.requested_time_in)} – {fmtTime(r.requested_time_out)}
+                                                    </span>
+                                                    {r.destination && <span className="text-muted-foreground"> · {r.destination}</span>}
+                                                </div>
+                                            ) : r.request_type === 'undertime' ? (
+                                                <div className="text-sm">
+                                                    Leave at <span className="font-semibold">{fmtTime(r.requested_time_out)}</span>
+                                                </div>
+                                            ) : r.request_type === 'schedule_change' ? (
+                                                <div className="text-sm font-semibold">
+                                                    {r.requested_rest_day ? 'Rest day instead of work' : `New shift ${fmtTime(r.requested_time_in)} – ${fmtTime(r.requested_time_out)}`}
+                                                </div>
+                                            ) : isOt ? (
                                                 <div className="text-sm">
                                                     <span className="font-semibold">{fmtHours(r.requested_ot_hours)}</span> overtime
                                                     {r.dtr_entry && (

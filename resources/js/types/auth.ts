@@ -18,6 +18,8 @@ export type User = {
     two_factor_enabled?: boolean;
     roles?: string[];
     permissions?: string[];
+    /** Linked employee record in the current branch, if any. */
+    employee_id?: number | null;
     created_at: string;
     updated_at: string;
     [key: string]: unknown;

@@ -9,7 +9,6 @@ import {
     MapPinCheck,
     MoreHorizontal,
     Pencil,
-    Timer,
     Undo2,
 } from 'lucide-react';
 import * as React from 'react';
@@ -66,7 +65,7 @@ type Props = {
     onFilter: (changes: Partial<Filters>) => void;
     onEdit: (entry: DtrRow) => void;
     onApprove: (entry: DtrRow) => void;
-    onRequest: (entry: DtrRow, type: 'correction' | 'overtime') => void;
+    onRequest: (entry: DtrRow, type: 'correction') => void;
 };
 
 const ALL = 'all';
@@ -192,7 +191,7 @@ export function Timesheets({ entries, kpis, approval, filters, employees, perspe
                     value={fmtHours(kpis.otApproved)}
                     hint={
                         kpis.otRendered > kpis.otApproved
-                            ? `of ${fmtHours(kpis.otRendered)} rendered · ${fmtHours(kpis.otRendered - kpis.otApproved)} needs an approved OT request`
+                            ? `of ${fmtHours(kpis.otRendered)} rendered · ${fmtHours(kpis.otRendered - kpis.otApproved)} not pre-approved`
                             : kpis.otRendered > 0
                               ? 'All rendered OT approved'
                               : 'No overtime rendered'
@@ -314,11 +313,6 @@ export function Timesheets({ entries, kpis, approval, filters, employees, perspe
                                                                 <DropdownMenuItem onClick={() => onEdit(e)} disabled={locked}>
                                                                     <Pencil className="size-4" /> Edit punches
                                                                 </DropdownMenuItem>
-                                                                {otPending && !e.ot_request_pending && (
-                                                                    <DropdownMenuItem onClick={() => onRequest(e, 'overtime')} disabled={locked}>
-                                                                        <Timer className="size-4" /> File OT request
-                                                                    </DropdownMenuItem>
-                                                                )}
                                                                 {e.status === 'approved' && (
                                                                     <DropdownMenuItem onClick={() => post(`${ATTENDANCE_URL}/${e.id}/reopen`)}>
                                                                         <Undo2 className="size-4" /> Reopen for review
@@ -337,9 +331,6 @@ export function Timesheets({ entries, kpis, approval, filters, employees, perspe
                                                             <>
                                                                 <DropdownMenuItem onClick={() => onRequest(e, 'correction')} disabled={locked}>
                                                                     <FilePenLine className="size-4" /> Request correction
-                                                                </DropdownMenuItem>
-                                                                <DropdownMenuItem onClick={() => onRequest(e, 'overtime')} disabled={locked || !otPending || e.ot_request_pending}>
-                                                                    <Timer className="size-4" /> {e.ot_request_pending ? 'OT request pending' : 'Request OT approval'}
                                                                 </DropdownMenuItem>
                                                             </>
                                                         )}

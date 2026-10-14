@@ -2,250 +2,418 @@
 
 namespace App\Services\Payroll;
 
+use App\Exceptions\AccountingException;
 use App\Models\Account;
+use App\Models\AccountType;
+use App\Models\AttendanceRequest;
+use App\Models\BankAccount;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Journal;
+use App\Models\JournalEntry;
+use App\Models\LeaveRequest;
+use App\Models\PayrollAdjustment;
 use App\Models\PayrollPeriod;
 use App\Models\PayrollRun;
 use App\Models\Payslip;
+use App\Models\User;
 use App\Services\Accounting\JournalPostingService;
-use App\Services\People\BenefitCalculator;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
+/**
+ * Payroll run lifecycle:
+ *
+ *   compute  -> draft     payslips computed from approved time records, leave and adjustments; recomputable
+ *   approve  -> approved  cut-off time records are locked so the numbers cannot drift
+ *   reopen   -> draft     (approved only) unlocks the time records for corrections
+ *   post     -> posted    journal entry: salaries + employer contributions vs. statutory payables and net pay
+ *   pay      -> paid      payment entry: salaries payable vs. the paying bank; payslips become final
+ *   void     -> void      (draft only) discards the run so the period can be computed again
+ */
 class PayrollService
 {
     public function __construct(
         protected JournalPostingService $journalPostingService,
-        protected BenefitCalculator $benefitCalculator
+        protected PayrollCalculator $calculator
     ) {}
 
-    public function compute(PayrollPeriod $period, int $userId): PayrollRun
+    /**
+     * Compute the period's draft run, creating it if the period has none.
+     */
+    public function compute(PayrollPeriod $period, User|int $user): PayrollRun
     {
-        return DB::transaction(function () use ($period, $userId) {
-            $runNo = 'PR-'.$period->code.'-'.now()->format('His');
-            $run = PayrollRun::query()->create([
+        $userId = $user instanceof User ? $user->id : $user;
+        $run = $period->activeRun()->first();
+
+        if ($run && ! $run->isDraft()) {
+            throw ValidationException::withMessages([
+                'payroll_period_id' => "Payroll for {$period->code} is already {$run->status}. Return it to draft before recomputing.",
+            ]);
+        }
+
+        return DB::transaction(function () use ($period, $run, $userId) {
+            $run ??= PayrollRun::query()->create([
                 'entity_id' => $period->entity_id,
                 'payroll_period_id' => $period->id,
-                'run_no' => $runNo,
-                'status' => 'computed',
+                'run_no' => $this->nextRunNo($period),
+                'status' => PayrollRun::STATUS_DRAFT,
             ]);
 
-            $employees = Employee::query()
-                ->withoutEntityScope()
-                ->where('entity_id', $period->entity_id)
-                ->where('is_active', true)
-                ->where('employment_status', 'active')
-                ->get();
-
-            $grossTotal = 0;
-            $deductionTotal = 0;
-            $netTotal = 0;
-
-            $premiums = config('people.premiums');
-
-            foreach ($employees as $employee) {
-                $dtrs = DtrEntry::query()
-                    ->withoutEntityScope()
-                    ->where('employee_id', $employee->id)
-                    ->whereBetween('work_date', [$period->start_date, $period->end_date])
-                    ->get();
-
-                $absentDays = $dtrs->where('is_absent', true)->count();
-                $tardinessMinutes = (float) $dtrs->sum('tardiness_minutes');
-                $undertimeMinutes = (float) $dtrs->sum('undertime_minutes');
-
-                $dailyRate = $employee->pay_type === 'daily'
-                    ? (float) $employee->basic_pay
-                    : ((float) $employee->basic_pay / 22);
-                $hourlyRate = $dailyRate / 8;
-
-                $basic = (float) $employee->basic_pay;
-                if ($employee->pay_type === 'daily') {
-                    $workDays = $dtrs->where('is_absent', false)
-                        ->whereNotIn('attendance_status', ['absent', 'rest_day'])
-                        ->count();
-                    $basic = $dailyRate * max($workDays, 0);
-                }
-
-                // Premium Pay & Approved Overtime Computation
-                $otPay = 0.0;
-                $holidayRestDayPremiums = 0.0;
-                $nightDiffPay = 0.0;
-
-                foreach ($dtrs as $dtr) {
-                    $dayType = $dtr->day_type ?: 'regular';
-                    $rateCfg = $premiums[$dayType] ?? $premiums['regular'];
-
-                    // Approved overtime pay based on DOLE day type multiplier
-                    $payableOtHours = (float) ($dtr->ot_hours_approved > 0 ? $dtr->ot_hours_approved : 0);
-                    if ($payableOtHours > 0) {
-                        $otPay += $payableOtHours * $hourlyRate * $rateCfg['ot'];
-                    }
-
-                    // Work rendered on rest day / special holiday / regular holiday receives premium over standard daily basic
-                    if ($dayType !== 'regular' && (float) $dtr->regular_hours > 0) {
-                        $multiplier = max(0, $rateCfg['day'] - 1.0);
-                        $workedHours = min(8.0, (float) $dtr->regular_hours);
-                        $holidayRestDayPremiums += $workedHours * $hourlyRate * $multiplier;
-                    }
-
-                    // Night Differential (10% additional)
-                    if ((float) $dtr->night_diff_hours > 0) {
-                        $nightDiffPay += (float) $dtr->night_diff_hours * $hourlyRate * 0.10;
-                    }
-                }
-
-                $absenceDeduction = $absentDays * $dailyRate;
-                $tardinessDeduction = (($tardinessMinutes + $undertimeMinutes) / 60) * $hourlyRate;
-                $gross = max(0, $basic + $otPay + $holidayRestDayPremiums + $nightDiffPay - $absenceDeduction - $tardinessDeduction);
-
-                // Statutory contributions via BenefitCalculator
-                $activeBenefits = $employee->benefits()->with('program')->get();
-                $sssProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_sss');
-                $phProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_philhealth');
-                $pagibigProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_pagibig');
-
-                $sss = $sssProg ? (float) $sssProg->employee_share : round(min($gross * 0.05, 1750), 2);
-                $philhealth = $phProg ? (float) $phProg->employee_share : round(min($gross * 0.025, 2500), 2);
-                $pagibig = $pagibigProg ? (float) $pagibigProg->employee_share : round(min($gross * 0.02, 200), 2);
-
-                $taxable = max(0, $gross - $sss - $philhealth - $pagibig);
-                $withholding = $this->withholdingTax($taxable);
-                $deductions = $sss + $philhealth + $pagibig + $withholding;
-                $net = max(0, $gross - $deductions);
-
-                Payslip::query()->create([
-                    'payroll_run_id' => $run->id,
-                    'employee_id' => $employee->id,
-                    'basic_pay' => round($basic, 2),
-                    'ot_pay' => round($otPay, 2),
-                    'absences' => round($absenceDeduction, 2),
-                    'tardiness' => round($tardinessDeduction, 2),
-                    'gross_pay' => round($gross, 2),
-                    'sss' => $sss,
-                    'philhealth' => $philhealth,
-                    'pagibig' => $pagibig,
-                    'withholding_tax' => $withholding,
-                    'other_deductions' => 0,
-                    'net_pay' => round($net, 2),
-                    'thirteenth_month_accrual' => round($gross / 12, 2),
-                    'meta' => [
-                        'holiday_premiums' => round($holidayRestDayPremiums, 2),
-                        'night_diff_pay' => round($nightDiffPay, 2),
-                        'undertime_minutes' => $undertimeMinutes,
-                    ],
-                ]);
-
-                // LOCK DTR entries for this cutoff so they can no longer be modified without payroll rollback
-                DtrEntry::query()
-                    ->withoutEntityScope()
-                    ->where('employee_id', $employee->id)
-                    ->whereBetween('work_date', [$period->start_date, $period->end_date])
-                    ->update([
-                        'status' => DtrEntry::STATUS_LOCKED,
-                        'payroll_period_id' => $period->id,
-                    ]);
-
-                $grossTotal += $gross;
-                $deductionTotal += $deductions;
-                $netTotal += $net;
-            }
-
-            $run->update([
-                'gross_total' => round($grossTotal, 2),
-                'deduction_total' => round($deductionTotal, 2),
-                'net_total' => round($netTotal, 2),
-            ]);
-
+            $this->computeInto($run, $period, $userId);
             $period->update(['status' => 'processing']);
 
             return $run->fresh(['payslips.employee']);
         });
     }
 
-    public function post(PayrollRun $run, int $userId): PayrollRun
+    public function approve(PayrollRun $run, User $user): PayrollRun
     {
-        if ($run->status === 'posted') {
-            return $run;
+        $this->assertStatus($run, PayrollRun::STATUS_DRAFT, 'approved');
+
+        $negative = $run->payslips()->where('net_pay', '<', 0)->count();
+        if ($negative > 0) {
+            throw ValidationException::withMessages([
+                'status' => "{$negative} payslip(s) have negative net pay. Reduce their deductions before approving.",
+            ]);
+        }
+        if ($run->payslips()->count() === 0) {
+            throw ValidationException::withMessages(['status' => 'There are no payslips to approve.']);
         }
 
-        return DB::transaction(function () use ($run, $userId) {
-            $expense = Account::query()->where('code', '6000')->first();
-            $payable = Account::query()->where('code', '2500')->first();
-            $sss = Account::query()->where('code', '2400')->first();
-            $ph = Account::query()->where('code', '2410')->first();
-            $pagibig = Account::query()->where('code', '2420')->first();
-            $wtax = Account::query()->where('code', '2430')->first();
-            $journal = Journal::query()->where('code', 'GJ')->first();
+        return DB::transaction(function () use ($run, $user) {
+            $period = $run->period;
 
-            $payslips = $run->payslips;
-            $sssTotal = (float) $payslips->sum('sss');
-            $phTotal = (float) $payslips->sum('philhealth');
-            $pagibigTotal = (float) $payslips->sum('pagibig');
-            $taxTotal = (float) $payslips->sum('withholding_tax');
-
-            $lines = [
-                [
-                    'account_id' => $expense?->id,
-                    'debit' => (float) $run->gross_total,
-                    'credit' => 0,
-                    'memo' => 'Payroll '.$run->run_no,
-                ],
-                [
-                    'account_id' => $payable?->id,
-                    'debit' => 0,
-                    'credit' => (float) $run->net_total,
-                    'memo' => 'Net salaries',
-                ],
-            ];
-
-            foreach ([[$sss, $sssTotal, 'SSS'], [$ph, $phTotal, 'PhilHealth'], [$pagibig, $pagibigTotal, 'Pag-IBIG'], [$wtax, $taxTotal, 'WTax']] as [$account, $amount, $label]) {
-                if ($amount > 0) {
-                    $lines[] = [
-                        'account_id' => $account?->id,
-                        'debit' => 0,
-                        'credit' => $amount,
-                        'memo' => $label,
-                    ];
-                }
-            }
-
-            $entry = $this->journalPostingService->create([
-                'journal_id' => $journal?->id,
-                'entry_date' => $run->period?->pay_date?->toDateString() ?? now()->toDateString(),
-                'reference' => $run->run_no,
-                'memo' => 'Payroll run '.$run->run_no,
-                'source_system' => 'payroll',
-                'source_type' => 'payroll_run',
-                'source_id' => $run->id,
-            ], $lines, \App\Models\User::find($userId));
+            // Lock the cut-off so time records cannot change under an approved payroll.
+            DtrEntry::query()
+                ->withoutEntityScope()
+                ->whereIn('employee_id', $run->payslips()->pluck('employee_id'))
+                ->whereBetween('work_date', [$period->start_date->toDateString(), $period->end_date->toDateString()])
+                ->update(['status' => DtrEntry::STATUS_LOCKED, 'payroll_period_id' => $period->id]);
 
             $run->update([
-                'status' => 'posted',
-                'journal_entry_id' => $entry->id,
-                'posted_by' => $userId,
-                'posted_at' => now(),
+                'status' => PayrollRun::STATUS_APPROVED,
+                'approved_by' => $user->id,
+                'approved_at' => now(),
             ]);
-            $run->period?->update(['status' => 'posted']);
 
             return $run->fresh();
         });
     }
 
-    protected function withholdingTax(float $taxableSemiMonthly): float
+    /**
+     * Send an approved run back to draft and unlock its time records for corrections.
+     */
+    public function reopen(PayrollRun $run): PayrollRun
     {
-        // TRAIN semi-monthly approximation
-        if ($taxableSemiMonthly <= 10417) {
-            return 0;
-        }
-        if ($taxableSemiMonthly <= 16666) {
-            return round(($taxableSemiMonthly - 10417) * 0.15, 2);
-        }
-        if ($taxableSemiMonthly <= 33332) {
-            return round(937.50 + ($taxableSemiMonthly - 16667) * 0.20, 2);
+        $this->assertStatus($run, PayrollRun::STATUS_APPROVED, 'returned to draft');
+
+        return DB::transaction(function () use ($run) {
+            $this->unlockTimeRecords($run);
+            $run->update(['status' => PayrollRun::STATUS_DRAFT, 'approved_by' => null, 'approved_at' => null]);
+
+            return $run->fresh();
+        });
+    }
+
+    /**
+     * Book the payroll in the general ledger.
+     *
+     *   Dr Salaries and Wages                     gross pay
+     *   Dr Employer Statutory Contributions       SSS ER + EC, PhilHealth ER, Pag-IBIG ER
+     *      Cr SSS / PhilHealth / Pag-IBIG Payable  employee + employer shares
+     *      Cr Withholding Tax Payable              tax withheld
+     *      Cr Other Payroll Deductions Payable     loans, cash advances...
+     *      Cr Salaries Payable                     net pay
+     */
+    public function post(PayrollRun $run, User|int $user): PayrollRun
+    {
+        $user = $user instanceof User ? $user : User::findOrFail($user);
+        $this->assertStatus($run, PayrollRun::STATUS_APPROVED, 'posted');
+
+        return DB::transaction(function () use ($run, $user) {
+            $p = $run->payslips;
+            $sum = fn (string $col) => round((float) $p->sum($col), 2);
+
+            $lines = array_values(array_filter([
+                $this->line('salaries_expense', $sum('gross_pay'), 0, 'Gross pay'),
+                $this->line('employer_contributions', $sum('sss_er') + $sum('sss_ec') + $sum('philhealth_er') + $sum('pagibig_er'), 0, 'Employer share — SSS, EC, PhilHealth, Pag-IBIG'),
+                $this->line('sss_payable', 0, $sum('sss') + $sum('sss_er') + $sum('sss_ec'), 'SSS contributions (EE + ER + EC)'),
+                $this->line('philhealth_payable', 0, $sum('philhealth') + $sum('philhealth_er'), 'PhilHealth premiums (EE + ER)'),
+                $this->line('pagibig_payable', 0, $sum('pagibig') + $sum('pagibig_er'), 'Pag-IBIG contributions (EE + ER)'),
+                $this->line('withholding_tax_payable', 0, $sum('withholding_tax'), 'Withholding tax on compensation'),
+                $this->line('other_deductions_payable', 0, $sum('other_deductions'), 'Loans and other payroll deductions'),
+                $this->line('salaries_payable', 0, $sum('net_pay'), 'Net pay'),
+            ]));
+
+            $entry = $this->journalEntry([
+                'journal_id' => $this->journal()->id,
+                'entry_date' => $run->period->pay_date?->toDateString() ?? $run->period->end_date->toDateString(),
+                'reference' => $run->run_no,
+                'memo' => "Payroll {$run->period->code} ({$run->period->start_date->format('M j')}–{$run->period->end_date->format('M j, Y')})",
+                'source_system' => 'payroll',
+                'source_type' => 'payroll_run',
+                'source_id' => $run->id,
+            ], $lines, $user);
+
+            $run->update([
+                'status' => PayrollRun::STATUS_POSTED,
+                'journal_entry_id' => $entry->id,
+                'posted_by' => $user->id,
+                'posted_at' => now(),
+            ]);
+            $run->period->update(['status' => 'posted']);
+
+            return $run->fresh();
+        });
+    }
+
+    /**
+     * Record the release of net pay: Dr Salaries Payable / Cr the paying bank account.
+     */
+    public function pay(PayrollRun $run, User $user, string $paidOn, ?BankAccount $bank = null): PayrollRun
+    {
+        $this->assertStatus($run, PayrollRun::STATUS_POSTED, 'released');
+
+        return DB::transaction(function () use ($run, $user, $paidOn, $bank) {
+            $net = round((float) $run->payslips()->sum('net_pay'), 2);
+            $bankAccountId = $bank?->gl_account_id ?: $this->account('cash_in_bank')->id;
+
+            $entry = $this->journalEntry([
+                'journal_id' => $this->journal()->id,
+                'entry_date' => $paidOn,
+                'reference' => $run->run_no.'-PAY',
+                'memo' => "Release of payroll {$run->period->code}".($bank ? " via {$bank->name}" : ''),
+                'source_system' => 'payroll',
+                'source_type' => 'payroll_payment',
+                'source_id' => $run->id,
+            ], [
+                $this->line('salaries_payable', $net, 0, 'Net pay released'),
+                ['account_id' => $bankAccountId, 'debit' => 0, 'credit' => $net, 'memo' => 'Payroll disbursement'],
+            ], $user);
+
+            $run->update([
+                'status' => PayrollRun::STATUS_PAID,
+                'paid_by' => $user->id,
+                'paid_at' => now(),
+                'paid_on' => $paidOn,
+                'bank_account_id' => $bank?->id,
+                'payment_journal_entry_id' => $entry->id,
+            ]);
+            $run->period->update(['status' => 'paid']);
+
+            return $run->fresh();
+        });
+    }
+
+    public function void(PayrollRun $run): PayrollRun
+    {
+        $this->assertStatus($run, PayrollRun::STATUS_DRAFT, 'voided');
+
+        $run->update(['status' => PayrollRun::STATUS_VOID, 'voided_at' => now()]);
+        $run->period->update(['status' => 'open']);
+
+        return $run;
+    }
+
+    /**
+     * Run-level checks shown before approval. Each item: [level, message, count].
+     *
+     * @return array<int, array{level: string, message: string, count: int, key: string}>
+     */
+    public function preflight(PayrollRun $run): array
+    {
+        $period = $run->period;
+        $range = [$period->start_date->toDateString(), $period->end_date->toDateString()];
+        $employeeIds = $run->payslips()->pluck('employee_id');
+        $items = [];
+        $add = function (string $key, string $level, int $count, string $message) use (&$items) {
+            if ($count > 0) {
+                $items[] = compact('key', 'level', 'count', 'message');
+            }
+        };
+
+        $add('open_records', 'warning', DtrEntry::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)
+            ->whereBetween('work_date', $range)->where('status', DtrEntry::STATUS_OPEN)->count(),
+            'time records in this cut-off are not yet approved in Time & Attendance.');
+
+        $add('incomplete', 'warning', DtrEntry::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)
+            ->whereBetween('work_date', $range)->where('attendance_status', 'incomplete')->count(),
+            'time records have a missing punch and are not paid.');
+
+        $add('pending_requests', 'warning',
+            AttendanceRequest::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)->where('status', 'pending')->whereBetween('work_date', $range)->count()
+            + LeaveRequest::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)->where('status', LeaveRequest::STATUS_PENDING)
+                ->whereDate('start_date', '<=', $range[1])->whereDate('end_date', '>=', $range[0])->count(),
+            'requests (leave, overtime, corrections…) in this cut-off are still pending — decide them, then recompute.');
+
+        $payslips = $run->payslips()->with('employee:id,bank_name,bank_account_no')->get();
+        $add('negative_net', 'error', $payslips->where('net_pay', '<', 0)->count(), 'payslips have negative net pay — approval is blocked.');
+        $add('no_record_days', 'info', $payslips->filter(fn (Payslip $p) => ($p->meta['days']['no_record'] ?? 0) > 0)->count(),
+            'employees have working days without a time record — close those days in Time & Attendance.');
+        $add('no_bank', 'info', $payslips->filter(fn (Payslip $p) => blank($p->employee?->bank_account_no))->count(),
+            'employees have no payroll bank account and must be paid by cash or cheque.');
+        $add('missing_ids', 'info', $payslips->filter(fn (Payslip $p) => collect($p->meta['warnings'] ?? [])->contains(fn ($w) => str_contains($w, 'number on file')))->count(),
+            'employees are missing an SSS, PhilHealth, Pag-IBIG or TIN number needed for remittance.');
+
+        return $items;
+    }
+
+    // -----------------------------------------------------------------------------------------
+
+    protected function computeInto(PayrollRun $run, PayrollPeriod $period, int $userId): void
+    {
+        $start = $period->start_date->toDateString();
+        $end = $period->end_date->toDateString();
+
+        $run->payslips()->delete();
+
+        // Everyone employed at any point of the cut-off and set to be paid.
+        $employees = Employee::query()
+            ->withoutEntityScope()
+            ->where('entity_id', $period->entity_id)
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->whereNull('hire_date')->orWhereDate('hire_date', '<=', $end))
+            ->where(fn ($q) => $q->whereNull('separation_date')->orWhereDate('separation_date', '>=', $start))
+            ->whereIn('employment_status', ['active', 'separated'])
+            ->orderBy('lastname')
+            ->get();
+
+        $dtrs = DtrEntry::query()
+            ->withoutEntityScope()
+            ->whereIn('employee_id', $employees->pluck('id'))
+            ->whereBetween('work_date', [$start, $end])
+            ->get()
+            ->groupBy('employee_id');
+
+        $leaves = LeaveRequest::query()
+            ->withoutEntityScope()
+            ->with('type:id,code,name,is_paid')
+            ->whereIn('id', $dtrs->flatten()->pluck('leave_request_id')->filter()->unique())
+            ->get()
+            ->keyBy('id');
+
+        $adjustments = PayrollAdjustment::query()->where('payroll_run_id', $run->id)->get()->groupBy('employee_id');
+
+        $totals = ['gross' => 0.0, 'deductions' => 0.0, 'net' => 0.0, 'employer' => 0.0];
+        foreach ($employees as $employee) {
+            $data = $this->calculator->compute(
+                $employee,
+                $period,
+                $dtrs->get($employee->id, collect()),
+                $leaves,
+                $adjustments->get($employee->id, collect()),
+            );
+
+            $payslip = $run->payslips()->create($data);
+
+            $totals['gross'] += (float) $payslip->gross_pay;
+            $totals['deductions'] += $payslip->totalDeductions();
+            $totals['net'] += (float) $payslip->net_pay;
+            $totals['employer'] += $payslip->employerContributions();
         }
 
-        return round(4270.70 + ($taxableSemiMonthly - 33333) * 0.25, 2);
+        $run->update([
+            'headcount' => $employees->count(),
+            'gross_total' => round($totals['gross'], 2),
+            'deduction_total' => round($totals['deductions'], 2),
+            'net_total' => round($totals['net'], 2),
+            'employer_total' => round($totals['employer'], 2),
+            'computed_by' => $userId,
+            'computed_at' => now(),
+        ]);
+        $run->update(['warnings' => $this->preflight($run->fresh())]);
+    }
+
+    protected function unlockTimeRecords(PayrollRun $run): void
+    {
+        DtrEntry::query()
+            ->withoutEntityScope()
+            ->where('payroll_period_id', $run->payroll_period_id)
+            ->where('status', DtrEntry::STATUS_LOCKED)
+            ->update(['status' => DtrEntry::STATUS_APPROVED]);
+    }
+
+    protected function nextRunNo(PayrollPeriod $period): string
+    {
+        $base = 'PR-'.$period->code;
+        $taken = PayrollRun::query()->withoutEntityScope()->where('entity_id', $period->entity_id)->where('run_no', 'like', $base.'%')->count();
+
+        return $taken === 0 ? $base : $base.'-'.($taken + 1);
+    }
+
+    protected function assertStatus(PayrollRun $run, string $expected, string $action): void
+    {
+        if ($run->status !== $expected) {
+            throw ValidationException::withMessages([
+                'status' => "Only a {$expected} payroll can be {$action}. This one is {$run->status}.",
+            ]);
+        }
+    }
+
+    /**
+     * @return array{account_id: int, debit: float, credit: float, memo: string}|null
+     */
+    protected function line(string $key, float $debit, float $credit, string $memo): ?array
+    {
+        if (round($debit, 2) == 0 && round($credit, 2) == 0) {
+            return null;
+        }
+
+        return ['account_id' => $this->account($key)->id, 'debit' => round($debit, 2), 'credit' => round($credit, 2), 'memo' => $memo];
+    }
+
+    /**
+     * Payroll GL account by its config key. Accounts the chart is missing are added under the configured type.
+     */
+    protected function account(string $key): Account
+    {
+        $cfg = config("people.payroll.accounts.{$key}");
+        $account = Account::query()->where('code', $cfg['code'])->first();
+        if ($account) {
+            return $account;
+        }
+
+        $type = AccountType::query()->where('name', $cfg['type'])->first();
+        if (! $type) {
+            throw ValidationException::withMessages([
+                'status' => "GL account {$cfg['code']} {$cfg['name']} is missing from the chart of accounts.",
+            ]);
+        }
+
+        return Account::query()->create([
+            'code' => $cfg['code'],
+            'name' => $cfg['name'],
+            'account_type_id' => $type->id,
+            'is_postable' => true,
+            'is_active' => true,
+        ]);
+    }
+
+    /**
+     * Create the journal entry, reporting accounting setup problems (e.g. a closed period) as validation errors.
+     */
+    protected function journalEntry(array $data, array $lines, User $user): JournalEntry
+    {
+        try {
+            return $this->journalPostingService->create($data, $lines, $user);
+        } catch (AccountingException $e) {
+            throw ValidationException::withMessages(['status' => $e->getMessage().' Open it in Accounting, then try again.']);
+        }
+    }
+
+    protected function journal(): Journal
+    {
+        return Journal::query()->where('code', 'GJ')->first()
+            ?? throw ValidationException::withMessages(['status' => 'The General Journal (GJ) is not set up in Accounting.']);
+    }
+
+    /**
+     * Turn a date into the default pay day of a cut-off ("0" = last day of the month).
+     */
+    public static function payDay(Carbon $periodEnd, int $day): Carbon
+    {
+        return $day === 0 ? $periodEnd->copy()->endOfMonth() : $periodEnd->copy()->day(min($day, $periodEnd->daysInMonth));
     }
 }

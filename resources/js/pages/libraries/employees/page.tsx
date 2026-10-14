@@ -57,6 +57,7 @@ import {
     statusBadgeClass,
     tenure,
     type Employee,
+    type LeaveTypeOption,
     type Policy,
     type ShiftTemplate,
 } from './lib';
@@ -96,6 +97,7 @@ type Props = {
     positions: string[];
     shiftTemplates: ShiftTemplate[];
     policy: Policy;
+    leaveTypes: LeaveTypeOption[];
 };
 
 const ALL = 'all';
@@ -113,6 +115,7 @@ export default function EmployeesPage({
     positions = [],
     shiftTemplates = [],
     policy,
+    leaveTypes = [],
 }: Props) {
     const [formOpen, setFormOpen] = React.useState(false);
     const [viewOpen, setViewOpen] = React.useState(false);
@@ -589,9 +592,10 @@ export default function EmployeesPage({
                 departments={departments}
                 positions={positions}
                 policy={policy}
+                leaveTypes={leaveTypes}
             />
 
-            <EmployeeProfileDialog open={viewOpen} onOpenChange={setViewOpen} employee={selected} policy={policy} onEdit={openEdit} />
+            <EmployeeProfileDialog open={viewOpen} onOpenChange={setViewOpen} employee={selected} policy={policy} leaveTypes={leaveTypes} onEdit={openEdit} />
 
             <ConfirmDialog
                 open={deleteOpen}

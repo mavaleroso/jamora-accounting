@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Libraries;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\LeaveType;
 use App\Models\ShiftTemplate;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
@@ -93,6 +94,10 @@ class EmployeesController extends Controller
                 ->where('is_active', true)
                 ->orderBy('name')
                 ->get(['id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'color']),
+            'leaveTypes' => LeaveType::query()
+                ->where('is_active', true)
+                ->orderBy('sort_order')
+                ->get(['id', 'code', 'name', 'legal_basis', 'is_paid', 'gender']),
             'policy' => [
                 'daysPerYear' => (int) config('people.timekeeping.days_per_year', 313),
                 'hoursPerDay' => (int) config('people.timekeeping.regular_hours_per_day', 8),
@@ -200,6 +205,9 @@ class EmployeesController extends Controller
             'default_shift_template_id' => ['nullable', 'integer', Rule::exists('shift_templates', 'id')->where(fn ($q) => $q->where('entity_id', $entityId)->orWhereNull('entity_id'))],
             'rest_days' => ['nullable', 'array'],
             'rest_days.*' => ['integer', 'between:0,6'],
+            'leave_type_scope' => ['nullable', 'in:all,custom'],
+            'leave_type_ids' => ['nullable', 'array'],
+            'leave_type_ids.*' => ['integer', 'exists:leave_types,id'],
             'pay_type' => ['required', 'string', 'in:monthly,daily,hourly'],
             'basic_pay' => ['required', 'numeric', 'min:0'],
             'vacation_leave_credits' => ['nullable', 'numeric', 'min:0'],
@@ -226,6 +234,12 @@ class EmployeesController extends Controller
         $restDays = array_values(array_unique(array_map('intval', $data['rest_days'] ?? [])));
         sort($restDays);
         $data['rest_days'] = $restDays !== [] ? $restDays : null;
+
+        // "All" is stored as NULL so leave types added later are enabled automatically.
+        $data['leave_type_ids'] = ($data['leave_type_scope'] ?? 'all') === 'custom'
+            ? array_values(array_unique(array_map('intval', $data['leave_type_ids'] ?? [])))
+            : null;
+        unset($data['leave_type_scope']);
 
         // The file itself is stored by the caller.
         unset($data['avatar'], $data['remove_avatar']);
