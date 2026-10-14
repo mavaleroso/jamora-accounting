@@ -7,7 +7,6 @@ import {
     Building2,
     Calculator,
     CalendarCheck,
-    CalendarOff,
     CalendarRange,
     ClipboardList,
     Clock,
@@ -69,8 +68,8 @@ const employeeMgmtNavItems: NavItem[] = [
     { title: 'Employee Directory', href: '/libraries/employees', icon: UserRound },
     { title: 'Shift & Roster', href: '/employee-management/roster', icon: CalendarCheck },
     { title: 'Time & Attendance', href: '/employee-management/attendance', icon: Clock },
-    { title: 'Leave & Absence', href: '/employee-management/leave', icon: CalendarOff },
-    { title: 'Payroll Runs', href: '/payroll/runs', icon: Banknote },
+    { title: 'Employee Requests', href: '/employee-management/requests', icon: ClipboardList },
+    { title: 'Payroll', href: '/payroll/runs', icon: Banknote },
     { title: 'Benefits Admin', href: '/employee-management/benefits', icon: HeartHandshake },
     { title: 'Employee Portal', href: '/employee-management/portal', icon: UserCheck },
     { title: 'People Reports', href: '/employee-management/reports', icon: BarChart3 },
@@ -215,14 +214,15 @@ export function AppSidebar() {
                 return canAny(['roster.view', 'roster.manage', 'payroll.view', 'payroll.manage']);
             case '/employee-management/attendance':
                 return canAny(['attendance.view', 'attendance.punch', 'attendance.manage', 'payroll.view', 'payroll.manage']);
-            case '/employee-management/leave':
-                return canAny(['leave.view', 'leave.file', 'leave.approve', 'payroll.view', 'payroll.manage']);
+            case '/employee-management/requests':
+                return canAny(['leave.view', 'leave.file', 'leave.approve', 'attendance.view', 'attendance.punch', 'attendance.manage', 'payroll.view', 'payroll.manage']);
             case '/payroll/runs':
                 return canAny(['payroll.view', 'payroll.run']);
             case '/employee-management/benefits':
                 return canAny(['payroll.manage', 'libraries.employees.manage']);
             case '/employee-management/portal':
-                return canAny(['portal.view', 'payroll.view', 'payroll.manage']);
+                // A personal page: only useful to someone with an employee record in this branch.
+                return !!auth?.user?.employee_id && canAny(['portal.view', 'payroll.view', 'payroll.manage']);
             case '/employee-management/reports':
                 return canAny(['payroll.view', 'dashboard.view']);
             case '/employee-management/access':
@@ -243,8 +243,17 @@ export function AppSidebar() {
             return { ...item, title: 'My Attendance' };
         }
 
+        if (item.href === '/employee-management/requests') {
+            return { ...item, title: 'My Requests' };
+        }
+
         return item;
     });
+
+    // Employees land on their portal, so it leads their menu.
+    if (isEmployee) {
+        filteredEmployeeMgmt.sort((a, b) => Number(b.href === '/employee-management/portal') - Number(a.href === '/employee-management/portal'));
+    }
 
     const filteredAdmin = adminNavItems
         .map((item) => {

@@ -104,7 +104,7 @@ class BenefitCalculator
         ]);
 
         $base = min($cfg['max_fund_salary'], $basicPay);
-        $eeRate = $basicPay <= $cfg['low_threshold'] ? $cfg['rate_employee_low'] : $cfg['rate_employee_rate'] ?? 0.02;
+        $eeRate = $basicPay <= $cfg['low_threshold'] ? $cfg['rate_employee_low'] : $cfg['rate_employee'];
         $ee = round($base * $eeRate, 2);
         $er = round($base * $cfg['rate_employer'], 2);
 

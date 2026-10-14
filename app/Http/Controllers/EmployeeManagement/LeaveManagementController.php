@@ -4,16 +4,12 @@ namespace App\Http\Controllers\EmployeeManagement;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
-use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
-use App\Models\LeaveType;
 use App\Services\People\EmployeeResolver;
 use App\Services\People\LeaveService;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Inertia\Inertia;
-use Inertia\Response;
 
 class LeaveManagementController extends Controller
 {
@@ -22,94 +18,16 @@ class LeaveManagementController extends Controller
         protected EmployeeResolver $employeeResolver
     ) {}
 
-    public function index(Request $request, EntityContext $entityContext): Response
+    /**
+     * Leave filing and approval moved to Employee Requests, which covers every request type.
+     */
+    public function index(Request $request): RedirectResponse
     {
-        $entityId = $entityContext->id();
-        $status = $request->get('status');
-        $employeeId = $request->get('employee_id');
-        $year = (int) $request->get('year', date('Y'));
-
-        $user = $request->user();
-        $isApprover = $this->employeeResolver->isHr($user, 'leave.approve');
-        $currentUserEmployee = $this->employeeResolver->forUser($user, $entityId);
-
-        if (! $isApprover && $currentUserEmployee) {
-            $employeeId = $currentUserEmployee->id;
-        }
-
-        $query = LeaveRequest::query()
-            ->with([
-                'employee:id,employee_code,firstname,lastname,position,department,gender',
-                'approver:id,firstname,lastname',
-                'filer:id,firstname,lastname',
-                'type',
-            ])
-            ->where('entity_id', $entityId)
-            ->orderByDesc('created_at');
-
-        if ($status) {
-            $query->where('status', $status);
-        }
-
-        if ($employeeId) {
-            $query->where('employee_id', $employeeId);
-        }
-
-        $requests = $query->paginate(15)->withQueryString();
-
-        if ($isApprover) {
-            $employees = Employee::query()
-                ->where('entity_id', $entityId)
-                ->where('is_active', true)
-                ->orderBy('lastname')
-                ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'gender']);
-        } else {
-            $employees = $currentUserEmployee ? collect([$currentUserEmployee]) : collect();
-        }
-
-        $countQuery = LeaveRequest::where('entity_id', $entityId);
-        if (! $isApprover && $currentUserEmployee) {
-            $countQuery->where('employee_id', $currentUserEmployee->id);
-        }
-
-        $pendingCount = (clone $countQuery)->where('status', 'pending')->count();
-        $approvedCount = (clone $countQuery)->where('status', 'approved')->count();
-        $declinedCount = (clone $countQuery)->where('status', 'declined')->count();
-        $cancelledCount = (clone $countQuery)->where('status', 'cancelled')->count();
-
-        // Leave Types Catalogue
-        $leaveTypes = LeaveType::where('is_active', true)->orderBy('sort_order')->get();
-
-        // Balances for the current / selected employee
-        $selectedEmployeeId = $employeeId ?: $currentUserEmployee?->id;
-        $balances = [];
-        if ($selectedEmployeeId) {
-            $balances = LeaveBalance::where('entity_id', $entityId)
-                ->where('employee_id', $selectedEmployeeId)
-                ->where('year', $year)
-                ->with('leaveType')
-                ->get();
-        }
-
-        return Inertia::render('employee-management/leave/page', [
-            'requests' => $requests,
-            'employees' => $employees,
-            'currentUserEmployee' => $currentUserEmployee,
-            'leaveTypes' => $leaveTypes,
-            'balances' => $balances,
-            'selectedYear' => $year,
-            'counts' => [
-                'pending' => $pendingCount,
-                'approved' => $approvedCount,
-                'declined' => $declinedCount,
-                'cancelled' => $cancelledCount,
-            ],
-            'filters' => [
-                'status' => $status,
-                'employee_id' => $employeeId,
-                'year' => $year,
-            ],
-        ]);
+        return redirect()->route('employee-management.requests.index', array_filter([
+            'kind' => 'leave',
+            'status' => $request->query('status'),
+            'employee_id' => $request->query('employee_id'),
+        ]));
     }
 
     public function store(Request $request, EntityContext $entityContext): RedirectResponse
@@ -132,13 +50,7 @@ class LeaveManagementController extends Controller
 
         $validated = $request->validate([
             'employee_id' => ['required', 'exists:employees,id'],
-            'leave_type_id' => ['nullable', 'exists:leave_types,id'],
-            'leave_type' => ['nullable', 'string'],
-            'start_date' => ['required', 'date'],
-            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
-            'half_day' => ['nullable', 'in:am,pm'],
-            'reason' => ['required', 'string', 'max:500'],
-            'attachment' => ['nullable', 'file', 'max:5120'], // 5MB
+            ...$this->leaveService->rules(),
         ]);
 
         $employee = Employee::where('entity_id', $entityId)->findOrFail($validated['employee_id']);

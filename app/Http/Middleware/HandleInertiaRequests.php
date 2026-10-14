@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\Entity;
 use App\Models\User;
+use App\Services\People\EmployeeResolver;
 use App\Support\EntityContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +47,8 @@ class HandleInertiaRequests extends Middleware
                         'position' => $user->position,
                         'roles' => $user->getRoleNames()->values()->all(),
                         'permissions' => $user->getAllPermissions()->pluck('name')->values()->all(),
+                        // Employee record linked to this user in the current branch; personal pages need it.
+                        'employee_id' => app(EmployeeResolver::class)->forUser($user, $current?->id)?->id,
                     ]
                 ) : null,
             ],

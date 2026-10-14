@@ -1,71 +1,32 @@
-import { Head, router } from '@inertiajs/react';
-import {
-    Banknote,
-    Calendar,
-    CalendarCheck,
-    CheckCircle2,
-    Clock,
-    Coffee,
-    CreditCard,
-    Download,
-    Eye,
-    Fingerprint,
-    Mail,
-    Phone,
-    Plus,
-    Umbrella,
-    User,
-    UserCheck,
-} from 'lucide-react';
+import { Head, Link, usePage } from '@inertiajs/react';
+import { ArrowRight, Banknote, CalendarDays, Clock, Fingerprint, IdCard, Inbox, Mail, Palmtree, Phone, Plus, User } from 'lucide-react';
 import * as React from 'react';
-import AppLayout from '@/layouts/app-layout';
-import Heading from '@/components/heading';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
-import { toast } from '@/lib/toast';
-import type { BreadcrumbItem } from '@/types';
+import { hasPermission } from '@/lib/permissions';
+import { cn } from '@/lib/utils';
+import type { BreadcrumbItem, SharedData } from '@/types';
+import { ATTENDANCE_STATUS, ATTENDANCE_URL, fmtDate, fmtHours, fmtMinutes, fmtTime, TONE, weekday } from '../attendance/lib';
+import { fmtRange } from '../requests/components/request-card';
+import { fmtDays, KINDS, REQUESTS_URL, STATUS, timeAgo, type Balance, type RequestItem } from '../requests/lib';
 
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management/roster' },
-    { title: 'Employee Portal', href: '/employee-management/portal' },
-];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'Dashboard', href: '/employee-management/portal' }];
 
-type EmployeeProfile = {
+type Profile = {
     id: number;
+    employee_code: string;
+    firstname: string;
+    lastname: string;
     name: string;
-    code: string;
-    position: string;
-    department: string;
-    hire_date: string | null;
+    avatar_url: string | null;
+    position: string | null;
+    department: string | null;
     employment_status: string;
+    employment_type: string | null;
     biometric_id: string | null;
     email: string | null;
     phone: string | null;
@@ -73,583 +34,496 @@ type EmployeeProfile = {
     philhealth_number: string | null;
     pagibig_number: string | null;
     tin: string | null;
-    vacation_leave_credits: number;
-    sick_leave_credits: number;
+    bank_name: string | null;
+    bank_account_hint: string | null;
+    hire_date: string | null;
+    regularization_date: string | null;
 };
 
-type ShiftItem = {
-    id: number;
-    roster_date: string;
+type Day = {
+    date: string;
     shift_name: string;
-    shift_start: string | null;
-    shift_end: string | null;
+    start: string | null;
+    end: string | null;
     is_rest_day: boolean;
+    source: 'roster' | 'template' | 'default';
+    holiday: { name: string; type: string } | null;
+    leave: { title: string; half_day: string | null } | null;
+    official_business: { destination: string | null; from: string | null; to: string | null } | null;
 };
 
-type LeaveItem = {
-    id: number;
-    leave_type: string;
-    start_date: string;
-    end_date: string;
-    days_count: number;
-    status: 'pending' | 'approved' | 'declined';
-    reason: string | null;
-    created_at: string;
-};
+type TodayRecord = {
+    time_in: string | null;
+    break_out: string | null;
+    break_in: string | null;
+    time_out: string | null;
+    attendance_status: string | null;
+    tardiness_minutes: number | string;
+    regular_hours: number | string;
+} | null;
 
-type PayslipItem = {
+type Payslip = {
     id: number;
-    gross_pay: string | number;
-    total_deductions: string | number;
-    net_pay: string | number;
-    created_at: string;
-    payroll_run?: {
-        id: number;
-        payout_date: string;
-        period?: {
-            period_name: string;
-            start_date: string;
-            end_date: string;
-        };
-    };
+    period: { code: string | null; start: string | null; end: string | null; pay_date: string | null };
+    earnings: { basic_pay: number; ot_pay: number; holiday_premiums: number; night_diff_pay: number; allowances: number; absences: number; tardiness: number; unpaid_leave: number };
+    deductions: { sss: number; philhealth: number; pagibig: number; withholding_tax: number; other: number };
+    gross_pay: number;
+    total_deductions: number;
+    net_pay: number;
 };
 
 type Props = {
-    employee: EmployeeProfile | null;
-    upcomingShifts: ShiftItem[];
-    recentLeaveRequests: LeaveItem[];
-    recentPayslips: PayslipItem[];
+    employee: Profile | null;
+    week?: Day[];
+    todayRecord?: TodayRecord;
+    requests?: { pending: number; recent: RequestItem[] };
+    balances?: Balance[];
+    payslips?: Payslip[];
+    can?: { punch: boolean; fileRequests: boolean };
+    today?: string;
 };
 
-export default function EmployeePortalPage({
-    employee,
-    upcomingShifts,
-    recentLeaveRequests,
-    recentPayslips,
-}: Props) {
-    const [isLeaveModalOpen, setIsLeaveModalOpen] = React.useState(false);
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
-    const [selectedPayslip, setSelectedPayslip] = React.useState<PayslipItem | null>(null);
+const longDate = (d: string) => fmtDate(d, { month: 'short', day: 'numeric', year: 'numeric' });
+const titleCase = (s: string) => s.replace(/(^|\s)\w/g, (c) => c.toUpperCase());
 
-    const [leaveForm, setLeaveForm] = React.useState({
-        leave_type: 'vacation',
-        start_date: new Date().toISOString().split('T')[0],
-        end_date: new Date().toISOString().split('T')[0],
-        days_count: '1',
-        reason: '',
-    });
-
-    const handleFileLeave = (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-
-        router.post('/employee-management/portal/leave-request', leaveForm, {
-            onSuccess: () => {
-                toast.success('Your leave request has been submitted for approval.');
-                setIsLeaveModalOpen(false);
-                setLeaveForm({
-                    leave_type: 'vacation',
-                    start_date: new Date().toISOString().split('T')[0],
-                    end_date: new Date().toISOString().split('T')[0],
-                    days_count: '1',
-                    reason: '',
-                });
-            },
-            onError: (err) => {
-                const message = Object.values(err)[0] as string;
-                toast.error(message || 'Failed to submit leave.');
-            },
-            onFinish: () => setIsSubmitting(false),
-        });
-    };
+export default function EmployeePortalPage({ employee, week = [], todayRecord = null, requests, balances = [], payslips = [], can, today = '' }: Props) {
+    const { auth } = usePage<SharedData>().props;
+    const [slip, setSlip] = React.useState<Payslip | null>(null);
 
     if (!employee) {
         return (
             <AppLayout breadcrumbs={breadcrumbs}>
-                <Head title="Employee Portal" />
+                <Head title="Dashboard" />
                 <div className="flex flex-1 items-center justify-center p-8">
-                    <Card className="max-w-md text-center p-6">
-                        <User className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-                        <h2 className="text-lg font-semibold">No Employee Profile Linked</h2>
-                        <p className="text-sm text-muted-foreground mt-1">
-                            Your user account is not currently linked to an active employee record in this entity.
+                    <div className="max-w-md rounded-xl border bg-card p-6 text-center shadow-sm">
+                        <User className="mx-auto mb-3 size-10 text-muted-foreground" />
+                        <h2 className="text-lg font-semibold">This page is for staff with an employee record</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            It shows your own schedule, requests, leave credits and payslips. No employee record in this branch belongs to your account
+                            {auth.user.email ? ` (records are matched to your account or to ${auth.user.email})` : ''}.
                         </p>
-                    </Card>
+                        <div className="mt-4 flex flex-wrap justify-center gap-2">
+                            {hasPermission(auth, 'dashboard.view') && (
+                                <Button asChild>
+                                    <Link href="/accounting/dashboard">Go to dashboard</Link>
+                                </Button>
+                            )}
+                            {hasPermission(auth, 'libraries.employees.manage') && (
+                                <Button variant="outline" asChild>
+                                    <Link href="/libraries/employees">Employee Directory</Link>
+                                </Button>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </AppLayout>
         );
     }
 
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Employee Self-Service Workspace" />
+            <Head title="Dashboard" />
 
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-                {/* Profile Header Banner */}
-                <Card className="border-border/80 bg-linear-to-r from-primary/10 via-background to-card shadow-xs">
-                    <CardContent className="p-6">
-                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                            <div className="flex items-center gap-4">
-                                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-2xl font-bold text-primary-foreground shadow-sm">
-                                    {employee.name.charAt(0)}
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-2">
-                                        <h1 className="text-xl font-bold tracking-tight">{employee.name}</h1>
-                                        <Badge variant="outline" className="text-xs border-primary/30 text-primary">
-                                            {employee.employment_status.toUpperCase()}
-                                        </Badge>
-                                    </div>
-                                    <p className="text-sm text-muted-foreground">
-                                        {employee.position} &bull; {employee.department}
-                                    </p>
-                                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                                        <span className="flex items-center gap-1 font-mono">
-                                            <Fingerprint className="h-3.5 w-3.5 text-primary" />
-                                            Bio ID: {employee.biometric_id || 'N/A'}
-                                        </span>
-                                        {employee.email && (
-                                            <span className="flex items-center gap-1">
-                                                <Mail className="h-3.5 w-3.5" />
-                                                {employee.email}
-                                            </span>
-                                        )}
-                                        {employee.phone && (
-                                            <span className="flex items-center gap-1">
-                                                <Phone className="h-3.5 w-3.5" />
-                                                {employee.phone}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center gap-3">
-                                <Button
-                                    onClick={() => setIsLeaveModalOpen(true)}
-                                    className="gap-2 shadow-sm"
-                                >
-                                    <Plus className="h-4 w-4" />
-                                    File Leave Request
-                                </Button>
-                            </div>
-                        </div>
-
-                        {/* Statutory Reference Badges */}
-                        <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border/80 pt-3 sm:grid-cols-4 text-xs font-mono">
-                            <div>
-                                <span className="text-muted-foreground">SSS No: </span>
-                                <span className="font-semibold">{employee.sss_number || '—'}</span>
-                            </div>
-                            <div>
-                                <span className="text-muted-foreground">PhilHealth: </span>
-                                <span className="font-semibold">{employee.philhealth_number || '—'}</span>
-                            </div>
-                            <div>
-                                <span className="text-muted-foreground">Pag-IBIG: </span>
-                                <span className="font-semibold">{employee.pagibig_number || '—'}</span>
-                            </div>
-                            <div>
-                                <span className="text-muted-foreground">TIN: </span>
-                                <span className="font-semibold">{employee.tin || '—'}</span>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Leave Balances KPI */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Vacation Leave Balance
-                            </CardTitle>
-                            <div className="rounded-full bg-primary/10 p-2 text-primary">
-                                <Umbrella className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-primary">
-                                {Number(employee.vacation_leave_credits).toFixed(1)} days
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">Available vacation credits</p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Sick Leave Balance
-                            </CardTitle>
-                            <div className="rounded-full bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
-                                <CheckCircle2 className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                                {Number(employee.sick_leave_credits).toFixed(1)} days
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">Available medical / sick credits</p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Upcoming Shifts
-                            </CardTitle>
-                            <div className="rounded-full bg-blue-500/10 p-2 text-blue-600 dark:text-blue-400">
-                                <CalendarCheck className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-blue-600 dark:text-blue-400">
-                                {upcomingShifts.filter((s) => !s.is_rest_day).length} days
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">Scheduled in next 7 days</p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Rest Days Scheduled
-                            </CardTitle>
-                            <div className="rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
-                                <Coffee className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
-                                {upcomingShifts.filter((s) => s.is_rest_day).length} days
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">Scheduled rest days ahead</p>
-                        </CardContent>
-                    </Card>
-                </div>
-
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                    {/* Section 1: Upcoming Schedule */}
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-3">
-                            <div>
-                                <CardTitle className="text-base font-semibold">My Upcoming Schedule</CardTitle>
-                                <CardDescription>Your assigned shift roster for the next 7 days</CardDescription>
-                            </div>
-                            <Calendar className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            <div className="divide-y divide-border/60">
-                                {upcomingShifts.length === 0 ? (
-                                    <div className="p-6 text-center text-xs text-muted-foreground">
-                                        No upcoming shifts published for your profile.
-                                    </div>
-                                ) : (
-                                    upcomingShifts.map((shift) => (
-                                        <div
-                                            key={shift.id}
-                                            className="flex items-center justify-between p-3.5 hover:bg-muted/20 transition-colors"
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <div className="font-mono text-xs font-semibold">
-                                                    {shift.roster_date}
-                                                </div>
-                                                <div className="text-xs font-medium">{shift.shift_name}</div>
-                                            </div>
-
-                                            {shift.is_rest_day ? (
-                                                <Badge
-                                                    variant="outline"
-                                                    className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs gap-1"
-                                                >
-                                                    <Coffee className="h-3 w-3" />
-                                                    Rest Day
-                                                </Badge>
-                                            ) : (
-                                                <span className="flex items-center gap-1 font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                                                    <Clock className="h-3 w-3" />
-                                                    {shift.shift_start?.substring(0, 5)} - {shift.shift_end?.substring(0, 5)}
-                                                </span>
-                                            )}
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Section 2: Recent Leave Applications */}
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-3">
-                            <div>
-                                <CardTitle className="text-base font-semibold">My Leave Applications</CardTitle>
-                                <CardDescription>Recent vacation, sick, and emergency requests</CardDescription>
-                            </div>
-                            <Umbrella className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            <div className="divide-y divide-border/60">
-                                {recentLeaveRequests.length === 0 ? (
-                                    <div className="p-6 text-center text-xs text-muted-foreground">
-                                        You have not filed any leave requests recently.
-                                    </div>
-                                ) : (
-                                    recentLeaveRequests.map((req) => (
-                                        <div
-                                            key={req.id}
-                                            className="flex items-center justify-between p-3.5 hover:bg-muted/20 transition-colors"
-                                        >
-                                            <div>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="font-semibold text-xs uppercase">
-                                                        {req.leave_type} Leave
-                                                    </span>
-                                                    <span className="text-xs text-muted-foreground">
-                                                        ({req.days_count} day{req.days_count > 1 ? 's' : ''})
-                                                    </span>
-                                                </div>
-                                                <div className="font-mono text-[11px] text-muted-foreground">
-                                                    {req.start_date} &rarr; {req.end_date}
-                                                </div>
-                                            </div>
-
-                                            <Badge
-                                                variant="outline"
-                                                className={
-                                                    req.status === 'approved'
-                                                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                                                        : req.status === 'declined'
-                                                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-700'
-                                                        : 'border-amber-500/30 bg-amber-500/10 text-amber-700'
-                                                }
-                                            >
-                                                {req.status.toUpperCase()}
-                                            </Badge>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-
-                {/* Section 3: Recent Payslips */}
-                <Card className="border-border/80 shadow-xs">
-                    <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <div className="flex flex-1 flex-col gap-5 p-4 sm:p-6">
+                {/* Greeting + primary actions */}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-3">
+                        <PersonAvatar src={employee.avatar_url} seed={employee.employee_code} name={employee.name} className="size-12" />
                         <div>
-                            <CardTitle className="text-base font-semibold">My Recent Payslips</CardTitle>
-                            <CardDescription>Generated payroll slips and take-home pay history</CardDescription>
+                            <h1 className="text-xl font-semibold tracking-tight">
+                                {greeting}, {employee.firstname}
+                            </h1>
+                            <p className="text-sm text-muted-foreground">
+                                {today && fmtDate(today, { weekday: 'long', month: 'long', day: 'numeric' })}
+                                {employee.position && ` · ${employee.position}`}
+                            </p>
                         </div>
-                        <Banknote className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent className="p-0">
-                        <div className="overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow className="bg-muted/40 hover:bg-muted/40">
-                                        <TableHead>Payroll Period</TableHead>
-                                        <TableHead>Payout Date</TableHead>
-                                        <TableHead className="text-right">Gross Earnings</TableHead>
-                                        <TableHead className="text-right">Deductions</TableHead>
-                                        <TableHead className="text-right">Net Pay</TableHead>
-                                        <TableHead className="text-right">Slip</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {recentPayslips.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={6} className="h-28 text-center text-muted-foreground text-xs">
-                                                No payslips generated yet for this account.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        recentPayslips.map((slip) => (
-                                            <TableRow key={slip.id} className="hover:bg-muted/30">
-                                                <TableCell className="font-medium text-xs">
-                                                    {slip.payroll_run?.period?.period_name || 'Standard Cutoff'}
-                                                </TableCell>
-                                                <TableCell className="font-mono text-xs">
-                                                    {slip.payroll_run?.payout_date || '—'}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs">
-                                                    {formatPhpCurrency(slip.gross_pay)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs text-rose-600">
-                                                    -{formatPhpCurrency(slip.total_deductions)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                                                    {formatPhpCurrency(slip.net_pay)}
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        className="h-7 text-xs gap-1"
-                                                        onClick={() => setSelectedPayslip(slip)}
-                                                    >
-                                                        <Eye className="h-3 w-3" />
-                                                        View
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    </CardContent>
-                </Card>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {can?.punch && (
+                            <Button variant="outline" asChild>
+                                <Link href={ATTENDANCE_URL}>
+                                    <Clock className="size-4" /> My day
+                                </Link>
+                            </Button>
+                        )}
+                        {can?.fileRequests && (
+                            <Button asChild>
+                                <Link href={`${REQUESTS_URL}?file=any`}>
+                                    <Plus className="size-4" /> File a request
+                                </Link>
+                            </Button>
+                        )}
+                    </div>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                    <TodayCard day={week[0]} record={todayRecord} canPunch={!!can?.punch} />
+                    <RequestsCard pending={requests?.pending ?? 0} recent={requests?.recent ?? []} />
+                    <CreditsCard balances={balances} />
+                </div>
+
+                <WeekStrip week={week} today={today} />
+
+                <PayslipsCard payslips={payslips} onOpen={setSlip} />
+
+                <RecordCard employee={employee} />
             </div>
 
-            {/* Modal: File Leave Request */}
-            <Dialog open={isLeaveModalOpen} onOpenChange={setIsLeaveModalOpen}>
-                <DialogContent className="sm:max-w-[460px]">
-                    <form onSubmit={handleFileLeave}>
-                        <DialogHeader>
-                            <DialogTitle className="flex items-center gap-2">
-                                <Umbrella className="h-5 w-5 text-primary" />
-                                Apply for Leave
-                            </DialogTitle>
-                            <DialogDescription>
-                                Available Balance: VL ({employee.vacation_leave_credits} days) &bull; SL ({employee.sick_leave_credits} days)
-                            </DialogDescription>
-                        </DialogHeader>
-
-                        <div className="grid gap-4 py-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="portal_leave_type">Leave Type *</Label>
-                                <Select
-                                    value={leaveForm.leave_type}
-                                    onValueChange={(val) => setLeaveForm({ ...leaveForm, leave_type: val })}
-                                >
-                                    <SelectTrigger id="portal_leave_type">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="vacation">Vacation Leave (VL)</SelectItem>
-                                        <SelectItem value="sick">Sick Leave (SL)</SelectItem>
-                                        <SelectItem value="emergency">Emergency Leave</SelectItem>
-                                        <SelectItem value="bereavement">Bereavement Leave</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="portal_start_date">Start Date *</Label>
-                                    <Input
-                                        id="portal_start_date"
-                                        type="date"
-                                        value={leaveForm.start_date}
-                                        onChange={(e) => setLeaveForm({ ...leaveForm, start_date: e.target.value })}
-                                        required
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="portal_end_date">End Date *</Label>
-                                    <Input
-                                        id="portal_end_date"
-                                        type="date"
-                                        value={leaveForm.end_date}
-                                        onChange={(e) => setLeaveForm({ ...leaveForm, end_date: e.target.value })}
-                                        required
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="portal_days">Days Requested *</Label>
-                                <Input
-                                    id="portal_days"
-                                    type="number"
-                                    step="0.5"
-                                    min="0.5"
-                                    value={leaveForm.days_count}
-                                    onChange={(e) => setLeaveForm({ ...leaveForm, days_count: e.target.value })}
-                                    required
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="portal_reason">Reason</Label>
-                                <Textarea
-                                    id="portal_reason"
-                                    placeholder="Explain reason for leave..."
-                                    value={leaveForm.reason}
-                                    onChange={(e) => setLeaveForm({ ...leaveForm, reason: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <DialogFooter>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsLeaveModalOpen(false)}
-                                disabled={isSubmitting}
-                            >
-                                Cancel
-                            </Button>
-                            <Button type="submit" disabled={isSubmitting}>
-                                {isSubmitting ? 'Submitting...' : 'Submit Request'}
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
-
-            {/* Modal: View Payslip Slip */}
-            <Dialog open={!!selectedPayslip} onOpenChange={() => setSelectedPayslip(null)}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <Banknote className="h-5 w-5 text-emerald-600" />
-                            Official Payslip Summary
-                        </DialogTitle>
-                        <DialogDescription>
-                            Cutoff: {selectedPayslip?.payroll_run?.period?.period_name} &bull; Payout: {selectedPayslip?.payroll_run?.payout_date}
-                        </DialogDescription>
-                    </DialogHeader>
-
-                    {selectedPayslip && (
-                        <div className="space-y-4 py-2 text-sm">
-                            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Employee:</span>
-                                    <span className="font-semibold">{employee.name}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Position:</span>
-                                    <span>{employee.position}</span>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <div className="flex justify-between border-b pb-1">
-                                    <span className="text-muted-foreground">Gross Earnings:</span>
-                                    <span className="font-mono font-semibold">{formatPhpCurrency(selectedPayslip.gross_pay)}</span>
-                                </div>
-                                <div className="flex justify-between border-b pb-1 text-rose-600">
-                                    <span>Statutory & Tax Deductions:</span>
-                                    <span className="font-mono font-semibold">-{formatPhpCurrency(selectedPayslip.total_deductions)}</span>
-                                </div>
-                                <div className="flex justify-between border-b-2 border-primary/40 pt-1 text-base font-bold text-emerald-600 dark:text-emerald-400">
-                                    <span>Net Take-Home Pay:</span>
-                                    <span className="font-mono">{formatPhpCurrency(selectedPayslip.net_pay)}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setSelectedPayslip(null)}>
-                            Close
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <PayslipDialog slip={slip} employee={employee} onClose={() => setSlip(null)} />
         </AppLayout>
     );
 }
 
+/* ---------------------------------------------------------------------------------------------- */
+
+function Card({
+    title,
+    icon: Icon,
+    href,
+    linkLabel,
+    children,
+}: {
+    title: string;
+    icon: typeof Clock;
+    href?: string;
+    linkLabel?: string;
+    children: React.ReactNode;
+}) {
+    return (
+        <section className="flex flex-col rounded-xl border bg-card shadow-sm">
+            <header className="flex items-center justify-between gap-2 border-b px-4 py-3">
+                <h2 className="flex items-center gap-2 text-sm font-semibold">
+                    <Icon className="size-4 text-muted-foreground" /> {title}
+                </h2>
+                {href && (
+                    <Link href={href} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                        {linkLabel} <ArrowRight className="size-3" />
+                    </Link>
+                )}
+            </header>
+            <div className="flex-1 p-4">{children}</div>
+        </section>
+    );
+}
+
+const isOff = (d: Day) => !!d.leave || d.is_rest_day || (!!d.holiday && !d.start);
+
+function shiftText(d: Day) {
+    if (d.leave) return d.leave.half_day ? `${d.leave.title} · half day` : d.leave.title;
+    if (d.holiday && !d.start) return d.holiday.name;
+    if (d.is_rest_day) return 'Rest day';
+    return `${fmtTime(d.start)} – ${fmtTime(d.end)}`;
+}
+
+function TodayCard({ day, record, canPunch }: { day?: Day; record: TodayRecord; canPunch: boolean }) {
+    if (!day) return null;
+    const off = isOff(day);
+    const status = record?.attendance_status ? ATTENDANCE_STATUS[record.attendance_status] : null;
+    const late = Number(record?.tardiness_minutes ?? 0);
+
+    let headline: string;
+    let detail: string | null = null;
+    if (day.leave) {
+        headline = `On ${day.leave.title.toLowerCase()}`;
+        detail = 'Enjoy your time off.';
+    } else if (day.is_rest_day && !record?.time_in) {
+        headline = 'Rest day';
+        detail = 'Work today is paid at rest-day premium once approved.';
+    } else if (record?.time_out) {
+        headline = `Checked out at ${fmtTime(record.time_out)}`;
+        detail = `${fmtHours(record.regular_hours)} regular${late > 0 ? ` · late ${fmtMinutes(late)}` : ''}`;
+    } else if (record?.break_out && !record.break_in) {
+        headline = `On break since ${fmtTime(record.break_out)}`;
+    } else if (record?.time_in) {
+        headline = `Checked in at ${fmtTime(record.time_in)}`;
+        detail = late > 0 ? `Late by ${fmtMinutes(late)}` : 'On time';
+    } else {
+        headline = 'Not checked in yet';
+        detail = day.start ? `Your shift starts at ${fmtTime(day.start)}.` : null;
+    }
+
+    return (
+        <Card title="Today" icon={Clock} href={ATTENDANCE_URL} linkLabel="My attendance">
+            <div className="space-y-3">
+                <div>
+                    <p className="text-lg font-semibold">{headline}</p>
+                    {detail && <p className="text-sm text-muted-foreground">{detail}</p>}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded-md border bg-muted/40 px-2 py-1">
+                        {day.shift_name}
+                        {!off && day.start && ` · ${fmtTime(day.start)}–${fmtTime(day.end)}`}
+                    </span>
+                    {day.holiday && <span className={cn('rounded-md border px-2 py-1', TONE.sky)}>{day.holiday.name}</span>}
+                    {day.official_business && (
+                        <span className={cn('rounded-md border px-2 py-1', TONE.emerald)}>
+                            Official business{day.official_business.destination && ` · ${day.official_business.destination}`}
+                        </span>
+                    )}
+                    {status && (
+                        <Badge variant="outline" className={TONE[status.tone]}>
+                            {status.label}
+                        </Badge>
+                    )}
+                </div>
+                {canPunch && !off && !record?.time_out && (
+                    <Button asChild size="sm">
+                        <Link href={ATTENDANCE_URL}>{record?.time_in ? 'Open my day' : 'Check in'}</Link>
+                    </Button>
+                )}
+            </div>
+        </Card>
+    );
+}
+
+function RequestsCard({ pending, recent }: { pending: number; recent: RequestItem[] }) {
+    return (
+        <Card title="My requests" icon={Inbox} href={REQUESTS_URL} linkLabel="All requests">
+            <div className="space-y-3">
+                <p className="text-sm">
+                    {pending > 0 ? (
+                        <>
+                            <span className="text-lg font-semibold text-amber-600 dark:text-amber-400">{pending}</span> waiting for approval
+                        </>
+                    ) : (
+                        <span className="text-muted-foreground">Nothing waiting for approval.</span>
+                    )}
+                </p>
+                {recent.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No requests filed yet.</p>
+                ) : (
+                    <ul className="space-y-2">
+                        {recent.map((r) => {
+                            const meta = KINDS[r.kind];
+                            const st = STATUS[r.status];
+                            const when = r.status === 'pending' ? `filed ${timeAgo(r.filed_at)}` : r.decided_at ? `${st.label.toLowerCase()} ${timeAgo(r.decided_at)}` : null;
+                            return (
+                                <li key={r.key} className="flex items-center gap-2.5">
+                                    <span className={cn('inline-flex size-7 shrink-0 items-center justify-center rounded-md border', TONE[meta.tone])}>
+                                        <meta.icon className="size-3.5" />
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium">{r.title}</p>
+                                        <p className="truncate text-[11px] text-muted-foreground">
+                                            {fmtRange(r.date_from, r.date_to)}
+                                            {when && ` · ${when}`}
+                                        </p>
+                                    </div>
+                                    <Badge variant="outline" className={cn('shrink-0', TONE[st.tone])}>
+                                        {st.label}
+                                    </Badge>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+            </div>
+        </Card>
+    );
+}
+
+function CreditsCard({ balances }: { balances: Balance[] }) {
+    const tracked = balances.filter((b) => b.balance_tracked);
+    return (
+        <Card title="Leave credits" icon={Palmtree} href={REQUESTS_URL} linkLabel="Details">
+            {tracked.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                    {balances.length ? 'Your leave types are per occurrence — there are no yearly credits to track.' : 'No leave types are enabled for you.'}
+                </p>
+            ) : (
+                <ul className="space-y-3">
+                    {tracked.map((b) => {
+                        const pct = b.entitled > 0 ? Math.max(0, Math.min(100, ((b.available ?? 0) / b.entitled) * 100)) : 0;
+                        return (
+                            <li key={b.leave_type_id} className="space-y-1">
+                                <div className="flex items-baseline justify-between gap-2 text-sm">
+                                    <span>{b.name}</span>
+                                    <span className="tabular-nums">
+                                        <span className="font-semibold">{Number(b.available ?? 0)}</span>
+                                        <span className="text-muted-foreground"> of {b.entitled} left</span>
+                                    </span>
+                                </div>
+                                <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                                    <div className="h-full rounded-full bg-violet-500" style={{ width: `${pct}%` }} />
+                                </div>
+                                {b.reserved > 0 && <p className="text-[11px] text-muted-foreground">{fmtDays(b.reserved)} on hold for pending requests</p>}
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+        </Card>
+    );
+}
+
+function WeekStrip({ week, today }: { week: Day[]; today: string }) {
+    return (
+        <Card title="Next 7 days" icon={CalendarDays} href={ATTENDANCE_URL} linkLabel="Timesheet">
+            <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                {week.map((d) => {
+                    const off = isOff(d);
+                    return (
+                        <li
+                            key={d.date}
+                            className={cn(
+                                'rounded-lg border p-2.5',
+                                d.leave ? TONE.violet : off ? 'bg-muted/40' : 'bg-card',
+                                d.date === today && 'ring-2 ring-primary/40',
+                            )}
+                        >
+                            <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                                {d.date === today ? 'Today' : weekday(d.date)} <span className="font-normal">{fmtDate(d.date, { day: 'numeric' })}</span>
+                            </p>
+                            <p className={cn('mt-1 text-sm font-medium', off && !d.leave && 'text-muted-foreground')}>{shiftText(d)}</p>
+                            {d.holiday && d.start && <p className="truncate text-[11px] text-sky-700 dark:text-sky-300">{d.holiday.name}</p>}
+                            {d.official_business && (
+                                <p className="truncate text-[11px] text-emerald-700 dark:text-emerald-300">
+                                    OB{d.official_business.destination && ` · ${d.official_business.destination}`}
+                                </p>
+                            )}
+                        </li>
+                    );
+                })}
+            </ol>
+        </Card>
+    );
+}
+
+const periodLabel = (p: Payslip['period']) => (p.start && p.end ? fmtRange(p.start, p.end) : (p.code ?? 'Pay period'));
+
+function PayslipsCard({ payslips, onOpen }: { payslips: Payslip[]; onOpen: (p: Payslip) => void }) {
+    return (
+        <Card title="Payslips" icon={Banknote}>
+            {payslips.length === 0 ? (
+                <p className="py-4 text-center text-sm text-muted-foreground">No payslips yet. They appear here once payroll is posted.</p>
+            ) : (
+                <ul className="-my-2 divide-y">
+                    {payslips.map((p, i) => (
+                        <li key={p.id}>
+                            <button type="button" onClick={() => onOpen(p)} className="flex w-full items-center gap-3 rounded-md px-1 py-2.5 text-left hover:bg-muted/40">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">
+                                        {periodLabel(p.period)}
+                                        {i === 0 && <span className="ml-2 text-[11px] font-normal text-muted-foreground">latest</span>}
+                                    </p>
+                                    <p className="text-[11px] text-muted-foreground">{p.period.pay_date ? `Paid ${longDate(p.period.pay_date)}` : p.period.code}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="font-mono text-sm font-semibold">{formatPhpCurrency(p.net_pay)}</p>
+                                    <p className="text-[11px] text-muted-foreground">net of {formatPhpCurrency(p.gross_pay)} gross</p>
+                                </div>
+                                <ArrowRight className="size-4 text-muted-foreground/50" />
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </Card>
+    );
+}
+
+function Line({ label, value, negative, strong }: { label: string; value: number; negative?: boolean; strong?: boolean }) {
+    if (!strong && !value) return null;
+    return (
+        <div className={cn('flex justify-between gap-4 py-1 text-sm', strong && 'mt-1 border-t pt-2 font-semibold')}>
+            <span className={cn(!strong && 'text-muted-foreground')}>{label}</span>
+            <span className={cn('font-mono', negative && 'text-rose-600 dark:text-rose-400')}>
+                {negative && value ? '−' : ''}
+                {formatPhpCurrency(value)}
+            </span>
+        </div>
+    );
+}
+
+function PayslipDialog({ slip, employee, onClose }: { slip: Payslip | null; employee: Profile; onClose: () => void }) {
+    return (
+        <Dialog open={slip !== null} onOpenChange={(o) => !o && onClose()}>
+            <DialogContent className="sm:max-w-md">
+                {slip && (
+                    <>
+                        <DialogHeader>
+                            <DialogTitle>Payslip · {periodLabel(slip.period)}</DialogTitle>
+                            <DialogDescription>
+                                {employee.name} · {employee.employee_code}
+                                {slip.period.pay_date && ` · paid ${longDate(slip.period.pay_date)}`}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div>
+                            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Earnings</p>
+                            <Line label="Basic pay" value={slip.earnings.basic_pay} />
+                            <Line label="Overtime" value={slip.earnings.ot_pay} />
+                            <Line label="Holiday / rest-day premiums" value={slip.earnings.holiday_premiums} />
+                            <Line label="Night differential" value={slip.earnings.night_diff_pay} />
+                            <Line label="Allowances" value={slip.earnings.allowances} />
+                            <Line label="Absences" value={slip.earnings.absences} negative />
+                            <Line label="Unpaid leave" value={slip.earnings.unpaid_leave} negative />
+                            <Line label="Late & undertime" value={slip.earnings.tardiness} negative />
+                            <Line label="Gross pay" value={slip.gross_pay} strong />
+                        </div>
+                        <div>
+                            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Deductions</p>
+                            <Line label="SSS" value={slip.deductions.sss} negative />
+                            <Line label="PhilHealth" value={slip.deductions.philhealth} negative />
+                            <Line label="Pag-IBIG" value={slip.deductions.pagibig} negative />
+                            <Line label="Withholding tax" value={slip.deductions.withholding_tax} negative />
+                            <Line label="Other deductions" value={slip.deductions.other} negative />
+                            <Line label="Total deductions" value={slip.total_deductions} strong />
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border bg-muted/40 px-3 py-2.5">
+                            <span className="text-sm font-semibold">Net take-home pay</span>
+                            <span className="font-mono text-lg font-semibold text-emerald-600 dark:text-emerald-400">{formatPhpCurrency(slip.net_pay)}</span>
+                        </div>
+                    </>
+                )}
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function RecordCard({ employee }: { employee: Profile }) {
+    const withIcon = (Icon: typeof Mail, value: string | null, mono = false) =>
+        value && (
+            <span className={cn('inline-flex items-center gap-1', mono && 'font-mono')}>
+                <Icon className="size-3.5 text-muted-foreground" /> {value}
+            </span>
+        );
+
+    const items: [string, React.ReactNode][] = [
+        ['Employee no.', employee.employee_code],
+        ['Department', employee.department],
+        ['Employment', titleCase([employee.employment_type, employee.employment_status].filter(Boolean).join(' · '))],
+        ['Hired', employee.hire_date && longDate(employee.hire_date)],
+        ['Regularized', employee.regularization_date && longDate(employee.regularization_date)],
+        ['Biometric ID', withIcon(Fingerprint, employee.biometric_id, true)],
+        ['Email', withIcon(Mail, employee.email)],
+        ['Phone', withIcon(Phone, employee.phone)],
+        ['SSS', employee.sss_number],
+        ['PhilHealth', employee.philhealth_number],
+        ['Pag-IBIG', employee.pagibig_number],
+        ['TIN', employee.tin],
+        ['Payroll account', employee.bank_name && [employee.bank_name, employee.bank_account_hint].filter(Boolean).join(' ')],
+    ];
+    const missing = (['sss_number', 'philhealth_number', 'pagibig_number', 'tin'] as const).filter((k) => !employee[k]).length;
+
+    return (
+        <Card title="My record" icon={IdCard}>
+            <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+                {items.map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                        <dt className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
+                        <dd className={cn('truncate text-sm', !value && 'text-muted-foreground')}>{value || '—'}</dd>
+                    </div>
+                ))}
+            </dl>
+            <p className={cn('mt-4 rounded-md border px-3 py-2 text-xs', missing ? TONE.amber : 'bg-muted/40 text-muted-foreground')}>
+                {missing
+                    ? `${missing} government ID${missing === 1 ? ' is' : 's are'} missing — they are needed for your SSS, PhilHealth, Pag-IBIG and tax records. Please send them to HR.`
+                    : 'Something out of date? Ask HR to update your record.'}
+            </p>
+        </Card>
+    );
+}

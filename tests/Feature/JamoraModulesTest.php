@@ -343,7 +343,7 @@ test('all employee management module pages render successfully', function () {
     $pages = [
         '/employee-management/roster',
         '/employee-management/attendance',
-        '/employee-management/leave',
+        '/employee-management/requests',
         '/employee-management/portal',
         '/employee-management/reports',
         '/employee-management/access',

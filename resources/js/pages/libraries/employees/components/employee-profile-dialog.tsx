@@ -23,7 +23,9 @@ import {
     tenure,
     typeBadgeClass,
     labelOf,
+    leaveTypesLabel,
     type Employee,
+    type LeaveTypeOption,
     type Policy,
 } from '../lib';
 import { EmployeeAvatar } from './employee-avatar';
@@ -51,10 +53,11 @@ type Props = {
     onOpenChange: (open: boolean) => void;
     employee: Employee | null;
     policy: Policy;
+    leaveTypes: LeaveTypeOption[];
     onEdit: (employee: Employee) => void;
 };
 
-export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy, onEdit }: Props) {
+export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy, leaveTypes, onEdit }: Props) {
     if (!e) return null;
 
     const missing = missingStatutory(e);
@@ -180,6 +183,10 @@ export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy,
                         <Item label="Account no." mono>
                             {e.bank_account_no}
                         </Item>
+                    </Section>
+
+                    <Section title="Leave">
+                        <Item label="Can file">{leaveTypesLabel(e.leave_type_ids, leaveTypes)}</Item>
                         <Item label="Opening VL / SL">
                             {Number(e.vacation_leave_credits ?? 0)} / {Number(e.sick_leave_credits ?? 0)} days
                         </Item>

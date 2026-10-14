@@ -434,9 +434,15 @@ test('payroll computation locks DTR cut-off entries and compensates approved ove
         ->where('employee_id', $this->staffEmployee->id)
         ->first();
     expect($payslip)->not->toBeNull();
-    // Staff basic pay = 32,000. Hourly rate = (32,000 / 22 / 8) = ~181.82 PHP.
-    // Regular OT rate = 1.25x. Overtime pay should be > 0.
-    expect((float) $payslip->ot_pay)->toBeGreaterThan(0.0);
+    // Staff basic pay = 32,000/month. Daily = 32,000 x 12 / 313 = 1,226.84; hourly = 153.35.
+    // 2 approved OT hours on a regular day at 125% = 383.39.
+    expect((float) $payslip->ot_pay)->toBe(383.39);
+    // Semi-monthly: half the monthly salary.
+    expect((float) $payslip->basic_pay)->toBe(16000.0);
+
+    // A draft does not lock the cut-off; approval does.
+    expect($dtr->fresh()->isLocked())->toBeFalse();
+    $payrollService->approve($run, $this->hrUser);
 
     // 3. Confirm DTR entries within cut-off are locked
     $dtr->refresh();

@@ -12,8 +12,12 @@ class DatabaseSeeder extends Seeder
             RolesAndPermissionsSeeder::class,
             UserSeeder::class,
             EntitySeeder::class,
-            AccountingSetupSeeder::class,
+            AccountingSetupSeeder::class, // also runs PostingRulesSeeder per entity
             BankAccountSeeder::class,
+            DemoDataSeeder::class,
+            PeopleSetupSeeder::class,
+            EmployeeDirectorySeeder::class,
+            AttendanceDemoSeeder::class,
         ]);
     }
 }

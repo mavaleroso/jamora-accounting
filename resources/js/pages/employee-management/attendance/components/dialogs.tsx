@@ -212,10 +212,10 @@ function ManualEntryForm({ target, employees, today, onDone }: { target: ManualE
 }
 
 /* ----------------------------------------------------------------------------------------------
- * Correction / overtime request (employee, or HR on behalf)
+ * Time correction request (employee, or HR on behalf). Overtime is pre-filed in Employee Requests.
  * -------------------------------------------------------------------------------------------- */
 
-export type RequestTarget = { employeeId?: number; date?: string; entry?: DtrRow | null; type?: 'correction' | 'overtime' } | null;
+export type RequestTarget = { employeeId?: number; date?: string; entry?: DtrRow | null; type?: 'correction' } | null;
 
 export function RequestDialog({
     open,
@@ -248,17 +248,15 @@ function RequestForm({
     const entry = target?.entry ?? null;
     const form = useForm({
         employee_id: String(target?.employeeId ?? entry?.employee_id ?? employees[0]?.id ?? ''),
-        request_type: target?.type ?? 'correction',
+        request_type: 'correction' as const,
         work_date: entry?.work_date ?? target?.date ?? today,
         requested_time_in: toTimeInput(entry?.time_in),
         requested_break_out: toTimeInput(entry?.break_out),
         requested_break_in: toTimeInput(entry?.break_in),
         requested_time_out: toTimeInput(entry?.time_out),
-        requested_ot_hours: entry && Number(entry.ot_hours) > 0 ? String(Number(entry.ot_hours) - Number(entry.ot_hours_approved)) : '',
         reason: '',
     });
     const { data, setData, errors, processing } = form;
-    const isOt = data.request_type === 'overtime';
 
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -268,10 +266,10 @@ function RequestForm({
             const changed = Object.fromEntries(
                 keys.map((k) => {
                     const v = d[`requested_${k}`];
-                    return [`requested_${k}`, isOt || !v || v === toTimeInput(entry?.[k]) ? null : v];
+                    return [`requested_${k}`, !v || v === toTimeInput(entry?.[k]) ? null : v];
                 }),
             );
-            return { ...d, ...changed, requested_ot_hours: isOt ? d.requested_ot_hours : null };
+            return { ...d, ...changed };
         });
         form.post(`${ATTENDANCE_URL}/requests`, { preserveScroll: true, onSuccess: onDone });
     };
@@ -279,29 +277,11 @@ function RequestForm({
     return (
         <form className="space-y-4" onSubmit={submit}>
             <DialogHeader>
-                <DialogTitle>{isOt ? 'Request overtime approval' : 'Request a time correction'}</DialogTitle>
+                <DialogTitle>Request a time correction</DialogTitle>
                 <DialogDescription>
-                    {isOt
-                        ? 'Overtime is only paid once approved. You can request up to what your punches show.'
-                        : 'Fix a missed or wrong punch. Only the times you change are sent for approval.'}
+                    Fix a missed or wrong punch. Only the times you change are sent for approval. Overtime is filed in advance under Employee Requests.
                 </DialogDescription>
             </DialogHeader>
-
-            <div className="grid grid-cols-2 gap-1 rounded-md border bg-muted p-1">
-                {(['correction', 'overtime'] as const).map((t) => (
-                    <button
-                        key={t}
-                        type="button"
-                        onClick={() => setData('request_type', t)}
-                        className={cn(
-                            'rounded px-2 py-1.5 text-sm font-medium transition-colors',
-                            data.request_type === t ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                        )}
-                    >
-                        {t === 'correction' ? 'Time correction' : 'Overtime'}
-                    </button>
-                ))}
-            </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
                 {canPickEmployee && !entry && (
@@ -339,34 +319,20 @@ function RequestForm({
                 </div>
             )}
 
-            {isOt ? (
-                <Field label="Overtime hours" error={errors.requested_ot_hours} hint="In 0.5-hour steps, up to 12 hours.">
-                    <Input
-                        type="number"
-                        min="0.5"
-                        max="12"
-                        step="0.25"
-                        value={data.requested_ot_hours}
-                        onChange={(e) => setData('requested_ot_hours', e.target.value)}
-                        className="w-32"
-                    />
-                </Field>
-            ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {(
-                        [
-                            ['requested_time_in', 'Check-in'],
-                            ['requested_break_out', 'Break out'],
-                            ['requested_break_in', 'Break in'],
-                            ['requested_time_out', 'Check-out'],
-                        ] as const
-                    ).map(([key, label]) => (
-                        <Field key={key} label={label} error={errors[key]}>
-                            <Input type="time" value={data[key]} onChange={(e) => setData(key, e.target.value)} />
-                        </Field>
-                    ))}
-                </div>
-            )}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {(
+                    [
+                        ['requested_time_in', 'Check-in'],
+                        ['requested_break_out', 'Break out'],
+                        ['requested_break_in', 'Break in'],
+                        ['requested_time_out', 'Check-out'],
+                    ] as const
+                ).map(([key, label]) => (
+                    <Field key={key} label={label} error={errors[key]}>
+                        <Input type="time" value={data[key]} onChange={(e) => setData(key, e.target.value)} />
+                    </Field>
+                ))}
+            </div>
 
             <Field label="Reason" error={errors.reason}>
                 <Textarea
@@ -374,7 +340,7 @@ function RequestForm({
                     onChange={(e) => setData('reason', e.target.value)}
                     rows={3}
                     maxLength={500}
-                    placeholder={isOt ? 'e.g. Stayed to finish lens edging for a rush order' : 'e.g. Forgot to check out, left at 6:05 PM'}
+                    placeholder="e.g. Forgot to check out, left at 6:05 PM"
                 />
             </Field>
 
@@ -455,8 +421,8 @@ function ApproveForm({ entry, onDone }: { entry: DtrRow; onDone: () => void }) {
                         {unpaid === 0
                             ? 'All overtime on this day is covered by approved OT requests.'
                             : entry.ot_request_pending
-                              ? `${fmtHours(unpaid)} has a pending OT request — approve it in Requests to make it payable.`
-                              : `${fmtHours(unpaid)} will not be paid — overtime only counts once an OT request is approved.`}
+                              ? `${fmtHours(unpaid)} has a pending OT pre-approval — approve it in Requests to make it payable.`
+                              : `${fmtHours(unpaid)} will not be paid — it was not pre-approved. Overtime must be filed before it is worked.`}
                     </p>
                 </div>
             ) : (
@@ -479,6 +445,14 @@ function ApproveForm({ entry, onDone }: { entry: DtrRow; onDone: () => void }) {
 /* ----------------------------------------------------------------------------------------------
  * Review a request (timekeeper)
  * -------------------------------------------------------------------------------------------- */
+
+const REVIEW_COPY: Record<AttendanceRequestRow['request_type'], { label: string; effect: string }> = {
+    correction: { label: 'Time correction', effect: 'The requested times replace the punches on record and hours are recomputed.' },
+    overtime: { label: 'Overtime', effect: '' },
+    official_business: { label: 'Official business', effect: 'The time away counts as work; missing punches are filled from the official business window.' },
+    undertime: { label: 'Undertime', effect: 'The early departure is authorised. The undertime is still deducted from pay.' },
+    schedule_change: { label: 'Change of schedule', effect: 'The roster for this day is replaced and lateness is measured against the new schedule.' },
+};
 
 export function ReviewDialog({ open, onOpenChange, request, decision }: Open & { request: AttendanceRequestRow | null; decision: 'approved' | 'rejected' }) {
     return (
@@ -503,15 +477,15 @@ function ReviewForm({ request, decision, onDone }: { request: AttendanceRequestR
             <DialogHeader>
                 <DialogTitle>{reject ? 'Reject request' : 'Approve request'}</DialogTitle>
                 <DialogDescription>
-                    {fullName(request.employee)} · {request.request_type === 'overtime' ? 'Overtime' : 'Time correction'} for{' '}
+                    {fullName(request.employee)} · {REVIEW_COPY[request.request_type].label} for{' '}
                     {fmtDate(request.work_date, { weekday: 'short', month: 'short', day: 'numeric' })}
                 </DialogDescription>
             </DialogHeader>
             {!reject && (
                 <p className="text-sm text-muted-foreground">
                     {request.request_type === 'overtime'
-                        ? `Approves ${fmtHours(request.requested_ot_hours)} of payable overtime (capped at what was rendered).`
-                        : 'The requested times replace the punches on record and hours are recomputed.'}
+                        ? `Pre-approves ${fmtHours(request.requested_ot_hours)} of overtime. It is paid only for hours actually worked past the shift.`
+                        : REVIEW_COPY[request.request_type].effect}
                 </p>
             )}
             <Field label={reject ? 'Reason for rejecting' : 'Note to employee (optional)'} error={form.errors.review_remarks ?? form.errors.status}>

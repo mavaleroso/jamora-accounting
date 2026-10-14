@@ -93,6 +93,57 @@ return [
     ],
 
     /*
+    | Payroll policy.
+    */
+    'payroll' => [
+        // How the monthly SSS / PhilHealth / Pag-IBIG contribution is deducted on a semi-monthly payroll:
+        // "split" = half on each cut-off; "second_cutoff" = all on the 16th–end cut-off. Company policy.
+        'contribution_schedule' => 'split',
+
+        // Statutory minimum wage (daily) of the establishment's region. Minimum wage earners are exempt from
+        // withholding tax on their SMW, holiday, OT, night differential and hazard pay (RR 11-2018, Sec. 2.78.1(B)(13)).
+        // NCR non-agriculture: PHP 695.00 (Wage Order NCR-26, effective 17 July 2025). Update per wage order / region.
+        'minimum_wage_daily' => 695.00,
+
+        // Default pay day for each cut-off of a generated period (day of month; 0 = last day of the month).
+        'pay_days' => ['first' => 15, 'second' => 0],
+
+        // BIR revised withholding tax table on compensation, effective 1 January 2023 (RR 11-2018, Annex E).
+        // Each bracket: [over, base_tax, rate on excess over "over"].
+        'withholding_tax' => [
+            'semi_monthly' => [
+                [0, 0, 0],
+                [10417, 0, 0.15],
+                [16667, 937.50, 0.20],
+                [33333, 4270.70, 0.25],
+                [83333, 16770.70, 0.30],
+                [333333, 91770.70, 0.35],
+            ],
+            'monthly' => [
+                [0, 0, 0],
+                [20833, 0, 0.15],
+                [33333, 1875.00, 0.20],
+                [66667, 8541.80, 0.25],
+                [166667, 33541.80, 0.30],
+                [666667, 183541.80, 0.35],
+            ],
+        ],
+
+        // General ledger accounts used when a payroll run is posted and released.
+        'accounts' => [
+            'salaries_expense' => ['code' => '6000', 'name' => 'Salaries and Wages', 'type' => 'Operating Expenses'],
+            'employer_contributions' => ['code' => '6010', 'name' => 'Employer Statutory Contributions', 'type' => 'Operating Expenses'],
+            'sss_payable' => ['code' => '2400', 'name' => 'SSS Payable', 'type' => 'Current Liabilities'],
+            'philhealth_payable' => ['code' => '2410', 'name' => 'PhilHealth Payable', 'type' => 'Current Liabilities'],
+            'pagibig_payable' => ['code' => '2420', 'name' => 'Pag-IBIG Payable', 'type' => 'Current Liabilities'],
+            'withholding_tax_payable' => ['code' => '2430', 'name' => 'Withholding Tax Payable', 'type' => 'Current Liabilities'],
+            'other_deductions_payable' => ['code' => '2440', 'name' => 'Other Payroll Deductions Payable', 'type' => 'Current Liabilities'],
+            'salaries_payable' => ['code' => '2500', 'name' => 'Salaries Payable', 'type' => 'Current Liabilities'],
+            'cash_in_bank' => ['code' => '1010', 'name' => 'Cash in Bank', 'type' => 'Current Assets'],
+        ],
+    ],
+
+    /*
     | Leave types seeded by PeopleSetupSeeder. "VL/SL/EL/BL" are company policy;
     | the rest are statutory.
     */

@@ -17,7 +17,7 @@ class Employee extends Model
         'entity_id', 'user_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar',
         'gender', 'civil_status',
         'position', 'department', 'biometric_id', 'email', 'phone',
-        'default_shift_template_id', 'rest_days',
+        'default_shift_template_id', 'rest_days', 'leave_type_ids',
         'hire_date', 'regularization_date', 'separation_date', 'employment_status', 'employment_type',
         'pay_type', 'basic_pay',
         'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'bank_name',
@@ -38,6 +38,7 @@ class Employee extends Model
             'vacation_leave_credits' => 'decimal:2',
             'sick_leave_credits' => 'decimal:2',
             'rest_days' => 'array',
+            'leave_type_ids' => 'array',
             'is_active' => 'boolean',
         ];
     }
@@ -55,6 +56,20 @@ class Employee extends Model
 
         // Relative URL so photos load regardless of the host the app is opened on.
         return str_starts_with($this->avatar, 'http') ? $this->avatar : '/storage/'.ltrim($this->avatar, '/');
+    }
+
+    /**
+     * Whether the employee record enables this leave type. NULL leave_type_ids = all types.
+     */
+    public function allowsLeaveType(LeaveType|int $leaveType): bool
+    {
+        if ($this->leave_type_ids === null) {
+            return true;
+        }
+
+        $id = $leaveType instanceof LeaveType ? $leaveType->id : $leaveType;
+
+        return in_array($id, array_map('intval', $this->leave_type_ids), true);
     }
 
     /**

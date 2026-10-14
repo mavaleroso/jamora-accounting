@@ -23,7 +23,7 @@ export type DtrRow = {
     regular_hours: string | number;
     ot_hours: string | number;
     ot_hours_approved: string | number;
-    /** A pending OT request exists for this day (payable OT comes only from approved requests). */
+    /** A pending OT pre-approval exists for this day (payable OT comes only from approved requests). */
     ot_request_pending?: boolean;
     tardiness_minutes: string | number;
     undertime_minutes: string | number;
@@ -44,13 +44,15 @@ export type DtrRow = {
 export type AttendanceRequestRow = {
     id: number;
     employee_id: number;
-    request_type: 'correction' | 'overtime';
+    request_type: 'correction' | 'overtime' | 'official_business' | 'undertime' | 'schedule_change';
     work_date: string;
     requested_time_in: string | null;
     requested_break_out: string | null;
     requested_break_in: string | null;
     requested_time_out: string | null;
     requested_ot_hours: string | number | null;
+    destination?: string | null;
+    requested_rest_day?: boolean;
     reason: string;
     status: 'pending' | 'approved' | 'rejected' | 'cancelled';
     review_remarks?: string | null;
@@ -270,7 +272,7 @@ export function recordIssues(row: DtrRow): string[] {
     if (Number(row.tardiness_minutes) > 0) issues.push(`Late ${fmtMinutes(row.tardiness_minutes)}`);
     if (Number(row.undertime_minutes) > 0) issues.push(`Undertime ${fmtMinutes(row.undertime_minutes)}`);
     const unpaidOt = Number(row.ot_hours) - Number(row.ot_hours_approved);
-    if (unpaidOt > 0) issues.push(`OT ${fmtHours(unpaidOt)} ${row.ot_request_pending ? 'request pending' : 'no request'}`);
+    if (unpaidOt > 0) issues.push(`OT ${fmtHours(unpaidOt)} ${row.ot_request_pending ? 'approval pending' : 'not pre-approved'}`);
     if (row.location_status === 'out_of_bounds') issues.push('Outside geofence');
     return issues;
 }

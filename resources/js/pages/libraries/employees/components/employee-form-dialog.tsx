@@ -1,8 +1,9 @@
 import { useForm } from '@inertiajs/react';
-import { Briefcase, CalendarClock, Camera, CreditCard, IdCard, Info, Loader2, Trash2, UserRound } from 'lucide-react';
+import { Briefcase, CalendarClock, Camera, CreditCard, IdCard, Info, Loader2, Palmtree, Trash2, UserRound } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -34,6 +35,7 @@ import {
     toDateInput,
     WEEKDAYS,
     type Employee,
+    type LeaveTypeOption,
     type Policy,
     type ShiftTemplate,
 } from '../lib';
@@ -58,6 +60,7 @@ type FormData = {
     biometric_id: string;
     default_shift_template_id: string;
     rest_days: number[];
+    leave_type_ids: number[];
     is_active: boolean;
     pay_type: string;
     basic_pay: string;
@@ -96,7 +99,13 @@ const TABS = [
         id: 'pay',
         label: 'Pay & Bank',
         icon: CreditCard,
-        fields: ['pay_type', 'basic_pay', 'vacation_leave_credits', 'sick_leave_credits', 'bank_name', 'bank_account_no'],
+        fields: ['pay_type', 'basic_pay', 'bank_name', 'bank_account_no'],
+    },
+    {
+        id: 'leave',
+        label: 'Leave',
+        icon: Palmtree,
+        fields: ['leave_type_ids', 'leave_type_scope', 'vacation_leave_credits', 'sick_leave_credits'],
     },
     {
         id: 'statutory',
@@ -110,7 +119,7 @@ type TabId = (typeof TABS)[number]['id'];
 
 const NONE = 'none';
 
-function initialData(employee: Employee | null, policy: Policy): FormData {
+function initialData(employee: Employee | null, policy: Policy, leaveTypes: LeaveTypeOption[]): FormData {
     return {
         employee_code: employee?.employee_code ?? '',
         firstname: employee?.firstname ?? '',
@@ -130,6 +139,8 @@ function initialData(employee: Employee | null, policy: Policy): FormData {
         biometric_id: employee?.biometric_id ?? '',
         default_shift_template_id: employee?.default_shift_template_id ? String(employee.default_shift_template_id) : '',
         rest_days: employee ? (employee.rest_days ?? []) : policy.defaultRestDays,
+        // Default: every leave type selected.
+        leave_type_ids: employee?.leave_type_ids ?? leaveTypes.map((t) => t.id),
         is_active: employee?.is_active ?? true,
         pay_type: employee?.pay_type ?? 'monthly',
         basic_pay: employee ? String(employee.basic_pay ?? '') : '',
@@ -183,6 +194,7 @@ type Props = {
     departments: string[];
     positions: string[];
     policy: Policy;
+    leaveTypes: LeaveTypeOption[];
 };
 
 export function EmployeeFormDialog({ open, onOpenChange, employee, ...rest }: Props) {
@@ -209,10 +221,11 @@ function EmployeeForm({
     departments,
     positions,
     policy,
+    leaveTypes,
 }: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
     const isEdit = employee !== null;
     const [tab, setTab] = React.useState<TabId>('personal');
-    const form = useForm<FormData>(initialData(employee, policy));
+    const form = useForm<FormData>(initialData(employee, policy, leaveTypes));
     const { data, setData, errors, processing } = form;
     const err = errors as Record<string, string | undefined>;
 
@@ -223,8 +236,12 @@ function EmployeeForm({
 
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
-        form.transform(({ avatar, remove_avatar, ...d }) => ({
+        // All selected is saved as "all" so leave types added later are enabled automatically.
+        const allLeave = leaveTypes.every((t) => data.leave_type_ids.includes(t.id));
+        form.transform(({ avatar, remove_avatar, leave_type_ids, ...d }) => ({
             ...d,
+            leave_type_scope: allLeave ? 'all' : 'custom',
+            leave_type_ids: allLeave ? [] : leave_type_ids,
             ...(isEdit ? { _method: 'put' } : {}),
             ...(avatar ? { avatar } : {}),
             ...(remove_avatar && !avatar ? { remove_avatar: true } : {}),
@@ -285,6 +302,11 @@ function EmployeeForm({
         form.clearErrors('avatar');
         setData((d) => ({ ...d, avatar: file, remove_avatar: false }));
     };
+
+    const leaveIds = data.leave_type_ids;
+    const allLeaveSelected = leaveTypes.every((t) => leaveIds.includes(t.id));
+    const toggleLeaveType = (id: number) =>
+        setData('leave_type_ids', leaveIds.includes(id) ? leaveIds.filter((x) => x !== id) : [...leaveIds, id]);
 
     const toggleRestDay = (day: number) =>
         setData('rest_days', data.rest_days.includes(day) ? data.rest_days.filter((d) => d !== day) : [...data.rest_days, day]);
@@ -770,6 +792,95 @@ function EmployeeForm({
                         )}
 
                         <div className="grid gap-4 sm:grid-cols-2">
+                            <Field label="Payroll bank" htmlFor="bank_name" error={err.bank_name}>
+                                <Input
+                                    id="bank_name"
+                                    list="employee-banks"
+                                    value={data.bank_name}
+                                    onChange={(e) => setData('bank_name', e.target.value)}
+                                    placeholder="e.g. BDO Unibank"
+                                />
+                                <datalist id="employee-banks">
+                                    {['BDO Unibank', 'BPI', 'Metrobank', 'UnionBank', 'Landbank', 'Security Bank', 'GCash', 'Maya'].map((b) => (
+                                        <option key={b} value={b} />
+                                    ))}
+                                </datalist>
+                            </Field>
+                            <Field label="Account number" htmlFor="bank_account_no" error={err.bank_account_no}>
+                                <Input
+                                    id="bank_account_no"
+                                    value={data.bank_account_no}
+                                    onChange={(e) => setData('bank_account_no', e.target.value)}
+                                    placeholder="0012-3456-7890"
+                                    className="font-mono"
+                                />
+                            </Field>
+                        </div>
+                    </div>
+                )}
+
+                {tab === 'leave' && (
+                    <div className="space-y-5">
+                        <div className="space-y-2">
+                            <div className="flex flex-wrap items-end justify-between gap-2">
+                                <div>
+                                    <Label className="text-sm font-medium">Leave types this employee can file</Label>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">
+                                        {allLeaveSelected
+                                            ? 'All leave types — new types added to the leave catalogue are included automatically.'
+                                            : leaveIds.length === 0
+                                              ? 'None — this employee cannot file leave.'
+                                              : `${leaveTypes.filter((t) => leaveIds.includes(t.id)).length} of ${leaveTypes.length} leave types.`}
+                                    </p>
+                                </div>
+                                <div className="flex gap-1">
+                                    <Button type="button" variant="ghost" size="sm" disabled={allLeaveSelected} onClick={() => setData('leave_type_ids', leaveTypes.map((t) => t.id))}>
+                                        Select all
+                                    </Button>
+                                    <Button type="button" variant="ghost" size="sm" disabled={leaveIds.length === 0} onClick={() => setData('leave_type_ids', [])}>
+                                        Clear
+                                    </Button>
+                                </div>
+                            </div>
+                            {leaveTypes.length === 0 ? (
+                                <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">No leave types are set up yet.</p>
+                            ) : (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    {leaveTypes.map((t) => {
+                                        const checked = leaveIds.includes(t.id);
+                                        const genderMismatch = !!t.gender && !!data.gender && t.gender !== data.gender;
+                                        return (
+                                            <label
+                                                key={t.id}
+                                                className={cn(
+                                                    'flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/40',
+                                                    checked && 'border-primary/40 bg-primary/5',
+                                                )}
+                                            >
+                                                <Checkbox checked={checked} onCheckedChange={() => toggleLeaveType(t.id)} className="mt-0.5" />
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                                                        {t.name}
+                                                        <span className="font-mono text-[10px] text-muted-foreground">{t.code}</span>
+                                                        {!t.is_paid && <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">Unpaid</span>}
+                                                    </span>
+                                                    {t.legal_basis && <span className="block text-[11px] text-muted-foreground">{t.legal_basis}</span>}
+                                                    {t.gender && (
+                                                        <span className={cn('block text-[11px]', genderMismatch ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
+                                                            {t.gender === 'female' ? 'Female' : 'Male'} employees only
+                                                            {genderMismatch && ' — not available to this employee'}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {err.leave_type_ids && <InputError message={err.leave_type_ids} />}
+                        </div>
+
+                        <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
                             <Field
                                 label="Opening VL credits (days)"
                                 htmlFor="vacation_leave_credits"
@@ -793,29 +904,6 @@ function EmployeeForm({
                                     step="0.5"
                                     value={data.sick_leave_credits}
                                     onChange={(e) => setData('sick_leave_credits', e.target.value)}
-                                />
-                            </Field>
-                            <Field label="Payroll bank" htmlFor="bank_name" error={err.bank_name}>
-                                <Input
-                                    id="bank_name"
-                                    list="employee-banks"
-                                    value={data.bank_name}
-                                    onChange={(e) => setData('bank_name', e.target.value)}
-                                    placeholder="e.g. BDO Unibank"
-                                />
-                                <datalist id="employee-banks">
-                                    {['BDO Unibank', 'BPI', 'Metrobank', 'UnionBank', 'Landbank', 'Security Bank', 'GCash', 'Maya'].map((b) => (
-                                        <option key={b} value={b} />
-                                    ))}
-                                </datalist>
-                            </Field>
-                            <Field label="Account number" htmlFor="bank_account_no" error={err.bank_account_no}>
-                                <Input
-                                    id="bank_account_no"
-                                    value={data.bank_account_no}
-                                    onChange={(e) => setData('bank_account_no', e.target.value)}
-                                    placeholder="0012-3456-7890"
-                                    className="font-mono"
                                 />
                             </Field>
                         </div>

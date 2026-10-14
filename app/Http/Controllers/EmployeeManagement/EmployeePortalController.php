@@ -5,180 +5,183 @@ namespace App\Http\Controllers\EmployeeManagement;
 use App\Http\Controllers\Controller;
 use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
-use App\Models\LeaveBalance;
+use App\Models\Employee;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
+use App\Models\PayrollRun;
 use App\Models\Payslip;
-use App\Models\ShiftRoster;
+use App\Services\People\AttendanceCalculator;
+use App\Services\People\EmployeeRequestFeed;
 use App\Services\People\EmployeeResolver;
 use App\Services\People\LeaveService;
 use App\Support\EntityContext;
 use Carbon\Carbon;
-use Illuminate\Http\RedirectResponse;
+use Carbon\CarbonPeriod;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
+/**
+ * Employee home ("Dashboard" for the Employee role). A summary that links into the working
+ * modules — My Attendance, My Requests — rather than repeating them, plus the two things only
+ * available here: the employee's own payslips and their own record.
+ */
 class EmployeePortalController extends Controller
 {
     public function __construct(
         protected EmployeeResolver $employeeResolver,
-        protected LeaveService $leaveService
+        protected LeaveService $leaveService,
+        protected AttendanceCalculator $attendanceCalculator,
+        protected EmployeeRequestFeed $requestFeed
     ) {}
 
     public function index(Request $request, EntityContext $entityContext): Response
     {
         $entityId = $entityContext->id();
         $user = $request->user();
-
-        // Safely resolve the employee strictly tied to this user within the entity
         $employee = $this->employeeResolver->forUser($user, $entityId);
 
         if (! $employee) {
-            return Inertia::render('employee-management/portal/page', [
-                'employee' => null,
-                'upcomingShifts' => [],
-                'recentLeaveRequests' => [],
-                'recentPayslips' => [],
-                'leaveBalances' => [],
-                'recentDtr' => [],
-                'attendanceRequests' => [],
-                'leaveTypes' => LeaveType::where('is_active', true)->orderBy('sort_order')->get(),
-            ]);
+            return Inertia::render('employee-management/portal/page', ['employee' => null]);
         }
 
-        $upcomingShifts = ShiftRoster::query()
+        $today = Carbon::today();
+        $dtr = DtrEntry::query()
             ->where('employee_id', $employee->id)
-            ->where('status', ShiftRoster::STATUS_PUBLISHED)
-            ->where('roster_date', '>=', Carbon::today()->toDateString())
-            ->orderBy('roster_date')
-            ->limit(7)
-            ->get();
+            ->whereDate('work_date', $today)
+            ->first(['time_in', 'break_out', 'break_in', 'time_out', 'attendance_status', 'tardiness_minutes', 'regular_hours']);
 
-        $recentLeaveRequests = LeaveRequest::query()
-            ->with('type')
-            ->where('employee_id', $employee->id)
-            ->orderByDesc('created_at')
-            ->limit(5)
-            ->get();
-
-        $recentPayslips = Payslip::query()
-            ->with(['payrollRun.period'])
-            ->where('employee_id', $employee->id)
-            ->orderByDesc('id')
-            ->limit(6)
-            ->get();
-
-        $currentYear = (int) date('Y');
-        $leaveBalances = LeaveBalance::where('employee_id', $employee->id)
-            ->where('year', $currentYear)
-            ->with('leaveType')
-            ->get();
-
-        $startOfWeek = Carbon::now()->startOfWeek()->toDateString();
-        $endOfWeek = Carbon::now()->endOfWeek()->toDateString();
-        $recentDtr = DtrEntry::where('employee_id', $employee->id)
-            ->whereBetween('work_date', [$startOfWeek, $endOfWeek])
-            ->orderByDesc('work_date')
-            ->get();
-
-        $attendanceRequests = AttendanceRequest::where('employee_id', $employee->id)
-            ->orderByDesc('created_at')
-            ->limit(5)
-            ->get();
-
-        $leaveTypes = LeaveType::where('is_active', true)->orderBy('sort_order')->get();
+        $mine = fn () => $this->requestFeed->query($entityId)->where('employee_id', $employee->id);
 
         return Inertia::render('employee-management/portal/page', [
-            'employee' => [
-                'id' => $employee->id,
-                'name' => $employee->name,
-                'code' => $employee->employee_code,
-                'position' => $employee->position,
-                'department' => $employee->department,
-                'hire_date' => $employee->hire_date?->format('M d, Y'),
-                'employment_status' => $employee->employment_status,
-                'employment_type' => $employee->employment_type,
-                'biometric_id' => $employee->biometric_id,
-                'email' => $employee->email,
-                'phone' => $employee->phone,
-                'bank_name' => $employee->bank_name,
-                'bank_account_no' => $employee->bank_account_no,
-                'vacation_leave_credits' => (float) $employee->vacation_leave_credits,
-                'sick_leave_credits' => (float) $employee->sick_leave_credits,
-                'basic_pay' => (float) $employee->basic_pay,
+            'employee' => $this->profile($employee),
+            'week' => $this->week($employee, $today),
+            'todayRecord' => $dtr,
+            'requests' => [
+                'pending' => $mine()->where('status', 'pending')->count(),
+                'recent' => $this->requestFeed->present($mine()->orderByDesc('created_at')->orderByDesc('id')->limit(4)->get()),
             ],
-            'upcomingShifts' => $upcomingShifts,
-            'recentLeaveRequests' => $recentLeaveRequests,
-            'recentPayslips' => $recentPayslips,
-            'leaveBalances' => $leaveBalances,
-            'recentDtr' => $recentDtr,
-            'attendanceRequests' => $attendanceRequests,
-            'leaveTypes' => $leaveTypes,
+            'balances' => $this->leaveService->balanceSummary(
+                $employee,
+                (int) $today->year,
+                LeaveType::query()->where('is_active', true)->orderBy('sort_order')->get(),
+            ),
+            'payslips' => $this->payslips($employee),
+            'can' => [
+                'punch' => $user->canAny(['attendance.punch', 'payroll.manage']),
+                'fileRequests' => $user->canAny(['leave.file', 'attendance.view', 'attendance.punch', 'payroll.manage']),
+            ],
+            'today' => $today->toDateString(),
         ]);
     }
 
-    public function fileLeave(Request $request, EntityContext $entityContext): RedirectResponse
+    private function profile(Employee $employee): array
     {
-        $entityId = $entityContext->id();
-        $user = $request->user();
-        $employee = $this->employeeResolver->forUser($user, $entityId);
+        $account = (string) $employee->bank_account_no;
 
-        if (! $employee) {
-            return redirect()->back()->withErrors([
-                'employee_id' => 'No active employee profile linked to your user account.',
-            ]);
-        }
-
-        $validated = $request->validate([
-            'leave_type_id' => ['nullable', 'exists:leave_types,id'],
-            'leave_type' => ['nullable', 'string'],
-            'start_date' => ['required', 'date'],
-            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
-            'half_day' => ['nullable', 'in:am,pm'],
-            'reason' => ['required', 'string', 'max:500'],
-            'attachment' => ['nullable', 'file', 'max:5120'],
-        ]);
-
-        $leaveType = $this->leaveService->resolveLeaveType($validated['leave_type_id'] ?? null, $validated['leave_type'] ?? null);
-
-        $attachmentPath = null;
-        if ($request->hasFile('attachment')) {
-            $attachmentPath = $request->file('attachment')->store('leave-attachments', 'public');
-        }
-
-        $this->leaveService->file(
-            $employee,
-            $leaveType,
-            [
-                'start_date' => $validated['start_date'],
-                'end_date' => $validated['end_date'],
-                'half_day' => $validated['half_day'] ?? null,
-                'reason' => $validated['reason'],
-                'attachment_path' => $attachmentPath,
-            ],
-            $user
-        );
-
-        return redirect()->back()->with('status', 'Leave request submitted successfully.');
+        return [
+            ...$employee->only([
+                'id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department',
+                'employment_status', 'employment_type', 'biometric_id', 'email', 'phone',
+                'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'bank_name',
+            ]),
+            'hire_date' => $employee->hire_date?->toDateString(),
+            'regularization_date' => $employee->regularization_date?->toDateString(),
+            // Only the last digits: enough to recognise the account, not to use it.
+            'bank_account_hint' => $account !== '' ? '•••• '.substr($account, -4) : null,
+        ];
     }
 
-    public function cancelLeave(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): RedirectResponse
+    /**
+     * The next seven days as the time clock will see them: roster > shift template > company default,
+     * with holidays, approved leave and approved official business on top.
+     */
+    private function week(Employee $employee, Carbon $today): array
     {
-        $entityId = $entityContext->id();
-        $user = $request->user();
-        $employee = $this->employeeResolver->forUser($user, $entityId);
+        $end = $today->copy()->addDays(6);
 
-        if (! $employee || $leaveRequest->employee_id !== $employee->id) {
-            abort(403, 'Unauthorized.');
-        }
+        $leaves = LeaveRequest::query()
+            ->with('type:id,code,name')
+            ->where('employee_id', $employee->id)
+            ->where('status', LeaveRequest::STATUS_APPROVED)
+            ->whereDate('start_date', '<=', $end)
+            ->whereDate('end_date', '>=', $today)
+            ->get();
 
-        $validated = $request->validate([
-            'reason' => ['required', 'string', 'max:255'],
-        ]);
+        $business = AttendanceRequest::query()
+            ->where('employee_id', $employee->id)
+            ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
+            ->where('status', 'approved')
+            ->whereBetween('work_date', [$today->toDateString(), $end->toDateString()])
+            ->get()
+            ->keyBy(fn (AttendanceRequest $a) => $a->work_date->toDateString());
 
-        $this->leaveService->cancel($leaveRequest, $user, $validated['reason']);
+        return collect(CarbonPeriod::create($today, $end))->map(function (Carbon $date) use ($employee, $leaves, $business) {
+            $d = $date->toDateString();
+            $schedule = $this->attendanceCalculator->scheduleFor($employee, $date);
+            $holiday = $this->attendanceCalculator->holidayFor($employee->entity_id, $date);
+            $leave = $leaves->first(fn (LeaveRequest $l) => $l->start_date->toDateString() <= $d && $l->end_date->toDateString() >= $d);
+            $ob = $business->get($d);
 
-        return redirect()->back()->with('status', 'Leave request cancelled.');
+            return [
+                'date' => $d,
+                'shift_name' => $schedule->shiftName,
+                'start' => $schedule->start,
+                'end' => $schedule->end,
+                'is_rest_day' => $schedule->isRestDay,
+                'source' => $schedule->source,
+                'holiday' => $holiday ? ['name' => $holiday->name, 'type' => $holiday->type] : null,
+                'leave' => $leave ? ['title' => $leave->type?->name ?? 'Leave', 'half_day' => $leave->half_day] : null,
+                'official_business' => $ob ? ['destination' => $ob->destination, 'from' => $ob->requested_time_in, 'to' => $ob->requested_time_out] : null,
+            ];
+        })->all();
+    }
+
+    /**
+     * Payslips of posted or released runs only — a draft or approved run can still change.
+     */
+    private function payslips(Employee $employee): array
+    {
+        return Payslip::query()
+            ->with('payrollRun.period')
+            ->where('employee_id', $employee->id)
+            ->whereHas('payrollRun', fn ($q) => $q->whereIn('status', PayrollRun::RELEASED_STATUSES))
+            ->orderByDesc('id')
+            ->limit(6)
+            ->get()
+            ->map(function (Payslip $p) {
+                $period = $p->payrollRun?->period;
+
+                return [
+                    'id' => $p->id,
+                    'period' => [
+                        'code' => $period?->code,
+                        'start' => $period?->start_date?->toDateString(),
+                        'end' => $period?->end_date?->toDateString(),
+                        'pay_date' => $period?->pay_date?->toDateString(),
+                    ],
+                    'earnings' => [
+                        'basic_pay' => (float) $p->basic_pay,
+                        'ot_pay' => (float) $p->ot_pay,
+                        'holiday_premiums' => (float) $p->holiday_pay,
+                        'night_diff_pay' => (float) $p->night_diff_pay,
+                        'allowances' => (float) $p->taxable_allowances + (float) $p->non_taxable_allowances,
+                        'absences' => (float) $p->absences,
+                        'tardiness' => (float) $p->tardiness,
+                        'unpaid_leave' => (float) $p->unpaid_leave,
+                    ],
+                    'deductions' => [
+                        'sss' => (float) $p->sss,
+                        'philhealth' => (float) $p->philhealth,
+                        'pagibig' => (float) $p->pagibig,
+                        'withholding_tax' => (float) $p->withholding_tax,
+                        'other' => (float) $p->other_deductions,
+                    ],
+                    'gross_pay' => (float) $p->gross_pay,
+                    'total_deductions' => $p->totalDeductions(),
+                    'net_pay' => (float) $p->net_pay,
+                ];
+            })
+            ->all();
     }
 }

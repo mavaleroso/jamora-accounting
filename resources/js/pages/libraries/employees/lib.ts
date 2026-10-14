@@ -30,6 +30,8 @@ export type Employee = {
     default_shift_template_id?: number | null;
     default_shift_template?: ShiftTemplate | null;
     rest_days?: number[] | null;
+    /** Leave types the employee may file; null = all. */
+    leave_type_ids?: number[] | null;
     hire_date?: string | null;
     regularization_date?: string | null;
     separation_date?: string | null;
@@ -47,6 +49,24 @@ export type Employee = {
     bank_account_no?: string | null;
     is_active: boolean;
 };
+
+export type LeaveTypeOption = {
+    id: number;
+    code: string;
+    name: string;
+    legal_basis: string | null;
+    is_paid: boolean;
+    gender: string | null;
+};
+
+/** "All leave types" / "VL, SL, EL" / "None" for an employee's leave type setting. */
+export function leaveTypesLabel(ids: number[] | null | undefined, types: LeaveTypeOption[]): string {
+    if (ids == null) return 'All leave types';
+    const picked = types.filter((t) => ids.includes(t.id));
+    if (picked.length === 0) return 'None';
+    if (picked.length === types.length) return 'All leave types';
+    return picked.map((t) => t.code).join(', ');
+}
 
 export type Policy = {
     daysPerYear: number;

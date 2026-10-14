@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Support\EntityContext;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -25,6 +26,22 @@ class LeaveService
         protected AttendanceCalculator $attendanceCalculator,
         protected EntityContext $entityContext
     ) {}
+
+    /**
+     * Validation rules for filing a leave request (employee_id is resolved by the caller).
+     */
+    public function rules(): array
+    {
+        return [
+            'leave_type_id' => ['nullable', 'exists:leave_types,id'],
+            'leave_type' => ['nullable', 'string'],
+            'start_date' => ['required', 'date'],
+            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
+            'half_day' => ['nullable', 'in:am,pm'],
+            'reason' => ['required', 'string', 'max:500'],
+            'attachment' => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png,webp,heic', 'max:5120'], // 5MB
+        ];
+    }
 
     /**
      * Resolve the LeaveType model for a request, supporting both new ID or legacy key.
@@ -125,15 +142,7 @@ class LeaveService
             ->first();
 
         if (! $balance) {
-            // Check legacy employee table for initial VL / SL values if year is current
-            $initialEntitled = (float) $leaveType->annual_entitlement;
-            if ($year === (int) date('Y')) {
-                if ($leaveType->code === 'VL' && $employee->vacation_leave_credits > 0) {
-                    $initialEntitled = (float) $employee->vacation_leave_credits;
-                } elseif ($leaveType->code === 'SL' && $employee->sick_leave_credits > 0) {
-                    $initialEntitled = (float) $employee->sick_leave_credits;
-                }
-            }
+            $initialEntitled = $this->openingEntitlement($employee, $leaveType, $year);
 
             $balance = LeaveBalance::create([
                 'entity_id' => $employee->entity_id,
@@ -165,6 +174,79 @@ class LeaveService
     }
 
     /**
+     * Entitlement a balance opens with. The legacy employee VL / SL columns win for the current year.
+     */
+    public function openingEntitlement(Employee $employee, LeaveType $leaveType, int $year): float
+    {
+        if ($year === (int) date('Y')) {
+            if ($leaveType->code === 'VL' && $employee->vacation_leave_credits > 0) {
+                return (float) $employee->vacation_leave_credits;
+            }
+            if ($leaveType->code === 'SL' && $employee->sick_leave_credits > 0) {
+                return (float) $employee->sick_leave_credits;
+            }
+        }
+
+        return (float) $leaveType->annual_entitlement;
+    }
+
+    /**
+     * Leave types an employee can file: enabled on their employee record and matching their gender.
+     * Service length is not checked here (shown as a note instead, enforced on filing).
+     */
+    public function appliesTo(Employee $employee, LeaveType $leaveType): bool
+    {
+        return $employee->allowsLeaveType($leaveType)
+            && (! $leaveType->gender || ! $employee->gender || strtolower($leaveType->gender) === strtolower($employee->gender));
+    }
+
+    /**
+     * Read-only balance sheet for display: existing balances, or what a first filing would open with.
+     * Never creates rows. Pass $existing (keyed by leave_type_id) to avoid a query per employee.
+     *
+     * @param  Collection<int, LeaveType>  $types
+     * @param  Collection<int, LeaveBalance>|null  $existing
+     * @return array<int, array<string, mixed>>
+     */
+    public function balanceSummary(Employee $employee, int $year, Collection $types, ?Collection $existing = null): array
+    {
+        $existing ??= LeaveBalance::withoutEntityScope()
+            ->where('employee_id', $employee->id)
+            ->where('year', $year)
+            ->get()
+            ->keyBy('leave_type_id');
+
+        return $types
+            ->filter(fn (LeaveType $type) => $this->appliesTo($employee, $type))
+            ->map(function (LeaveType $type) use ($employee, $year, $existing) {
+                $row = $existing->get($type->id);
+                $entitled = $row ? (float) $row->entitled : $this->openingEntitlement($employee, $type, $year);
+                $carried = (float) ($row->carried_over ?? 0);
+                $adjusted = (float) ($row->adjusted ?? 0);
+                $used = (float) ($row->used ?? 0);
+                $reserved = (float) ($row->reserved ?? 0);
+
+                return [
+                    'leave_type_id' => $type->id,
+                    'code' => $type->code,
+                    'name' => $type->name,
+                    'is_paid' => $type->is_paid,
+                    'balance_tracked' => $type->balance_tracked,
+                    'entitled' => $entitled + $carried + $adjusted,
+                    'used' => $used,
+                    'reserved' => $reserved,
+                    'available' => $type->balance_tracked ? round($entitled + $carried + $adjusted - $used - $reserved, 2) : null,
+                    'max_days_per_filing' => $type->max_days_per_filing,
+                    'service_note' => $type->min_service_months > 0 && $employee->serviceMonths(Carbon::today()) < $type->min_service_months
+                        ? "Available after {$type->min_service_months} months of service"
+                        : null,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
      * File a new leave request. Reserves credits and validates business rules.
      */
     public function file(
@@ -182,7 +264,13 @@ class LeaveService
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
-        // 1. Gender / Eligibility Checks
+        // 1. Enabled on the employee record / gender / eligibility checks
+        if (! $employee->allowsLeaveType($leaveType)) {
+            throw ValidationException::withMessages([
+                'leave_type_id' => "{$leaveType->name} is not enabled for {$employee->name}. HR can enable it on the employee record in the Employee Directory.",
+            ]);
+        }
+
         if ($leaveType->gender && $employee->gender && strtolower($leaveType->gender) !== strtolower($employee->gender)) {
             throw ValidationException::withMessages([
                 'leave_type_id' => "This leave type ({$leaveType->name}) is applicable for {$leaveType->gender} employees only.",
