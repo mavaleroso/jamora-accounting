@@ -2,6 +2,7 @@
 
 namespace App\Services\People;
 
+use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Holiday;
@@ -21,7 +22,7 @@ use Illuminate\Validation\ValidationException;
  *  - Undertime = minutes left before scheduled end.
  *  - Regular hours are capped at the scheduled net hours and 8 hours (Art. 83).
  *  - OT rendered = work after scheduled end (min threshold, floored to blocks). Payable OT
- *    requires approval (ot_hours_approved).
+ *    (ot_hours_approved) = sum of approved overtime requests for the day, capped at OT rendered.
  *  - Night differential = hours worked between 22:00 and 06:00 (Art. 86).
  *  - Day type combines rest day and holiday for premium computation.
  */
@@ -242,12 +243,33 @@ class AttendanceCalculator
             'is_absent' => false,
         ]);
 
-        // Approved OT can never exceed what was actually rendered.
-        if ((float) $dtr->ot_hours_approved > (float) $dtr->ot_hours) {
-            $dtr->ot_hours_approved = $dtr->ot_hours;
-        }
+        $this->syncApprovedOt($dtr);
 
         return $dtr;
+    }
+
+    /**
+     * Payable OT comes only from approved overtime requests, capped at the OT actually rendered.
+     * Called on every recompute so no other path (manual edit, import, approval) can grant OT.
+     */
+    public function syncApprovedOt(DtrEntry $dtr): DtrEntry
+    {
+        $dtr->ot_hours_approved = min((float) $dtr->ot_hours, $this->approvedOtHours($dtr->employee_id, $dtr->work_date));
+
+        return $dtr;
+    }
+
+    public function approvedOtHours(int $employeeId, CarbonInterface|string $date): float
+    {
+        $dateStr = $date instanceof CarbonInterface ? $date->toDateString() : Carbon::parse($date)->toDateString();
+
+        return (float) AttendanceRequest::query()
+            ->withoutEntityScope()
+            ->where('employee_id', $employeeId)
+            ->whereDate('work_date', $dateStr)
+            ->where('request_type', AttendanceRequest::TYPE_OVERTIME)
+            ->where('status', 'approved')
+            ->sum('requested_ot_hours');
     }
 
     /**
