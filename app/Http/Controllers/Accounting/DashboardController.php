@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Accounting;
 
+use App\Enums\RoleEnum;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\JournalEntryResource;
 use App\Models\Account;
@@ -24,6 +25,10 @@ class DashboardController extends Controller
     public function index(Request $request): Response|RedirectResponse
     {
         $user = $request->user();
+        if ($user && $user->hasRole(RoleEnum::Employee->value)) {
+            return redirect()->route('employee-management.portal.index');
+        }
+
         if ($user && ! $user->can('dashboard.view')) {
             if ($user->can('portal.view')) {
                 return redirect()->route('employee-management.portal.index');

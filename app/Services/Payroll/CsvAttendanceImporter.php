@@ -4,15 +4,17 @@ namespace App\Services\Payroll;
 
 use App\Models\DtrEntry;
 use App\Models\Employee;
+use App\Services\People\AttendanceCalculator;
 use App\Support\EntityContext;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\DB;
 
 class CsvAttendanceImporter
 {
+    public function __construct(protected AttendanceCalculator $attendanceCalculator) {}
+
     /**
-     * CSV columns: employee_code, work_date, time_in, time_out, regular_hours, ot_hours, tardiness_minutes, is_absent
+     * CSV columns: employee_code, work_date, time_in, time_out, break_out, break_in, regular_hours, ot_hours, tardiness_minutes, is_absent
      *
      * @return array{imported:int, skipped:int, errors:array<int, string>}
      */
@@ -40,7 +42,7 @@ class CsvAttendanceImporter
             }
 
             $code = trim((string) ($data['employee_code'] ?? ''));
-            $employee = Employee::query()->where('employee_code', $code)->first();
+            $employee = Employee::query()->withoutEntityScope()->where('employee_code', $code)->first();
             if (! $employee) {
                 $skipped++;
                 $errors[] = "Row {$rowNum}: employee {$code} not found";
@@ -55,23 +57,27 @@ class CsvAttendanceImporter
                 continue;
             }
 
-            DtrEntry::query()->updateOrCreate(
-                [
-                    'employee_id' => $employee->id,
-                    'work_date' => $workDate,
-                ],
-                [
-                    'entity_id' => $entityId,
-                    'payroll_period_id' => $payrollPeriodId,
-                    'time_in' => $data['time_in'] ?? null,
-                    'time_out' => $data['time_out'] ?? null,
-                    'regular_hours' => (float) ($data['regular_hours'] ?? 0),
-                    'ot_hours' => (float) ($data['ot_hours'] ?? 0),
-                    'tardiness_minutes' => (float) ($data['tardiness_minutes'] ?? 0),
-                    'is_absent' => filter_var($data['is_absent'] ?? false, FILTER_VALIDATE_BOOLEAN),
-                    'source' => 'csv',
-                ]
-            );
+            $dtr = DtrEntry::query()->withoutEntityScope()->firstOrNew([
+                'employee_id' => $employee->id,
+                'work_date' => $workDate,
+            ]);
+
+            if ($dtr->isLocked()) {
+                $skipped++;
+                $errors[] = "Row {$rowNum}: date {$workDate} for {$code} is already locked by payroll.";
+                continue;
+            }
+
+            $dtr->entity_id = $entityId ?? $employee->entity_id;
+            $dtr->payroll_period_id = $payrollPeriodId ?? $dtr->payroll_period_id;
+            $dtr->time_in = ! empty($data['time_in']) ? Carbon::parse($data['time_in'])->format('H:i:s') : null;
+            $dtr->time_out = ! empty($data['time_out']) ? Carbon::parse($data['time_out'])->format('H:i:s') : null;
+            $dtr->break_out = ! empty($data['break_out']) ? Carbon::parse($data['break_out'])->format('H:i:s') : null;
+            $dtr->break_in = ! empty($data['break_in']) ? Carbon::parse($data['break_in'])->format('H:i:s') : null;
+            $dtr->source = 'csv';
+
+            // Recompute schedule, tardiness, undertime, regular, night diff and day type
+            $this->attendanceCalculator->compute($dtr, $employee)->save();
             $imported++;
         }
 

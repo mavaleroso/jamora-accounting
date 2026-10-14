@@ -10,36 +10,50 @@ use App\Models\PayrollPeriod;
 use App\Models\PayrollRun;
 use App\Models\Payslip;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\People\BenefitCalculator;
 use Illuminate\Support\Facades\DB;
 
 class PayrollService
 {
-    public function __construct(protected JournalPostingService $journalPostingService) {}
+    public function __construct(
+        protected JournalPostingService $journalPostingService,
+        protected BenefitCalculator $benefitCalculator
+    ) {}
 
     public function compute(PayrollPeriod $period, int $userId): PayrollRun
     {
         return DB::transaction(function () use ($period, $userId) {
             $runNo = 'PR-'.$period->code.'-'.now()->format('His');
             $run = PayrollRun::query()->create([
+                'entity_id' => $period->entity_id,
                 'payroll_period_id' => $period->id,
                 'run_no' => $runNo,
                 'status' => 'computed',
             ]);
 
-            $employees = Employee::query()->where('is_active', true)->where('employment_status', 'active')->get();
+            $employees = Employee::query()
+                ->withoutEntityScope()
+                ->where('entity_id', $period->entity_id)
+                ->where('is_active', true)
+                ->where('employment_status', 'active')
+                ->get();
+
             $grossTotal = 0;
             $deductionTotal = 0;
             $netTotal = 0;
 
+            $premiums = config('people.premiums');
+
             foreach ($employees as $employee) {
                 $dtrs = DtrEntry::query()
+                    ->withoutEntityScope()
                     ->where('employee_id', $employee->id)
                     ->whereBetween('work_date', [$period->start_date, $period->end_date])
                     ->get();
 
                 $absentDays = $dtrs->where('is_absent', true)->count();
-                $otHours = (float) $dtrs->sum('ot_hours');
                 $tardinessMinutes = (float) $dtrs->sum('tardiness_minutes');
+                $undertimeMinutes = (float) $dtrs->sum('undertime_minutes');
 
                 $dailyRate = $employee->pay_type === 'daily'
                     ? (float) $employee->basic_pay
@@ -48,18 +62,54 @@ class PayrollService
 
                 $basic = (float) $employee->basic_pay;
                 if ($employee->pay_type === 'daily') {
-                    $workDays = $dtrs->where('is_absent', false)->count();
+                    $workDays = $dtrs->where('is_absent', false)
+                        ->whereNotIn('attendance_status', ['absent', 'rest_day'])
+                        ->count();
                     $basic = $dailyRate * max($workDays, 0);
                 }
 
-                $otPay = $otHours * $hourlyRate * 1.25;
-                $absenceDeduction = $absentDays * $dailyRate;
-                $tardinessDeduction = ($tardinessMinutes / 60) * $hourlyRate;
-                $gross = max(0, $basic + $otPay - $absenceDeduction - $tardinessDeduction);
+                // Premium Pay & Approved Overtime Computation
+                $otPay = 0.0;
+                $holidayRestDayPremiums = 0.0;
+                $nightDiffPay = 0.0;
 
-                $sss = round(min($gross * 0.045, 1350), 2);
-                $philhealth = round(min($gross * 0.025, 2500), 2);
-                $pagibig = round(min($gross * 0.02, 200), 2);
+                foreach ($dtrs as $dtr) {
+                    $dayType = $dtr->day_type ?: 'regular';
+                    $rateCfg = $premiums[$dayType] ?? $premiums['regular'];
+
+                    // Approved overtime pay based on DOLE day type multiplier
+                    $payableOtHours = (float) ($dtr->ot_hours_approved > 0 ? $dtr->ot_hours_approved : 0);
+                    if ($payableOtHours > 0) {
+                        $otPay += $payableOtHours * $hourlyRate * $rateCfg['ot'];
+                    }
+
+                    // Work rendered on rest day / special holiday / regular holiday receives premium over standard daily basic
+                    if ($dayType !== 'regular' && (float) $dtr->regular_hours > 0) {
+                        $multiplier = max(0, $rateCfg['day'] - 1.0);
+                        $workedHours = min(8.0, (float) $dtr->regular_hours);
+                        $holidayRestDayPremiums += $workedHours * $hourlyRate * $multiplier;
+                    }
+
+                    // Night Differential (10% additional)
+                    if ((float) $dtr->night_diff_hours > 0) {
+                        $nightDiffPay += (float) $dtr->night_diff_hours * $hourlyRate * 0.10;
+                    }
+                }
+
+                $absenceDeduction = $absentDays * $dailyRate;
+                $tardinessDeduction = (($tardinessMinutes + $undertimeMinutes) / 60) * $hourlyRate;
+                $gross = max(0, $basic + $otPay + $holidayRestDayPremiums + $nightDiffPay - $absenceDeduction - $tardinessDeduction);
+
+                // Statutory contributions via BenefitCalculator
+                $activeBenefits = $employee->benefits()->with('program')->get();
+                $sssProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_sss');
+                $phProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_philhealth');
+                $pagibigProg = $activeBenefits->first(fn ($b) => $b->program?->contribution_basis === 'statutory_pagibig');
+
+                $sss = $sssProg ? (float) $sssProg->employee_share : round(min($gross * 0.05, 1750), 2);
+                $philhealth = $phProg ? (float) $phProg->employee_share : round(min($gross * 0.025, 2500), 2);
+                $pagibig = $pagibigProg ? (float) $pagibigProg->employee_share : round(min($gross * 0.02, 200), 2);
+
                 $taxable = max(0, $gross - $sss - $philhealth - $pagibig);
                 $withholding = $this->withholdingTax($taxable);
                 $deductions = $sss + $philhealth + $pagibig + $withholding;
@@ -80,7 +130,22 @@ class PayrollService
                     'other_deductions' => 0,
                     'net_pay' => round($net, 2),
                     'thirteenth_month_accrual' => round($gross / 12, 2),
+                    'meta' => [
+                        'holiday_premiums' => round($holidayRestDayPremiums, 2),
+                        'night_diff_pay' => round($nightDiffPay, 2),
+                        'undertime_minutes' => $undertimeMinutes,
+                    ],
                 ]);
+
+                // LOCK DTR entries for this cutoff so they can no longer be modified without payroll rollback
+                DtrEntry::query()
+                    ->withoutEntityScope()
+                    ->where('employee_id', $employee->id)
+                    ->whereBetween('work_date', [$period->start_date, $period->end_date])
+                    ->update([
+                        'status' => DtrEntry::STATUS_LOCKED,
+                        'payroll_period_id' => $period->id,
+                    ]);
 
                 $grossTotal += $gross;
                 $deductionTotal += $deductions;
@@ -170,7 +235,7 @@ class PayrollService
 
     protected function withholdingTax(float $taxableSemiMonthly): float
     {
-        // Simplified TRAIN semi-monthly approximation
+        // TRAIN semi-monthly approximation
         if ($taxableSemiMonthly <= 10417) {
             return 0;
         }

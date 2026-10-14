@@ -15,6 +15,7 @@ class EmployeeBenefit extends Model
         'employer_share',
         'payroll_treatment',
         'effective_date',
+        'end_date',
         'notes',
     ];
 
@@ -24,7 +25,23 @@ class EmployeeBenefit extends Model
             'employee_share' => 'decimal:2',
             'employer_share' => 'decimal:2',
             'effective_date' => 'date',
+            'end_date' => 'date',
         ];
+    }
+
+    /**
+     * Whether the enrollment is in force on the given date.
+     */
+    public function isEffectiveOn(\DateTimeInterface $date): bool
+    {
+        if ($this->participation_status !== 'active') {
+            return false;
+        }
+        if ($this->effective_date && $this->effective_date->gt($date)) {
+            return false;
+        }
+
+        return ! ($this->end_date && $this->end_date->lt($date));
     }
 
     public function employee(): BelongsTo
@@ -37,4 +54,3 @@ class EmployeeBenefit extends Model
         return $this->belongsTo(BenefitProgram::class, 'benefit_program_id');
     }
 }
-

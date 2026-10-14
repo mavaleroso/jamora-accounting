@@ -4,16 +4,28 @@ namespace App\Http\Controllers\EmployeeManagement;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\Holiday;
+use App\Models\LeaveRequest;
 use App\Models\ShiftRoster;
+use App\Models\ShiftTemplate;
+use App\Services\People\AttendanceCalculator;
+use App\Services\People\EmployeeResolver;
 use App\Support\EntityContext;
 use Carbon\Carbon;
+use Carbon\CarbonPeriod;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class ShiftRosterController extends Controller
 {
+    public function __construct(
+        protected AttendanceCalculator $attendanceCalculator,
+        protected EmployeeResolver $employeeResolver
+    ) {}
+
     public function index(Request $request, EntityContext $entityContext): Response
     {
         $entityId = $entityContext->id();
@@ -25,54 +37,124 @@ class ShiftRosterController extends Controller
 
         $endOfWeek = (clone $startOfWeek)->endOfWeek();
 
-        // 7 days of the week
+        // 7 days of the week with holiday metadata
         $days = [];
         for ($i = 0; $i < 7; $i++) {
             $currentDay = (clone $startOfWeek)->addDays($i);
+            $holiday = $this->attendanceCalculator->holidayFor($entityId, $currentDay);
             $days[] = [
                 'date' => $currentDay->toDateString(),
                 'dayName' => $currentDay->format('D'),
                 'fullDate' => $currentDay->format('M d, Y'),
                 'isToday' => $currentDay->isToday(),
+                'holiday' => $holiday ? [
+                    'name' => $holiday->name,
+                    'type' => $holiday->type,
+                ] : null,
             ];
         }
 
         $employees = Employee::query()
             ->where('entity_id', $entityId)
             ->where('is_active', true)
+            ->with(['defaultShiftTemplate'])
             ->orderBy('lastname')
-            ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department']);
+            ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'default_shift_template_id', 'rest_days']);
+
+        $shiftTemplates = ShiftTemplate::query()
+            ->where('entity_id', $entityId)
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get();
 
         $rosters = ShiftRoster::query()
             ->where('entity_id', $entityId)
             ->whereBetween('roster_date', [$startOfWeek->toDateString(), $endOfWeek->toDateString()])
+            ->with('template')
+            ->get();
+
+        // Active approved leaves in this period to warn managers of conflicts
+        $leaves = LeaveRequest::query()
+            ->where('entity_id', $entityId)
+            ->where('status', LeaveRequest::STATUS_APPROVED)
+            ->where(function ($q) use ($startOfWeek, $endOfWeek) {
+                $q->whereBetween('start_date', [$startOfWeek->toDateString(), $endOfWeek->toDateString()])
+                    ->orWhereBetween('end_date', [$startOfWeek->toDateString(), $endOfWeek->toDateString()])
+                    ->orWhere(function ($sub) use ($startOfWeek, $endOfWeek) {
+                        $sub->where('start_date', '<=', $startOfWeek->toDateString())
+                            ->where('end_date', '>=', $endOfWeek->toDateString());
+                    });
+            })
+            ->with('type')
             ->get();
 
         $rosterMatrix = [];
+        $totalShifts = 0;
+        $publishedCount = 0;
+        $draftCount = 0;
+
         foreach ($employees as $employee) {
             $empShifts = [];
+            $restDays = $employee->restDayNumbers();
+
             foreach ($days as $day) {
-                $shift = $rosters->first(function ($r) use ($employee, $day) {
-                    return $r->employee_id === $employee->id && $r->roster_date->toDateString() === $day['date'];
+                $dateStr = $day['date'];
+                $shift = $rosters->first(function ($r) use ($employee, $dateStr) {
+                    return $r->employee_id === $employee->id && $r->roster_date->toDateString() === $dateStr;
                 });
 
-                $empShifts[$day['date']] = $shift ? [
-                    'id' => $shift->id,
-                    'shift_name' => $shift->shift_name,
-                    'shift_start' => $shift->shift_start,
-                    'shift_end' => $shift->shift_end,
-                    'is_rest_day' => (bool) $shift->is_rest_day,
-                    'status' => $shift->status,
-                    'notes' => $shift->notes,
-                ] : [
-                    'id' => null,
-                    'shift_name' => 'Regular Shift (8:00 AM - 5:00 PM)',
-                    'shift_start' => '08:00:00',
-                    'shift_end' => '17:00:00',
-                    'is_rest_day' => false,
-                    'status' => 'draft',
-                    'notes' => null,
-                ];
+                // Check leave conflict
+                $leaveConflict = $leaves->first(function ($l) use ($employee, $dateStr) {
+                    return $l->employee_id === $employee->id
+                        && $l->start_date <= $dateStr
+                        && $l->end_date >= $dateStr;
+                });
+
+                $isEmployeeRestDay = in_array(Carbon::parse($dateStr)->dayOfWeek, $restDays, true);
+
+                if ($shift) {
+                    $totalShifts++;
+                    if ($shift->status === ShiftRoster::STATUS_PUBLISHED) {
+                        $publishedCount++;
+                    } else {
+                        $draftCount++;
+                    }
+
+                    $empShifts[$dateStr] = [
+                        'id' => $shift->id,
+                        'shift_template_id' => $shift->shift_template_id,
+                        'shift_name' => $shift->shift_name,
+                        'shift_start' => $shift->shift_start,
+                        'shift_end' => $shift->shift_end,
+                        'break_minutes' => $shift->break_minutes,
+                        'grace_minutes' => $shift->grace_minutes,
+                        'is_rest_day' => (bool) $shift->is_rest_day,
+                        'status' => $shift->status,
+                        'notes' => $shift->notes,
+                        'leave_conflict' => $leaveConflict ? [
+                            'type' => $leaveConflict->type?->name ?? 'Leave',
+                            'reason' => $leaveConflict->reason,
+                        ] : null,
+                    ];
+                } else {
+                    $defaultTpl = $employee->defaultShiftTemplate;
+                    $empShifts[$dateStr] = [
+                        'id' => null,
+                        'shift_template_id' => $defaultTpl?->id,
+                        'shift_name' => $isEmployeeRestDay ? 'Rest Day' : ($defaultTpl?->name ?? 'Regular Shift (8:00 AM - 5:00 PM)'),
+                        'shift_start' => $isEmployeeRestDay ? null : ($defaultTpl?->start_time ?? '08:00:00'),
+                        'shift_end' => $isEmployeeRestDay ? null : ($defaultTpl?->end_time ?? '17:00:00'),
+                        'break_minutes' => $defaultTpl?->break_minutes ?? 60,
+                        'grace_minutes' => $defaultTpl?->grace_minutes ?? 5,
+                        'is_rest_day' => $isEmployeeRestDay,
+                        'status' => 'draft',
+                        'notes' => null,
+                        'leave_conflict' => $leaveConflict ? [
+                            'type' => $leaveConflict->type?->name ?? 'Leave',
+                            'reason' => $leaveConflict->reason,
+                        ] : null,
+                    ];
+                }
             }
 
             $rosterMatrix[] = [
@@ -92,7 +174,13 @@ class ShiftRosterController extends Controller
             'weekStart' => $startOfWeek->toDateString(),
             'weekEnd' => $endOfWeek->toDateString(),
             'employees' => $employees,
+            'shiftTemplates' => $shiftTemplates,
             'rosterMatrix' => $rosterMatrix,
+            'summary' => [
+                'totalShifts' => $totalShifts,
+                'publishedCount' => $publishedCount,
+                'draftCount' => $draftCount,
+            ],
         ]);
     }
 
@@ -100,17 +188,41 @@ class ShiftRosterController extends Controller
     {
         $entityId = $entityContext->id();
 
+        if ($request->has('date') && ! $request->has('roster_date')) {
+            $request->merge(['roster_date' => $request->input('date')]);
+        }
+
+        $template = ! empty($request->input('shift_template_id'))
+            ? ShiftTemplate::where(function ($q) use ($entityId) {
+                $q->where('entity_id', $entityId)->orWhereNull('entity_id');
+            })->find($request->input('shift_template_id'))
+            : null;
+
+        if ($template && ! $request->filled('shift_name')) {
+            $request->merge(['shift_name' => $template->name]);
+        }
+
         $validated = $request->validate([
             'employee_id' => ['required', 'exists:employees,id'],
             'roster_date' => ['required', 'date'],
+            'shift_template_id' => ['nullable', 'exists:shift_templates,id'],
             'shift_name' => ['required', 'string', 'max:100'],
-            'shift_start' => ['nullable', 'date_format:H:i'],
-            'shift_end' => ['nullable', 'date_format:H:i'],
+            'shift_start' => ['nullable'],
+            'shift_end' => ['nullable'],
+            'break_minutes' => ['nullable', 'integer', 'min:0', 'max:240'],
+            'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:60'],
             'is_rest_day' => ['boolean'],
+            'status' => ['nullable', 'in:draft,published'],
             'notes' => ['nullable', 'string', 'max:255'],
         ]);
 
         $isRestDay = (bool) ($validated['is_rest_day'] ?? false);
+        $status = $validated['status'] ?? ShiftRoster::STATUS_PUBLISHED;
+
+        $startTime = $isRestDay ? null : ($validated['shift_start'] ?? $template?->start_time ?? '08:00:00');
+        $endTime = $isRestDay ? null : ($validated['shift_end'] ?? $template?->end_time ?? '17:00:00');
+        $breakMin = $isRestDay ? 0 : ($validated['break_minutes'] ?? $template?->break_minutes ?? 60);
+        $graceMin = $isRestDay ? 0 : ($validated['grace_minutes'] ?? $template?->grace_minutes ?? 5);
 
         ShiftRoster::updateOrCreate(
             [
@@ -119,12 +231,17 @@ class ShiftRosterController extends Controller
             ],
             [
                 'entity_id' => $entityId,
+                'shift_template_id' => $template?->id,
                 'shift_name' => $isRestDay ? 'Rest Day' : $validated['shift_name'],
-                'shift_start' => $isRestDay ? null : ($validated['shift_start'] ?? '08:00:00'),
-                'shift_end' => $isRestDay ? null : ($validated['shift_end'] ?? '17:00:00'),
+                'shift_start' => $startTime ? Carbon::parse($startTime)->format('H:i:s') : null,
+                'shift_end' => $endTime ? Carbon::parse($endTime)->format('H:i:s') : null,
+                'break_minutes' => $breakMin,
+                'grace_minutes' => $graceMin,
                 'is_rest_day' => $isRestDay,
-                'status' => 'published',
-                'notes' => $validated['notes'],
+                'status' => $status,
+                'published_at' => $status === ShiftRoster::STATUS_PUBLISHED ? now() : null,
+                'published_by' => $status === ShiftRoster::STATUS_PUBLISHED ? $request->user()?->id : null,
+                'notes' => $validated['notes'] ?? null,
             ]
         );
 
@@ -139,9 +256,111 @@ class ShiftRosterController extends Controller
 
         ShiftRoster::where('entity_id', $entityId)
             ->whereBetween('roster_date', [$weekStart, $endOfWeek])
-            ->update(['status' => 'published']);
+            ->update([
+                'status' => ShiftRoster::STATUS_PUBLISHED,
+                'published_at' => now(),
+                'published_by' => $request->user()?->id,
+            ]);
 
         return redirect()->back()->with('status', 'Roster for this week has been published.');
     }
-}
 
+    public function destroy(ShiftRoster $roster, EntityContext $entityContext): RedirectResponse
+    {
+        if ($roster->entity_id !== $entityContext->id()) {
+            abort(403);
+        }
+
+        $roster->delete();
+
+        return redirect()->back()->with('status', 'Shift assignment removed.');
+    }
+
+    /**
+     * Copy schedule from the previous week into the current week.
+     */
+    public function copyPreviousWeek(Request $request, EntityContext $entityContext): RedirectResponse
+    {
+        $entityId = $entityContext->id();
+        $targetWeekStart = Carbon::parse($request->input('week_start', now()->startOfWeek()->toDateString()))->startOfWeek();
+        $sourceWeekStart = (clone $targetWeekStart)->subWeek();
+
+        $sourceRosters = ShiftRoster::where('entity_id', $entityId)
+            ->whereBetween('roster_date', [$sourceWeekStart->toDateString(), (clone $sourceWeekStart)->endOfWeek()->toDateString()])
+            ->get();
+
+        if ($sourceRosters->isEmpty()) {
+            return redirect()->back()->withErrors(['week_start' => 'No roster shifts found in the previous week to copy.']);
+        }
+
+        foreach ($sourceRosters as $src) {
+            $dayOffset = Carbon::parse($src->roster_date)->diffInDays($sourceWeekStart);
+            $targetDate = (clone $targetWeekStart)->addDays($dayOffset)->toDateString();
+
+            ShiftRoster::updateOrCreate(
+                [
+                    'employee_id' => $src->employee_id,
+                    'roster_date' => $targetDate,
+                ],
+                [
+                    'entity_id' => $entityId,
+                    'shift_template_id' => $src->shift_template_id,
+                    'shift_name' => $src->shift_name,
+                    'shift_start' => $src->shift_start,
+                    'shift_end' => $src->shift_end,
+                    'break_minutes' => $src->break_minutes,
+                    'grace_minutes' => $src->grace_minutes,
+                    'is_rest_day' => $src->is_rest_day,
+                    'status' => ShiftRoster::STATUS_DRAFT, // pasted as draft so manager can review before publish
+                    'notes' => $src->notes ? "Copied: {$src->notes}" : 'Copied from previous week',
+                ]
+            );
+        }
+
+        return redirect()->back()->with('status', 'Previous week roster copied as drafts. Review and publish when ready.');
+    }
+
+    public function storeTemplate(Request $request, EntityContext $entityContext): RedirectResponse
+    {
+        $entityId = $entityContext->id();
+        $validated = $request->validate([
+            'code' => ['required', 'string', 'max:50'],
+            'name' => ['required', 'string', 'max:100'],
+            'start_time' => ['required', 'string'],
+            'end_time' => ['required', 'string'],
+            'break_minutes' => ['nullable', 'integer', 'min:0', 'max:300'],
+            'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:120'],
+            'color' => ['nullable', 'string', 'max:20'],
+            'is_active' => ['nullable', 'boolean'],
+        ]);
+
+        ShiftTemplate::updateOrCreate(
+            [
+                'entity_id' => $entityId,
+                'code' => $validated['code'],
+            ],
+            [
+                'name' => $validated['name'],
+                'start_time' => Carbon::parse($validated['start_time'])->format('H:i:s'),
+                'end_time' => Carbon::parse($validated['end_time'])->format('H:i:s'),
+                'break_minutes' => $validated['break_minutes'] ?? 60,
+                'grace_minutes' => $validated['grace_minutes'] ?? 5,
+                'color' => $validated['color'] ?? '#3b82f6',
+                'is_active' => $validated['is_active'] ?? true,
+            ]
+        );
+
+        return redirect()->back()->with('status', 'Shift template saved successfully.');
+    }
+
+    public function destroyTemplate(ShiftTemplate $template, EntityContext $entityContext): RedirectResponse
+    {
+        if ($template->entity_id && $template->entity_id !== $entityContext->id()) {
+            abort(403);
+        }
+
+        $template->delete();
+
+        return redirect()->back()->with('status', 'Shift template removed.');
+    }
+}

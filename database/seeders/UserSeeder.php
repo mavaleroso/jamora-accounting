@@ -10,52 +10,48 @@ use Illuminate\Support\Facades\Hash;
 class UserSeeder extends Seeder
 {
     /**
-     * Run the database seeds.
+     * Create one demo login for each application role.
+     * All seeded users use the password "password".
      */
     public function run(): void
     {
-        $user = User::query()->updateOrCreate(
-            ['username' => 'admin'],
-            [
-                'email' => 'admin@jamora.local',
-                'email_verified_at' => now(),
-                'password' => Hash::make('password'),
-                'firstname' => 'Admin',
-                'middlename' => null,
-                'lastname' => 'User',
-                'avatar' => null,
-                'address' => null,
-                'sex' => null,
-                'contact_number' => null,
-                'birthdate' => null,
-                'position' => 'Administrator',
-                'date_started' => null,
-                'status' => true,
-            ]
-        );
+        // Keep this seeder runnable on its own, including role permissions.
+        $this->call(RolesAndPermissionsSeeder::class);
 
-        $user->syncRoles([RoleEnum::Admin->value]);
+        $users = [
+            ['admin', 'Admin', null, 'User', 'Administrator', RoleEnum::Admin],
+            ['finance-manager', 'Frank', 'Finance', 'Manager', 'Finance Manager', RoleEnum::FinanceManager],
+            ['senior-accountant', 'Sally', null, 'Accountant', 'Senior Accountant', RoleEnum::SeniorAccountant],
+            ['accounting-staff', 'Alex', null, 'Accountant', 'Accounting Staff', RoleEnum::AccountingStaff],
+            ['front-desk', 'Dana', null, 'Billing', 'Front-desk Billing', RoleEnum::FrontDeskBilling],
+            ['payroll', 'Parker', null, 'Payroll', 'Payroll', RoleEnum::Payroll],
+            ['auditor', 'Avery', null, 'Auditor', 'Auditor', RoleEnum::Auditor],
+            ['management', 'Morgan', null, 'Manager', 'Management', RoleEnum::Management],
+            ['employee', 'Staff', 'Demo', 'Employee', 'Optical Staff / Assistant', RoleEnum::Employee],
+        ];
 
-        $employeeUser = User::query()->updateOrCreate(
-            ['username' => 'employee'],
-            [
-                'email' => 'employee@jamora.local',
-                'email_verified_at' => now(),
-                'password' => Hash::make('password'),
-                'firstname' => 'Staff',
-                'middlename' => 'Demo',
-                'lastname' => 'Employee',
-                'avatar' => null,
-                'address' => 'Iloilo City',
-                'sex' => 'Female',
-                'contact_number' => '09170001122',
-                'birthdate' => '1995-04-12',
-                'position' => 'Optical Staff / Assistant',
-                'date_started' => '2024-01-01',
-                'status' => true,
-            ]
-        );
+        foreach ($users as [$username, $firstname, $middlename, $lastname, $position, $role]) {
+            $user = User::query()->updateOrCreate(
+                ['username' => $username],
+                [
+                    'email' => "{$username}@jamora.local",
+                    'email_verified_at' => now(),
+                    'password' => Hash::make('password'),
+                    'firstname' => $firstname,
+                    'middlename' => $middlename,
+                    'lastname' => $lastname,
+                    'avatar' => null,
+                    'address' => $username === 'employee' ? 'Iloilo City' : null,
+                    'sex' => null,
+                    'contact_number' => null,
+                    'birthdate' => null,
+                    'position' => $position,
+                    'date_started' => null,
+                    'status' => true,
+                ]
+            );
 
-        $employeeUser->syncRoles([RoleEnum::Employee->value]);
+            $user->syncRoles([$role->value]);
+        }
     }
 }

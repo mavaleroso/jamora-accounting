@@ -30,6 +30,7 @@ const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+let sidebarContentScrollTop = 0
 
 type SidebarContext = {
   state: "expanded" | "collapsed"
@@ -365,8 +366,28 @@ function SidebarSeparator({
 }
 
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
+  const contentRef = React.useRef<HTMLDivElement>(null)
+
+  React.useLayoutEffect(() => {
+    const content = contentRef.current
+    if (!content) return
+
+    content.scrollTop = sidebarContentScrollTop
+
+    const saveScrollPosition = () => {
+      sidebarContentScrollTop = content.scrollTop
+    }
+
+    content.addEventListener("scroll", saveScrollPosition, { passive: true })
+    return () => {
+      saveScrollPosition()
+      content.removeEventListener("scroll", saveScrollPosition)
+    }
+  }, [])
+
   return (
     <div
+      ref={contentRef}
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(

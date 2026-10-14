@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
     Select,
     SelectContent,
@@ -181,8 +182,8 @@ export default function AttendancePage({
         accuracy: number;
     } | null>(null);
     const [geoStatus, setGeoStatus] = React.useState<
-        'locating' | 'in_range' | 'out_of_range' | 'permission_denied' | 'unavailable'
-    >('locating');
+        'disabled' | 'locating' | 'in_range' | 'out_of_range' | 'permission_denied' | 'unavailable'
+    >(branchLocation.geofence_enforced ? 'locating' : 'disabled');
     const [distanceToBranch, setDistanceToBranch] = React.useState<number | null>(null);
     const [geoErrorMessage, setGeoErrorMessage] = React.useState<string | null>(null);
     const [isRefreshingLocation, setIsRefreshingLocation] = React.useState(false);
@@ -196,6 +197,8 @@ export default function AttendancePage({
 
     const [isSubmittingPunch, setIsSubmittingPunch] = React.useState(false);
     const [isGeofenceSettingsOpen, setIsGeofenceSettingsOpen] = React.useState(false);
+    const [isCheckoutRemarkOpen, setIsCheckoutRemarkOpen] = React.useState(false);
+    const [checkoutRemark, setCheckoutRemark] = React.useState('');
 
     // Branch Settings Form State
     const [geofenceForm, setGeofenceForm] = React.useState({
@@ -207,6 +210,13 @@ export default function AttendancePage({
 
     // Request/Refresh GPS Coordinates
     const requestLocation = React.useCallback(() => {
+        if (!branchLocation.geofence_enforced) {
+            setGeoStatus('disabled');
+            setGeoErrorMessage(null);
+            setIsRefreshingLocation(false);
+            return;
+        }
+
         if (!navigator.geolocation) {
             setGeoStatus('unavailable');
             setGeoErrorMessage('Geolocation is not supported by your browser.');
@@ -271,6 +281,7 @@ export default function AttendancePage({
     const hasBrokenOut = Boolean(currentTodayEntry?.break_out);
     const hasBrokenIn = Boolean(currentTodayEntry?.break_in);
     const hasCheckedOut = Boolean(currentTodayEntry?.time_out);
+    const hasBreakPunchGap = !hasBrokenOut || !hasBrokenIn;
 
     // Geofence activation check
     const isLocationAuthorized =
@@ -280,12 +291,22 @@ export default function AttendancePage({
     const canCheckIn = !hasCheckedIn && isLocationAuthorized && !isSubmittingPunch;
     const canBreakOut = hasCheckedIn && !hasBrokenOut && !hasCheckedOut && isLocationAuthorized && !isSubmittingPunch;
     const canBreakIn = hasBrokenOut && !hasBrokenIn && !hasCheckedOut && isLocationAuthorized && !isSubmittingPunch;
-    const canCheckOut = hasCheckedIn && (!hasBrokenOut || hasBrokenIn) && !hasCheckedOut && isLocationAuthorized && !isSubmittingPunch;
+    const canCheckOut = hasCheckedIn && !hasCheckedOut && isLocationAuthorized && !isSubmittingPunch;
 
     // Handle Direct Punch
-    const handlePunch = (punchType: 'check_in' | 'break_out' | 'break_in' | 'check_out') => {
+    const handlePunch = (punchType: 'check_in' | 'break_out' | 'break_in' | 'check_out', notes?: string) => {
         if (!selectedEmployeeId) {
             toast.error('Please select an employee.');
+            return;
+        }
+
+        if (punchType === 'check_out' && hasBreakPunchGap && notes === undefined) {
+            setIsCheckoutRemarkOpen(true);
+            return;
+        }
+
+        if (punchType === 'check_out' && hasBreakPunchGap && !notes?.trim()) {
+            toast.error('Add a remark explaining the missing break punch before checking out.');
             return;
         }
 
@@ -303,6 +324,10 @@ export default function AttendancePage({
             punch_type: punchType,
         };
 
+        if (notes?.trim()) {
+            payload.notes = notes.trim();
+        }
+
         if (userCoords) {
             payload.latitude = userCoords.latitude;
             payload.longitude = userCoords.longitude;
@@ -318,6 +343,10 @@ export default function AttendancePage({
                     check_out: 'Check-Out recorded. Shift completed!',
                 };
                 toast.success(labels[punchType] || 'Punch registered successfully.');
+                if (punchType === 'check_out') {
+                    setIsCheckoutRemarkOpen(false);
+                    setCheckoutRemark('');
+                }
             },
             onError: (errors) => {
                 const message = (Object.values(errors)[0] as string) || 'Failed to record punch.';
@@ -527,7 +556,7 @@ export default function AttendancePage({
                                         </Badge>
                                     </div>
 
-                                    <div className="flex items-center gap-2 text-xs flex-wrap">
+                                    {branchLocation.geofence_enforced && <div className="flex items-center gap-2 text-xs flex-wrap">
                                         <span className="text-muted-foreground flex items-center gap-1">
                                             <Crosshair className="h-3.5 w-3.5" />
                                             Detected GPS:
@@ -544,12 +573,16 @@ export default function AttendancePage({
                                                 Acquiring satellite lock...
                                             </span>
                                         )}
-                                    </div>
+                                    </div>}
                                 </div>
 
                                 {/* Live Geofence Status Badge & Relocate Button */}
                                 <div className="flex items-center gap-3">
-                                    {geoStatus === 'locating' ? (
+                                    {geoStatus === 'disabled' ? (
+                                        <Badge variant="outline" className="px-3 py-1.5 text-xs font-semibold border-amber-500/40 text-amber-600">
+                                            Geofence Disabled
+                                        </Badge>
+                                    ) : geoStatus === 'locating' ? (
                                         <Badge
                                             variant="secondary"
                                             className="px-3 py-1.5 text-xs font-semibold gap-1.5 animate-pulse bg-muted"
@@ -588,7 +621,7 @@ export default function AttendancePage({
                                         </Badge>
                                     )}
 
-                                    <Button
+                                    {branchLocation.geofence_enforced && <Button
                                         size="sm"
                                         variant="outline"
                                         onClick={requestLocation}
@@ -600,7 +633,7 @@ export default function AttendancePage({
                                             className={`h-3.5 w-3.5 ${isRefreshingLocation ? 'animate-spin text-primary' : ''}`}
                                         />
                                         <span className="hidden sm:inline">Relocate</span>
-                                    </Button>
+                                    </Button>}
                                 </div>
                             </div>
 
@@ -1123,6 +1156,53 @@ export default function AttendancePage({
                     </CardContent>
                 </Card>
             </div>
+
+            <Dialog
+                open={isCheckoutRemarkOpen}
+                onOpenChange={(open) => {
+                    setIsCheckoutRemarkOpen(open);
+                    if (!open) setCheckoutRemark('');
+                }}
+            >
+                <DialogContent className="sm:max-w-[480px]">
+                    <form
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            handlePunch('check_out', checkoutRemark.trim());
+                        }}
+                    >
+                        <DialogHeader>
+                            <DialogTitle>Remark required for missing break punch</DialogTitle>
+                            <DialogDescription>
+                                You can check out now. Explain the missing break-out or break-in for today’s attendance record.
+                            </DialogDescription>
+                        </DialogHeader>
+
+                        <div className="py-4">
+                            <Label htmlFor="checkout-remark">Remark *</Label>
+                            <Textarea
+                                id="checkout-remark"
+                                value={checkoutRemark}
+                                onChange={(event) => setCheckoutRemark(event.target.value)}
+                                maxLength={500}
+                                rows={4}
+                                placeholder="Explain why the break punch was missed"
+                                required
+                                autoFocus
+                            />
+                        </div>
+
+                        <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setIsCheckoutRemarkOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button type="submit" disabled={!checkoutRemark.trim() || isSubmittingPunch}>
+                                Confirm Check-out
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             {/* MODAL: BRANCH GPS & GEOFENCE CONFIGURATION */}
             <Dialog open={isGeofenceSettingsOpen} onOpenChange={setIsGeofenceSettingsOpen}>

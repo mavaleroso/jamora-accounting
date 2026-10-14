@@ -106,6 +106,7 @@ const adminNavItems: NavItem[] = [
 export function AppSidebar() {
     const { props } = usePage<SharedData>();
     const auth = props?.auth;
+    const isEmployee = auth?.user?.roles?.includes('Employee') ?? false;
     const can = (permission: string) => hasPermission(auth, permission);
     const canAny = (permissions: string[]) => hasAnyPermission(auth, permissions);
 
@@ -231,6 +232,18 @@ export function AppSidebar() {
             default:
                 return true;
         }
+    }).map((item) => {
+        if (!isEmployee) return item;
+
+        if (item.href === '/employee-management/portal') {
+            return { ...item, title: 'Dashboard' };
+        }
+
+        if (item.href === '/employee-management/attendance') {
+            return { ...item, title: 'Clock Attendance' };
+        }
+
+        return item;
     });
 
     const filteredAdmin = adminNavItems
@@ -259,15 +272,15 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                {filteredAccounting.length > 0 && <NavMain items={filteredAccounting} title="Accounting" />}
-                {filteredBilling.length > 0 && <NavMain items={filteredBilling} title="Billing" />}
-                {filteredIntegration.length > 0 && <NavMain items={filteredIntegration} title="Inventory Integration" />}
-                {filteredAp.length > 0 && <NavMain items={filteredAp} title="Accounts Payable" />}
-                {filteredBanks.length > 0 && <NavMain items={filteredBanks} title="Banks" />}
+                {!isEmployee && filteredAccounting.length > 0 && <NavMain items={filteredAccounting} title="Accounting" />}
+                {!isEmployee && filteredBilling.length > 0 && <NavMain items={filteredBilling} title="Billing" />}
+                {!isEmployee && filteredIntegration.length > 0 && <NavMain items={filteredIntegration} title="Inventory Integration" />}
+                {!isEmployee && filteredAp.length > 0 && <NavMain items={filteredAp} title="Accounts Payable" />}
+                {!isEmployee && filteredBanks.length > 0 && <NavMain items={filteredBanks} title="Banks" />}
                 {filteredEmployeeMgmt.length > 0 && <NavMain items={filteredEmployeeMgmt} title="Employee Management" />}
-                {filteredReports.length > 0 && <NavMain items={filteredReports} title="Reports" />}
-                {filteredLibraries.length > 0 && <NavMain items={filteredLibraries} title="Libraries" />}
-                {filteredAdmin.length > 0 && <NavMain items={filteredAdmin} title="Admin" />}
+                {!isEmployee && filteredReports.length > 0 && <NavMain items={filteredReports} title="Reports" />}
+                {!isEmployee && filteredLibraries.length > 0 && <NavMain items={filteredLibraries} title="Libraries" />}
+                {!isEmployee && filteredAdmin.length > 0 && <NavMain items={filteredAdmin} title="Admin" />}
             </SidebarContent>
 
             <SidebarFooter>

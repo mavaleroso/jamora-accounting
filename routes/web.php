@@ -43,12 +43,16 @@ use App\Http\Controllers\EmployeeManagement\PeopleReportsController;
 use App\Http\Controllers\EmployeeManagement\ShiftRosterController;
 use App\Http\Controllers\Integration\InventoryIntegrationController;
 use App\Http\Controllers\Integration\OpticalSyncController;
+use App\Enums\RoleEnum;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::get('/', function () {
     if (auth()->check()) {
         $user = auth()->user();
+        if ($user->hasRole(RoleEnum::Employee->value)) {
+            return redirect()->route('employee-management.portal.index');
+        }
         if ($user->can('dashboard.view')) {
             return redirect()->route('dashboard');
         }
@@ -309,6 +313,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:roster.view|payroll.view');
             Route::post('/', 'store')->name('store')->middleware('permission:roster.manage|payroll.manage');
             Route::post('publish', 'publish')->name('publish')->middleware('permission:roster.manage|payroll.manage');
+            Route::post('copy-previous-week', 'copyPreviousWeek')->name('copy-previous')->middleware('permission:roster.manage|payroll.manage');
+            Route::post('templates', 'storeTemplate')->name('templates.store')->middleware('permission:roster.manage|payroll.manage');
+            Route::delete('templates/{template}', 'destroyTemplate')->name('templates.destroy')->middleware('permission:roster.manage|payroll.manage');
             Route::delete('{roster}', 'destroy')->name('destroy')->middleware('permission:roster.manage|payroll.manage');
         });
 
@@ -316,13 +323,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:attendance.view|payroll.view');
             Route::post('punch', 'recordPunch')->name('punch')->middleware('permission:attendance.punch|payroll.manage');
             Route::post('geofence', 'updateGeofence')->name('geofence')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('requests', 'storeRequest')->name('requests.store')->middleware('permission:attendance.view|attendance.punch|payroll.view');
+            Route::post('requests/{attendanceRequest}/review', 'reviewRequest')->name('requests.review')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('daily-close', 'runDailyClose')->name('daily-close')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/verify', 'verifyPunch')->name('verify')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('{dtr}/approve', 'approveDtr')->name('approve')->middleware('permission:attendance.manage|payroll.manage');
         });
 
         Route::controller(LeaveManagementController::class)->prefix('leave')->name('leave.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:leave.view|payroll.view');
             Route::post('/', 'store')->name('store')->middleware('permission:leave.file|payroll.manage');
+            Route::post('requests', 'store')->name('requests.store')->middleware('permission:leave.file|payroll.manage');
             Route::post('{leaveRequest}/status', 'updateStatus')->name('status')->middleware('permission:leave.approve|payroll.manage');
+            Route::post('{leaveRequest}/approve', 'approve')->name('approve')->middleware('permission:leave.approve|payroll.manage');
+            Route::post('{leaveRequest}/decline', 'decline')->name('decline')->middleware('permission:leave.approve|payroll.manage');
+            Route::post('{leaveRequest}/cancel', 'cancel')->name('cancel')->middleware('permission:leave.file|leave.approve|payroll.manage');
         });
 
         Route::controller(BenefitsAdministrationController::class)->prefix('benefits')->name('benefits.')->group(function () {
@@ -334,6 +349,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(EmployeePortalController::class)->prefix('portal')->name('portal.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:portal.view|payroll.view');
             Route::post('leave-request', 'fileLeave')->name('file-leave')->middleware('permission:leave.file|payroll.manage');
+            Route::post('leave-request/{leaveRequest}/cancel', 'cancelLeave')->name('cancel-leave')->middleware('permission:leave.file|portal.view');
         });
 
         Route::controller(PeopleReportsController::class)->prefix('reports')->name('reports.')->group(function () {
@@ -347,6 +363,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(ComplianceController::class)->prefix('compliance')->name('compliance.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:periods.view|dashboard.view|ap.view');
             Route::post('/', 'store')->name('store')->middleware('permission:periods.view|dashboard.view|ap.view');
+            Route::post('generate-calendar', 'generateCalendar')->name('generate-calendar')->middleware('permission:periods.view|dashboard.view|ap.view');
+            Route::post('{complianceItem}/status', 'updateStatus')->name('status')->middleware('permission:periods.view|dashboard.view|ap.view');
             Route::post('{complianceItem}/verify', 'verify')->name('verify')->middleware('permission:periods.view|dashboard.view|ap.view');
         });
     });

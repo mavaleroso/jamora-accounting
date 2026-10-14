@@ -32,6 +32,13 @@ beforeEach(function () {
         'journals.view', 'journals.create',
         'integration.optical.view', 'integration.optical.sync',
         'libraries.employees.manage',
+        'roster.view', 'roster.manage',
+        'attendance.view', 'attendance.punch', 'attendance.manage',
+        'leave.view', 'leave.file', 'leave.approve',
+        'portal.view',
+        'payroll.view', 'payroll.manage',
+        'periods.view', 'dashboard.view', 'ap.view',
+        'admin.roles-permissions.manage', 'admin.users.manage',
     ];
     foreach ($perms as $p) {
         Permission::findOrCreate($p, 'web');
@@ -432,19 +439,19 @@ test('coordinates-based attendance check-in, break-out, break-in, and check-out 
     $dtr->refresh();
     expect($dtr->break_in)->toBe('13:00:00');
 
-    // 5. Check-Out at 18:00:00 (Total elapsed: 08:55 to 18:00 = 9h 5m minus 1h break = 8h 5m)
+    // 5. Check-Out at 18:45:00 (Scheduled shift ends at 18:00; 45m worked after schedule qualifies as OT)
     $checkOutResponse = $this->withSession(['current_entity_id' => $this->entity->id])
         ->post('/employee-management/attendance/punch', [
             'employee_id' => $employee->id,
             'punch_type' => 'check_out',
             'latitude' => 14.5353,
             'longitude' => 120.9823,
-            'punch_time' => $today.' 18:00:00',
+            'punch_time' => $today.' 18:45:00',
         ]);
     $checkOutResponse->assertSessionHas('status');
 
     $dtr->refresh();
-    expect($dtr->time_out)->toBe('18:00:00');
+    expect($dtr->time_out)->toBe('18:45:00');
     expect((float) $dtr->regular_hours)->toBe(8.0);
     expect((float) $dtr->ot_hours)->toBeGreaterThan(0.0);
 });

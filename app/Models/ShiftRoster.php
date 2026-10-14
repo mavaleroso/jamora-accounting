@@ -10,15 +10,24 @@ class ShiftRoster extends Model
 {
     use BelongsToEntity;
 
+    public const STATUS_DRAFT = 'draft';
+
+    public const STATUS_PUBLISHED = 'published';
+
     protected $fillable = [
         'entity_id',
         'employee_id',
+        'shift_template_id',
         'roster_date',
         'shift_name',
         'shift_start',
         'shift_end',
+        'break_minutes',
+        'grace_minutes',
         'is_rest_day',
         'status',
+        'published_at',
+        'published_by',
         'notes',
     ];
 
@@ -27,6 +36,9 @@ class ShiftRoster extends Model
         return [
             'roster_date' => 'date',
             'is_rest_day' => 'boolean',
+            'break_minutes' => 'integer',
+            'grace_minutes' => 'integer',
+            'published_at' => 'datetime',
         ];
     }
 
@@ -34,5 +46,14 @@ class ShiftRoster extends Model
     {
         return $this->belongsTo(Employee::class);
     }
-}
 
+    public function template(): BelongsTo
+    {
+        return $this->belongsTo(ShiftTemplate::class, 'shift_template_id');
+    }
+
+    public function publisher(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'published_by');
+    }
+}
