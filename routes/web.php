@@ -310,7 +310,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::controller(AuditTrailsController::class)->prefix('audit-trails')->name('audit-trails.')->middleware('permission:admin.audit-trails.view')->group(function () {
             Route::get('/', 'index')->name('index');
-            Route::post('list', 'list')->name('list');
+            Route::get('export', 'export')->name('export');
         });
     });
 

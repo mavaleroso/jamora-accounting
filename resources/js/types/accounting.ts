@@ -4,20 +4,30 @@ export type AuditTrailUser = {
     username: string | null;
 };
 
+export type AuditEvent = 'created' | 'updated' | 'deleted' | 'restored' | 'request';
+
+/** One audited change (App\Http\Resources\AuditTrailResource). */
 export type AuditTrail = {
     id: number;
-    user: AuditTrailUser | null;
-    action: string | null;
-    subject_type: string | null;
-    subject_id: string | null;
-    route_name: string | null;
-    method: string | null;
-    url: string | null;
-    ip_address: string | null;
-    user_agent: string | null;
-    request_payload: Record<string, unknown> | null;
-    description: string | null;
     created_at: string | null;
+    event: AuditEvent;
+    action: string | null;
+    user: AuditTrailUser | null;
+    entity: { id: number; code: string; name: string } | null;
+    subject: { type: string | null; type_label: string | null; id: string | null; label: string | null };
+    changes: { field: string; label: string; from: unknown; to: unknown }[];
+    description: string | null;
+    source: 'web' | 'console' | string;
+    batch_id: string | null;
+    request: {
+        route: string | null;
+        method: string | null;
+        status: number | null;
+        url: string | null;
+        ip: string | null;
+        user_agent: string | null;
+        payload: Record<string, unknown> | null;
+    };
 };
 
 export type JournalEntryStatus = 'draft' | 'pending' | 'posted' | 'void';
