@@ -14,8 +14,8 @@ import {
     FileSpreadsheet,
     HeartHandshake,
     HistoryIcon,
-    KeyRound,
     Landmark,
+    LayoutDashboard,
     LayoutGrid,
     Link2,
     ListTree,
@@ -65,6 +65,7 @@ const banksNavItems: NavItem[] = [
 ];
 
 const employeeMgmtNavItems: NavItem[] = [
+    { title: 'Dashboard', href: '/employee-management', icon: LayoutDashboard },
     { title: 'Employee Directory', href: '/libraries/employees', icon: UserRound },
     { title: 'Shift & Roster', href: '/employee-management/roster', icon: CalendarCheck },
     { title: 'Time & Attendance', href: '/employee-management/attendance', icon: Clock },
@@ -73,7 +74,6 @@ const employeeMgmtNavItems: NavItem[] = [
     { title: 'Benefits Admin', href: '/employee-management/benefits', icon: HeartHandshake },
     { title: 'Employee Portal', href: '/employee-management/portal', icon: UserCheck },
     { title: 'People Reports', href: '/employee-management/reports', icon: BarChart3 },
-    { title: 'People Access', href: '/employee-management/access', icon: KeyRound },
     { title: 'Compliance Mgmt', href: '/employee-management/compliance', icon: BadgeCheck },
 ];
 
@@ -208,6 +208,18 @@ export function AppSidebar() {
 
     const filteredEmployeeMgmt = employeeMgmtNavItems.filter((item) => {
         switch (item.href) {
+            case '/employee-management':
+                // Same gate as the route: anyone who manages part of Employee Management (not self-service staff).
+                return canAny([
+                    'attendance.manage',
+                    'leave.approve',
+                    'payroll.view',
+                    'payroll.manage',
+                    'payroll.run',
+                    'roster.manage',
+                    'libraries.employees.manage',
+                    'compliance.view',
+                ]) && !isEmployee;
             case '/libraries/employees':
                 return can('libraries.employees.manage');
             case '/employee-management/roster':
@@ -225,10 +237,8 @@ export function AppSidebar() {
                 return !!auth?.user?.employee_id && canAny(['portal.view', 'payroll.view', 'payroll.manage']);
             case '/employee-management/reports':
                 return canAny(['payroll.view', 'dashboard.view']);
-            case '/employee-management/access':
-                return canAny(['admin.roles-permissions.manage', 'admin.users.manage']);
             case '/employee-management/compliance':
-                return canAny(['periods.view', 'dashboard.view', 'ap.view']);
+                return canAny(['compliance.view', 'compliance.manage', 'compliance.verify']);
             default:
                 return true;
         }

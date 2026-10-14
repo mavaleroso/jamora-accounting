@@ -1,241 +1,230 @@
-import { Head } from '@inertiajs/react';
-import {
-    BarChart3,
-    Briefcase,
-    Calendar,
-    Clock,
-    DollarSign,
-    PieChart,
-    Umbrella,
-    UserCheck,
-    Users,
-    Zap,
-} from 'lucide-react';
+import { Head, router } from '@inertiajs/react';
+import { CalendarClock, Download, Loader2, Umbrella, Users, Wallet } from 'lucide-react';
 import * as React from 'react';
-import AppLayout from '@/layouts/app-layout';
 import Heading from '@/components/heading';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { formatPhpCurrency } from '@/lib/currency';
+import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control';
+import AppLayout from '@/layouts/app-layout';
+import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
+import { AttendanceSection } from './attendance';
+import { VizStyles } from './charts';
+import { LeaveSection } from './leave';
+import { num, pct, peso, pesoShort, rangeLabel, REPORTS_URL, type Attendance, type Filters, type Leave, type Payroll, type Workforce } from './lib';
+import { PayrollSection } from './payroll';
+import { WorkforceSection } from './workforce';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management/roster' },
-    { title: 'People Reports', href: '/employee-management/reports' },
+    { title: 'Employee Management', href: '/employee-management' },
+    { title: 'People Reports', href: REPORTS_URL },
 ];
 
 type Props = {
-    headcount: {
-        total: number;
-        regular: number;
-        probationary: number;
-        byDepartment: Record<string, number>;
-    };
-    leaves: {
-        totalRequests: number;
-        byType: Record<string, { count: number; total_days: number }>;
-    };
-    attendance: {
-        totalTardyMinutes: number;
-        totalOtHours: number;
-        absencesCount: number;
-    };
-    payrollCost: {
-        totalMonthlyBasic: number;
-    };
+    filters: Filters;
+    range: { from: string; to: string };
+    presets: { key: string; label: string }[];
+    departments: string[];
+    canSeePay: boolean;
+    today: string;
+    workforce: Workforce;
+    attendance: Attendance;
+    leave: Leave;
+    payroll: Payroll | null;
 };
 
-export default function PeopleReportsPage({
-    headcount,
-    leaves,
-    attendance,
-    payrollCost,
-}: Props) {
-    const deptEntries = Object.entries(headcount.byDepartment || {});
-    const leaveEntries = Object.entries(leaves.byType || {});
+type Tab = 'workforce' | 'attendance' | 'leave' | 'payroll';
+
+const readTab = (allowed: Tab[]): Tab => {
+    try {
+        const t = new URLSearchParams(window.location.search).get('tab') as Tab;
+        return allowed.includes(t) ? t : 'workforce';
+    } catch {
+        return 'workforce';
+    }
+};
+
+export default function PeopleReportsPage({ filters, range, presets, departments, canSeePay, workforce, attendance, leave, payroll }: Props) {
+    const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
+        { key: 'workforce', label: 'Workforce', icon: Users },
+        { key: 'attendance', label: 'Attendance', icon: CalendarClock },
+        { key: 'leave', label: 'Leave', icon: Umbrella },
+        ...(canSeePay && payroll ? [{ key: 'payroll' as Tab, label: 'Payroll cost', icon: Wallet }] : []),
+    ];
+    const [tab, setTabState] = React.useState<Tab>(() => readTab(tabs.map((t) => t.key)));
+    const [loading, setLoading] = React.useState(false);
+    const [custom, setCustom] = React.useState({ from: filters.from ?? '', to: filters.to ?? '' });
+
+    const setTab = (t: Tab) => {
+        setTabState(t);
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('tab', t);
+            window.history.replaceState(window.history.state, '', url);
+        } catch {
+            /* ignore */
+        }
+    };
+
+    const params = (next: Partial<Filters>) => {
+        const f = { ...filters, ...next };
+        return {
+            preset: f.preset,
+            ...(f.preset === 'custom' ? { from: f.from, to: f.to } : {}),
+            ...(f.department ? { department: f.department } : {}),
+            tab,
+        };
+    };
+    const apply = (next: Partial<Filters>) =>
+        router.get(REPORTS_URL, params(next), { preserveScroll: true, preserveState: true, replace: true, onStart: () => setLoading(true), onFinish: () => setLoading(false) });
+
+    const exportUrl = (section: string) => {
+        const p = new URLSearchParams(Object.entries({ ...params({}), section }).filter(([, v]) => v) as [string, string][]);
+        p.delete('tab');
+        return `${REPORTS_URL}/export?${p.toString()}`;
+    };
+
+    const headDelta = workforce.active - workforce.atStart;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="People Reports & Analytics" />
+            <VizStyles />
 
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-                <div>
-                    <Heading
-                        title="People Reports & Analytics"
-                        description="Slide 61-62: Workforce headcount distribution, leave utilization, attendance analytics, and payroll cost modeling."
-                    />
-                </div>
-
-                {/* KPI Top Cards */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Active Headcount
-                            </CardTitle>
-                            <div className="rounded-full bg-primary/10 p-2 text-primary">
-                                <Users className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-primary">
-                                {headcount.total} staff
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                {headcount.regular} Regular &bull; {headcount.probationary} Probationary
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Monthly Payroll Commitment
-                            </CardTitle>
-                            <div className="rounded-full bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
-                                <DollarSign className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                                {formatPhpCurrency(payrollCost.totalMonthlyBasic)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Base monthly salary obligation
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Overtime Rendered
-                            </CardTitle>
-                            <div className="rounded-full bg-blue-500/10 p-2 text-blue-600 dark:text-blue-400">
-                                <Zap className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-blue-600 dark:text-blue-400">
-                                {Number(attendance.totalOtHours).toFixed(1)} hrs
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Total OT clocked this month
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Tardiness & Absence
-                            </CardTitle>
-                            <div className="rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
-                                <Clock className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
-                                {attendance.totalTardyMinutes}m late
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                {attendance.absencesCount} recorded absences
-                            </p>
-                        </CardContent>
-                    </Card>
-                </div>
-
-                {/* Middle Analytics Cards */}
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                    {/* Headcount by Department */}
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader>
-                            <CardTitle className="text-base font-semibold">Headcount by Department</CardTitle>
-                            <CardDescription>Staff distribution across clinical and retail functions</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {deptEntries.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">No department data recorded.</p>
-                            ) : (
-                                deptEntries.map(([dept, count]) => {
-                                    const percentage = headcount.total > 0 ? Math.round((count / headcount.total) * 100) : 0;
-                                    return (
-                                        <div key={dept} className="space-y-1.5">
-                                            <div className="flex justify-between text-xs">
-                                                <span className="font-semibold">{dept}</span>
-                                                <span className="text-muted-foreground">
-                                                    {count} staff ({percentage}%)
-                                                </span>
-                                            </div>
-                                            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                                                <div
-                                                    className="h-full rounded-full bg-primary transition-all duration-500"
-                                                    style={{ width: `${percentage}%` }}
-                                                />
-                                            </div>
-                                        </div>
-                                    );
-                                })
+            <div className="people-viz flex flex-1 flex-col gap-5 p-4 sm:p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <Heading title="People Reports & Analytics" description="Workforce, attendance, leave and payroll cost for the selected period and department." />
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="outline">
+                                <Download className="size-4" /> Export
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-60">
+                            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">CSV for the current filters</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem asChild>
+                                <a href={exportUrl('workforce')}>Headcount by department</a>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                                <a href={exportUrl('attendance')}>Attendance by employee</a>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                                <a href={exportUrl('leave')}>Leave balances</a>
+                            </DropdownMenuItem>
+                            {canSeePay && (
+                                <DropdownMenuItem asChild>
+                                    <a href={exportUrl('payroll')}>Payroll cost by department</a>
+                                </DropdownMenuItem>
                             )}
-                        </CardContent>
-                    </Card>
-
-                    {/* Leave Utilization by Type */}
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader>
-                            <CardTitle className="text-base font-semibold">Leave Utilization</CardTitle>
-                            <CardDescription>Breakdown of vacation, sick, and emergency days consumed</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow className="bg-muted/40 hover:bg-muted/40">
-                                            <TableHead>Leave Type</TableHead>
-                                            <TableHead className="text-center">Requests Filed</TableHead>
-                                            <TableHead className="text-right">Total Days Consumed</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {leaveEntries.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={3} className="h-24 text-center text-muted-foreground text-xs">
-                                                    No leave applications recorded yet.
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            leaveEntries.map(([type, stats]) => (
-                                                <TableRow key={type} className="hover:bg-muted/20">
-                                                    <TableCell className="font-medium text-xs uppercase">
-                                                        <Badge variant="outline" className="text-xs">
-                                                            {type}
-                                                        </Badge>
-                                                    </TableCell>
-                                                    <TableCell className="text-center font-mono text-xs">
-                                                        {stats.count}
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-xs font-semibold text-primary">
-                                                        {stats.total_days} days
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </CardContent>
-                    </Card>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
+
+                {/* Filters — one row above everything they control */}
+                <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm md:flex-row md:flex-wrap md:items-end">
+                    <Field label="Period">
+                        <Select value={filters.preset} onValueChange={(v) => (v === 'custom' ? apply({ preset: v, from: custom.from, to: custom.to }) : apply({ preset: v }))}>
+                            <SelectTrigger className="h-9 w-full md:w-44">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {presets.map((p) => (
+                                    <SelectItem key={p.key} value={p.key}>
+                                        {p.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </Field>
+                    {filters.preset === 'custom' && (
+                        <>
+                            <Field label="From month">
+                                <Input type="month" className="h-9 md:w-40" value={custom.from} onChange={(e) => setCustom((c) => ({ ...c, from: e.target.value }))} />
+                            </Field>
+                            <Field label="To month">
+                                <Input type="month" className="h-9 md:w-40" value={custom.to} onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))} />
+                            </Field>
+                            <Button size="sm" className="h-9" onClick={() => apply({ preset: 'custom', from: custom.from, to: custom.to })} disabled={!custom.from}>
+                                Apply
+                            </Button>
+                        </>
+                    )}
+                    <Field label="Department">
+                        <Select value={filters.department ?? 'all'} onValueChange={(v) => apply({ department: v === 'all' ? null : v })}>
+                            <SelectTrigger className="h-9 w-full md:w-56">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All departments</SelectItem>
+                                {departments.map((d) => (
+                                    <SelectItem key={d} value={d}>
+                                        {d}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </Field>
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground md:ml-auto md:pb-2">
+                        {loading && <Loader2 className="size-4 animate-spin" />}
+                        <span className="font-medium text-foreground">{rangeLabel(range.from, range.to)}</span>
+                        {filters.department && <span>· {filters.department}</span>}
+                    </p>
+                </div>
+
+                {/* Headline figures */}
+                <div className={cn('grid grid-cols-2 gap-3 md:grid-cols-3', canSeePay ? 'xl:grid-cols-6' : 'xl:grid-cols-5')}>
+                    <Kpi label="Active headcount" value={num(workforce.active)} hint={headDelta === 0 ? 'No change in period' : `${headDelta > 0 ? '+' : ''}${headDelta} since period start`} />
+                    <Kpi label="Turnover" value={pct(workforce.turnoverRate)} hint={`${workforce.separations} separation${workforce.separations === 1 ? '' : 's'} · ${workforce.hires} hire${workforce.hires === 1 ? '' : 's'}`} />
+                    <Kpi label="Attendance rate" value={pct(attendance.rate)} hint={`${num(attendance.absences)} absences · ${num(attendance.lateCount)} lates`} />
+                    <Kpi label="Overtime approved" value={`${num(attendance.otApproved, 1)}h`} hint={`${num(attendance.otRendered, 1)}h rendered`} />
+                    <Kpi label="Leave taken" value={`${num(leave.daysTaken, 1)}d`} hint={`${leave.pending} request${leave.pending === 1 ? '' : 's'} pending`} />
+                    {canSeePay && payroll && <Kpi label="Employer cost" value={pesoShort(payroll.gross + payroll.employer)} hint={`Net paid ${peso(payroll.net)}`} />}
+                </div>
+
+                <SegmentedControl aria-label="Report">
+                    {tabs.map(({ key, label, icon: Icon }) => (
+                        <SegmentedControlItem key={key} active={tab === key} onClick={() => setTab(key)}>
+                            <Icon className="size-4" /> {label}
+                        </SegmentedControlItem>
+                    ))}
+                </SegmentedControl>
+
+                <div className={cn('transition-opacity', loading && 'pointer-events-none opacity-60')}>
+                    {tab === 'workforce' && <WorkforceSection data={workforce} />}
+                    {tab === 'attendance' && <AttendanceSection data={attendance} />}
+                    {tab === 'leave' && <LeaveSection data={leave} canSeePay={canSeePay} year={Number(range.to.slice(0, 4))} />}
+                    {tab === 'payroll' && payroll && <PayrollSection data={payroll} />}
+                </div>
+
+                <p className="text-[11px] text-muted-foreground">
+                    Headcount counts employees by hire and separation dates. Attendance uses time records through yesterday. Payroll cost includes posted and paid payrolls only
+                    {canSeePay ? '' : ' and is visible to users with payroll access'}.
+                </p>
             </div>
         </AppLayout>
     );
 }
 
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div className="space-y-1">
+            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{label}</p>
+            {children}
+        </div>
+    );
+}
+
+function Kpi({ label, value, hint }: { label: string; value: string; hint: string }) {
+    return (
+        <div className="rounded-xl border bg-card p-3.5 shadow-sm">
+            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{label}</p>
+            <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">{value}</p>
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={hint}>
+                {hint}
+            </p>
+        </div>
+    );
+}

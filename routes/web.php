@@ -36,10 +36,10 @@ use App\Http\Controllers\Admin\UsersController;
 use App\Http\Controllers\EmployeeManagement\AttendanceController;
 use App\Http\Controllers\EmployeeManagement\BenefitsAdministrationController;
 use App\Http\Controllers\EmployeeManagement\ComplianceController;
+use App\Http\Controllers\EmployeeManagement\EmployeeDashboardController;
 use App\Http\Controllers\EmployeeManagement\EmployeePortalController;
 use App\Http\Controllers\EmployeeManagement\EmployeeRequestsController;
 use App\Http\Controllers\EmployeeManagement\LeaveManagementController;
-use App\Http\Controllers\EmployeeManagement\PeopleAccessController;
 use App\Http\Controllers\EmployeeManagement\PeopleReportsController;
 use App\Http\Controllers\EmployeeManagement\ShiftRosterController;
 use App\Http\Controllers\Integration\InventoryIntegrationController;
@@ -298,6 +298,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/', 'store')->name('store');
             Route::put('{role}', 'update')->name('update');
             Route::delete('{role}', 'destroy')->name('destroy');
+            Route::post('{role}/assign', 'assign')->name('assign');
         });
 
         Route::controller(PermissionsController::class)->prefix('permissions')->name('permissions.')->middleware('permission:admin.roles-permissions.manage')->group(function () {
@@ -322,6 +323,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     });
 
     Route::prefix('employee-management')->name('employee-management.')->group(function () {
+        Route::get('/', [EmployeeDashboardController::class, 'index'])->name('dashboard')
+            ->middleware('permission:attendance.manage|leave.approve|payroll.view|payroll.manage|payroll.run|roster.manage|libraries.employees.manage|compliance.view');
+
         Route::controller(ShiftRosterController::class)->prefix('roster')->name('roster.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:roster.view|payroll.view');
             Route::post('/', 'store')->name('store')->middleware('permission:roster.manage|payroll.manage');
@@ -369,8 +373,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::controller(BenefitsAdministrationController::class)->prefix('benefits')->name('benefits.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.manage|libraries.employees.manage');
-            Route::post('programs', 'storeProgram')->name('programs.store')->middleware('permission:payroll.manage|libraries.employees.manage');
-            Route::post('enroll', 'enroll')->name('enroll')->middleware('permission:payroll.manage|libraries.employees.manage');
+            Route::middleware('permission:payroll.manage|libraries.employees.manage')->group(function () {
+                Route::post('programs', 'storeProgram')->name('programs.store');
+                Route::put('programs/{benefitProgram}', 'updateProgram')->name('programs.update');
+                Route::post('programs/{benefitProgram}/toggle', 'toggleProgram')->name('programs.toggle');
+                Route::post('enroll', 'enroll')->name('enroll');
+                Route::put('enrollments/{employeeBenefit}', 'updateEnrollment')->name('enrollments.update');
+                Route::post('enrollments/{employeeBenefit}/end', 'endEnrollment')->name('enrollments.end');
+                Route::delete('enrollments/{employeeBenefit}', 'destroyEnrollment')->name('enrollments.destroy');
+            });
         });
 
         Route::controller(EmployeePortalController::class)->prefix('portal')->name('portal.')->group(function () {
@@ -379,18 +390,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::controller(PeopleReportsController::class)->prefix('reports')->name('reports.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.view|dashboard.view');
+            Route::get('export', 'export')->name('export')->middleware('permission:payroll.view|dashboard.view');
         });
 
-        Route::controller(PeopleAccessController::class)->prefix('access')->name('access.')->group(function () {
-            Route::get('/', 'index')->name('index')->middleware('permission:admin.roles-permissions.manage|admin.users.manage');
-        });
+        // People Access moved into Admin › Roles & Permissions.
+        Route::redirect('access', '/admin/roles?tab=users');
 
         Route::controller(ComplianceController::class)->prefix('compliance')->name('compliance.')->group(function () {
-            Route::get('/', 'index')->name('index')->middleware('permission:periods.view|dashboard.view|ap.view');
-            Route::post('/', 'store')->name('store')->middleware('permission:periods.view|dashboard.view|ap.view');
-            Route::post('generate-calendar', 'generateCalendar')->name('generate-calendar')->middleware('permission:periods.view|dashboard.view|ap.view');
-            Route::post('{complianceItem}/status', 'updateStatus')->name('status')->middleware('permission:periods.view|dashboard.view|ap.view');
-            Route::post('{complianceItem}/verify', 'verify')->name('verify')->middleware('permission:periods.view|dashboard.view|ap.view');
+            Route::get('/', 'index')->name('index')->middleware('permission:compliance.view|compliance.manage|compliance.verify');
+            Route::post('/', 'store')->name('store')->middleware('permission:compliance.manage');
+            Route::post('generate-calendar', 'generateCalendar')->name('generate-calendar')->middleware('permission:compliance.manage');
+            Route::post('{complianceItem}/status', 'updateStatus')->name('status')->middleware('permission:compliance.manage');
+            Route::post('{complianceItem}/verify', 'verify')->name('verify')->middleware('permission:compliance.verify');
+            Route::post('{complianceItem}/return', 'returnForCorrection')->name('return')->middleware('permission:compliance.verify');
         });
     });
 

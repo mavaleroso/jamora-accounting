@@ -133,11 +133,13 @@ return [
         'accounts' => [
             'salaries_expense' => ['code' => '6000', 'name' => 'Salaries and Wages', 'type' => 'Operating Expenses'],
             'employer_contributions' => ['code' => '6010', 'name' => 'Employer Statutory Contributions', 'type' => 'Operating Expenses'],
+            'benefits_expense' => ['code' => '6020', 'name' => 'Employee Benefits Expense', 'type' => 'Operating Expenses'],
             'sss_payable' => ['code' => '2400', 'name' => 'SSS Payable', 'type' => 'Current Liabilities'],
             'philhealth_payable' => ['code' => '2410', 'name' => 'PhilHealth Payable', 'type' => 'Current Liabilities'],
             'pagibig_payable' => ['code' => '2420', 'name' => 'Pag-IBIG Payable', 'type' => 'Current Liabilities'],
             'withholding_tax_payable' => ['code' => '2430', 'name' => 'Withholding Tax Payable', 'type' => 'Current Liabilities'],
             'other_deductions_payable' => ['code' => '2440', 'name' => 'Other Payroll Deductions Payable', 'type' => 'Current Liabilities'],
+            'benefits_payable' => ['code' => '2450', 'name' => 'Employee Benefits Payable', 'type' => 'Current Liabilities'],
             'salaries_payable' => ['code' => '2500', 'name' => 'Salaries Payable', 'type' => 'Current Liabilities'],
             'cash_in_bank' => ['code' => '1010', 'name' => 'Cash in Bank', 'type' => 'Current Assets'],
         ],

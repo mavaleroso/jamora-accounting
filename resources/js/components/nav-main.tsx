@@ -26,19 +26,27 @@ export function NavMain({
         router.visit(url);
     };
 
+    const urlOf = (href: NavItem['href']) => (typeof href === 'string' ? href : ((href as { url?: string })?.url ?? ''));
+    // Highlight only the most specific match, so a section root (e.g. /employee-management) is not
+    // also active on its child pages.
+    const activeUrl = items
+        .map((item) => urlOf(item.href))
+        .filter((url) => url && isCurrentUrl(url))
+        .sort((a, b) => b.length - a.length)[0];
+
     return (
         <SidebarGroup className="px-2 py-0">
             <SidebarGroupLabel>{title}</SidebarGroupLabel>
             <SidebarMenu>
                 {items.map((item) => {
                     const href = item.href;
-                    const url = typeof href === 'string' ? href : (href as { url?: string })?.url ?? '';
+                    const url = urlOf(href);
                     const isLibrary = url.includes('/libraries/');
                     return (
                         <SidebarMenuItem key={item.title}>
                             <SidebarMenuButton
                                 asChild
-                                isActive={isCurrentUrl(href)}
+                                isActive={url !== '' && url === activeUrl}
                                 tooltip={
                                     isLibrary
                                         ? undefined

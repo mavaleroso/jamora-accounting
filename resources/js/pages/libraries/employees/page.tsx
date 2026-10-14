@@ -63,7 +63,7 @@ import {
 } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management/roster' },
+    { title: 'Employee Management', href: '/employee-management' },
     { title: 'Employee Directory', href: '/libraries/employees' },
 ];
 

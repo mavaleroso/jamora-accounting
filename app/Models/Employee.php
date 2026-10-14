@@ -73,6 +73,21 @@ class Employee extends Model
     }
 
     /**
+     * Monthly-equivalent rate: the monthly salary, or the daily / hourly rate x days per year / 12.
+     */
+    public function monthlyRate(): float
+    {
+        $factor = (int) config('people.timekeeping.days_per_year', 313);
+        $rate = (float) $this->basic_pay;
+
+        return match ($this->pay_type) {
+            'daily' => $rate * $factor / 12,
+            'hourly' => $rate * (int) config('people.timekeeping.regular_hours_per_day', 8) * $factor / 12,
+            default => $rate,
+        };
+    }
+
+    /**
      * Weekdays (0 = Sunday) the employee is normally off when no roster says otherwise.
      *
      * @return array<int, int>

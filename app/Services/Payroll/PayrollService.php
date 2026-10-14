@@ -7,8 +7,10 @@ use App\Models\Account;
 use App\Models\AccountType;
 use App\Models\AttendanceRequest;
 use App\Models\BankAccount;
+use App\Models\BenefitProgram;
 use App\Models\DtrEntry;
 use App\Models\Employee;
+use App\Models\EmployeeBenefit;
 use App\Models\Journal;
 use App\Models\JournalEntry;
 use App\Models\LeaveRequest;
@@ -122,9 +124,11 @@ class PayrollService
      *
      *   Dr Salaries and Wages                     gross pay
      *   Dr Employer Statutory Contributions       SSS ER + EC, PhilHealth ER, Pag-IBIG ER
+     *   Dr Employee Benefits Expense              employer share of benefit programs (HMO, insurance...)
      *      Cr SSS / PhilHealth / Pag-IBIG Payable  employee + employer shares
      *      Cr Withholding Tax Payable              tax withheld
      *      Cr Other Payroll Deductions Payable     loans, cash advances...
+     *      Cr Employee Benefits Payable            benefit programs, employee + employer shares
      *      Cr Salaries Payable                     net pay
      */
     public function post(PayrollRun $run, User|int $user): PayrollRun
@@ -139,11 +143,13 @@ class PayrollService
             $lines = array_values(array_filter([
                 $this->line('salaries_expense', $sum('gross_pay'), 0, 'Gross pay'),
                 $this->line('employer_contributions', $sum('sss_er') + $sum('sss_ec') + $sum('philhealth_er') + $sum('pagibig_er'), 0, 'Employer share — SSS, EC, PhilHealth, Pag-IBIG'),
+                $this->line('benefits_expense', $sum('employer_benefits'), 0, 'Employer share — benefit programs'),
                 $this->line('sss_payable', 0, $sum('sss') + $sum('sss_er') + $sum('sss_ec'), 'SSS contributions (EE + ER + EC)'),
                 $this->line('philhealth_payable', 0, $sum('philhealth') + $sum('philhealth_er'), 'PhilHealth premiums (EE + ER)'),
                 $this->line('pagibig_payable', 0, $sum('pagibig') + $sum('pagibig_er'), 'Pag-IBIG contributions (EE + ER)'),
                 $this->line('withholding_tax_payable', 0, $sum('withholding_tax'), 'Withholding tax on compensation'),
-                $this->line('other_deductions_payable', 0, $sum('other_deductions'), 'Loans and other payroll deductions'),
+                $this->line('other_deductions_payable', 0, $sum('other_deductions') - $sum('benefit_deductions'), 'Loans and other payroll deductions'),
+                $this->line('benefits_payable', 0, $sum('benefit_deductions') + $sum('employer_benefits'), 'Benefit programs (EE + ER)'),
                 $this->line('salaries_payable', 0, $sum('net_pay'), 'Net pay'),
             ]));
 
@@ -296,6 +302,14 @@ class PayrollService
 
         $adjustments = PayrollAdjustment::query()->where('payroll_run_id', $run->id)->get()->groupBy('employee_id');
 
+        $benefits = EmployeeBenefit::query()
+            ->with('program')
+            ->whereIn('employee_id', $employees->pluck('id'))
+            ->whereHas('program', fn ($q) => $q->where('is_active', true)->whereIn('payroll_mode', [BenefitProgram::MODE_EARNING, BenefitProgram::MODE_CONTRIBUTION]))
+            ->get()
+            ->filter(fn (EmployeeBenefit $b) => $b->isEffectiveDuring($period->start_date, $period->end_date))
+            ->groupBy('employee_id');
+
         $totals = ['gross' => 0.0, 'deductions' => 0.0, 'net' => 0.0, 'employer' => 0.0];
         foreach ($employees as $employee) {
             $data = $this->calculator->compute(
@@ -304,6 +318,7 @@ class PayrollService
                 $dtrs->get($employee->id, collect()),
                 $leaves,
                 $adjustments->get($employee->id, collect()),
+                $benefits->get($employee->id, collect()),
             );
 
             $payslip = $run->payslips()->create($data);

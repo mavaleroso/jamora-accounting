@@ -137,16 +137,19 @@ class PayrollRunsController extends Controller
                 'contributions' => $col('sss', 'philhealth', 'pagibig'),
                 'withholding_tax' => $col('withholding_tax'),
                 'other_deductions' => $col('other_deductions'),
+                'benefit_deductions' => $col('benefit_deductions'),
                 'net_pay' => $col('net_pay'),
                 'employer' => $col('sss_er', 'sss_ec', 'philhealth_er', 'pagibig_er'),
+                'employer_benefits' => $col('employer_benefits'),
                 'thirteenth_month' => $col('thirteenth_month_accrual'),
             ],
-            'remittances' => [
+            'remittances' => array_values(array_filter([
                 ['agency' => 'SSS', 'form' => 'R-5 / PRN · R-3 collection list', 'employee' => $col('sss'), 'employer' => $col('sss_er'), 'ec' => $col('sss_ec')],
                 ['agency' => 'PhilHealth', 'form' => 'RF-1 / EPRS', 'employee' => $col('philhealth'), 'employer' => $col('philhealth_er'), 'ec' => 0],
                 ['agency' => 'Pag-IBIG', 'form' => 'MCRF', 'employee' => $col('pagibig'), 'employer' => $col('pagibig_er'), 'ec' => 0],
                 ['agency' => 'BIR', 'form' => '1601-C (withholding tax on compensation)', 'employee' => $col('withholding_tax'), 'employer' => 0, 'ec' => 0],
-            ],
+                ['agency' => 'Benefits', 'form' => 'Provider billing (HMO, insurance, savings plans)', 'employee' => $col('benefit_deductions'), 'employer' => $col('employer_benefits'), 'ec' => 0],
+            ], fn (array $r) => $r['agency'] !== 'Benefits' || $r['employee'] + $r['employer'] > 0)),
             'adjustmentCategories' => collect(PayrollAdjustment::CATEGORIES)->map(fn ($c, $key) => ['key' => $key, 'kind' => $c[0], 'label' => $c[1], 'taxable' => $c[2]])->values(),
             'bankAccounts' => BankAccount::query()->where('is_active', true)->orderBy('name')->get(['id', 'name', 'bank_name', 'account_number']),
         ]);
@@ -293,7 +296,7 @@ class PayrollRunsController extends Controller
             ...collect([
                 'basic_pay', 'ot_pay', 'holiday_pay', 'night_diff_pay', 'taxable_allowances', 'non_taxable_allowances',
                 'absences', 'tardiness', 'unpaid_leave', 'gross_pay', 'sss', 'sss_er', 'sss_ec', 'philhealth', 'philhealth_er',
-                'pagibig', 'pagibig_er', 'taxable_income', 'withholding_tax', 'other_deductions', 'net_pay', 'thirteenth_month_accrual',
+                'pagibig', 'pagibig_er', 'employer_benefits', 'taxable_income', 'withholding_tax', 'other_deductions', 'benefit_deductions', 'net_pay', 'thirteenth_month_accrual',
             ])->mapWithKeys(fn ($c) => [$c => (float) $p->{$c}])->all(),
             'is_mwe' => (bool) $p->is_mwe,
             'total_deductions' => $p->totalDeductions(),

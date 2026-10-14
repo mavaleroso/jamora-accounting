@@ -66,4 +66,9 @@ enum PermissionEnum: string
     case RosterView = 'roster.view';
     case RosterManage = 'roster.manage';
     case PortalView = 'portal.view';
+
+    // Statutory compliance calendar
+    case ComplianceView = 'compliance.view';
+    case ComplianceManage = 'compliance.manage';
+    case ComplianceVerify = 'compliance.verify';
 }
