@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\BenefitProgram;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Entity;
@@ -152,6 +153,60 @@ test('draft, adjust, approve, post, release — end to end', function () {
     $csv = ($this->as)()->get("/payroll/runs/{$run->id}/export/bank");
     $csv->assertOk();
     expect($csv->streamedContent())->toContain('001100220033')->toContain('CASH / CHEQUE');
+});
+
+test('benefit enrollments flow into payslips and the payroll journal entry', function () {
+    $program = fn (array $attrs) => ($this->as)()->post('/employee-management/benefits/programs', [
+        'contribution_basis' => 'fixed', 'is_taxable' => false, ...$attrs,
+    ])->assertSessionHasNoErrors();
+    $program(['code' => 'RICE', 'name' => 'Rice subsidy', 'category' => 'allowance', 'payroll_mode' => 'earning', 'default_employer_share' => 2000]);
+    $program(['code' => 'HMO', 'name' => 'HMO', 'category' => 'insurance', 'payroll_mode' => 'contribution', 'default_employee_share' => 400, 'default_employer_share' => 1200]);
+    $program(['code' => 'GYM', 'name' => 'Gym pass', 'category' => 'company', 'payroll_mode' => 'none', 'default_employer_share' => 900]);
+    ['RICE' => $rice, 'HMO' => $hmo, 'GYM' => $gym] = BenefitProgram::whereIn('code', ['RICE', 'HMO', 'GYM'])->get()->keyBy('code')->all();
+
+    foreach ([$rice, $hmo, $gym] as $p) {
+        ($this->as)()->post('/employee-management/benefits/enroll', ['employee_ids' => [$this->monthly->id], 'benefit_program_id' => $p->id, 'effective_date' => '2026-09-01'])
+            ->assertSessionHasNoErrors();
+    }
+    // Ended before the cut-off: not applied.
+    ($this->as)()->post('/employee-management/benefits/enroll', ['employee_ids' => [$this->daily->id], 'benefit_program_id' => $hmo->id, 'effective_date' => '2026-08-01', 'end_date' => '2026-09-30'])
+        ->assertSessionHasNoErrors();
+
+    // Statutory programs are computed by payroll, not enrolled.
+    $sss = BenefitProgram::create(['code' => 'SSS', 'name' => 'SSS', 'category' => 'statutory', 'contribution_basis' => 'statutory_sss', 'payroll_mode' => 'statutory']);
+    ($this->as)()->post('/employee-management/benefits/enroll', ['employee_ids' => [$this->monthly->id], 'benefit_program_id' => $sss->id])
+        ->assertSessionHasErrors('benefit_program_id');
+
+    ($this->as)()->get('/employee-management/benefits')->assertOk()
+        ->assertInertia(fn (Assert $page) => $page->component('employee-management/benefits/page')->has('enrollments', 4)->has('programs', 4));
+
+    dtr($this->daily, '2026-10-05');
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
+    $run = PayrollRun::firstOrFail();
+
+    $m = Payslip::where('employee_id', $this->monthly->id)->firstOrFail();
+    expect((float) $m->non_taxable_allowances)->toBe(1000.0)  // half of 2,000 on a semi-monthly cut-off
+        ->and((float) $m->benefit_deductions)->toBe(200.0)
+        ->and((float) $m->other_deductions)->toBe(200.0)
+        ->and((float) $m->employer_benefits)->toBe(600.0)
+        ->and((float) $m->gross_pay)->toBe(16000.0)
+        ->and(collect($m->meta['benefits'])->pluck('code')->all())->toBe(['RICE', 'HMO']);
+
+    $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
+    expect((float) $d->benefit_deductions)->toBe(0.0)->and($d->meta['benefits'])->toBe([]);
+
+    ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasNoErrors();
+    ($this->as)()->post("/payroll/runs/{$run->id}/post")->assertSessionHasNoErrors();
+
+    $entry = JournalEntry::with('lines.account')->findOrFail($run->fresh()->journal_entry_id);
+    $byCode = $entry->lines->groupBy(fn ($l) => $l->account->code)->map(fn ($ls) => round($ls->sum('debit') - $ls->sum('credit'), 2));
+    expect((float) $entry->total_debit)->toBe((float) $entry->total_credit)
+        ->and($byCode['6020'])->toBe(600.0)
+        ->and($byCode['2450'])->toBe(-800.0)
+        ->and($byCode->has('2440'))->toBeFalse();
+
+    ($this->as)()->get("/payroll/runs/{$run->id}")->assertOk()
+        ->assertInertia(fn (Assert $page) => $page->has('remittances', 5)->where('totals.employer_benefits', 600));
 });
 
 test('approval is blocked by negative net pay and returning to draft unlocks the cut-off', function () {

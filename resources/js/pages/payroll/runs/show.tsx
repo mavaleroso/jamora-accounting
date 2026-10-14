@@ -56,7 +56,23 @@ type Props = {
     };
     checks: CheckItem[];
     payslips: PayslipRow[];
-    totals: Record<'basic_pay' | 'deductions_from_basic' | 'ot_pay' | 'holiday_pay' | 'allowances' | 'gross_pay' | 'contributions' | 'withholding_tax' | 'other_deductions' | 'net_pay' | 'employer' | 'thirteenth_month', number>;
+    totals: Record<
+        | 'basic_pay'
+        | 'deductions_from_basic'
+        | 'ot_pay'
+        | 'holiday_pay'
+        | 'allowances'
+        | 'gross_pay'
+        | 'contributions'
+        | 'withholding_tax'
+        | 'other_deductions'
+        | 'benefit_deductions'
+        | 'net_pay'
+        | 'employer'
+        | 'employer_benefits'
+        | 'thirteenth_month',
+        number
+    >;
     remittances: { agency: string; form: string; employee: number; employer: number; ec: number }[];
     adjustmentCategories: AdjustmentCategory[];
     bankAccounts: { id: number; name: string; bank_name: string | null; account_number: string | null }[];
@@ -540,9 +556,11 @@ function Accounting({ run, totals }: { run: Props['run']; totals: Props['totals'
     const lines: [string, number, number][] = [
         ['6000 Salaries and Wages', totals.gross_pay, 0],
         ['6010 Employer Statutory Contributions', totals.employer, 0],
+        ['6020 Employee Benefits Expense', totals.employer_benefits, 0],
         ['2400–2420 SSS / PhilHealth / Pag-IBIG Payable', 0, contributionsPayable],
         ['2430 Withholding Tax Payable', 0, totals.withholding_tax],
-        ['2440 Other Payroll Deductions Payable', 0, totals.other_deductions],
+        ['2440 Other Payroll Deductions Payable', 0, totals.other_deductions - totals.benefit_deductions],
+        ['2450 Employee Benefits Payable', 0, totals.benefit_deductions + totals.employer_benefits],
         ['2500 Salaries Payable', 0, totals.net_pay],
     ];
 
@@ -571,8 +589,10 @@ function Accounting({ run, totals }: { run: Props['run']; totals: Props['totals'
                     <TableFooter>
                         <TableRow className="font-semibold">
                             <TableCell>Total</TableCell>
-                            <TableCell className={num}>{peso(totals.gross_pay + totals.employer)}</TableCell>
-                            <TableCell className={num}>{peso(contributionsPayable + totals.withholding_tax + totals.other_deductions + totals.net_pay)}</TableCell>
+                            <TableCell className={num}>{peso(totals.gross_pay + totals.employer + totals.employer_benefits)}</TableCell>
+                            <TableCell className={num}>
+                                {peso(contributionsPayable + totals.withholding_tax + totals.other_deductions + totals.employer_benefits + totals.net_pay)}
+                            </TableCell>
                         </TableRow>
                     </TableFooter>
                 </Table>

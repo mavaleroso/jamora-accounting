@@ -24,8 +24,10 @@ class RoleStoreRequest extends FormRequest
                 'max:100',
                 Rule::unique('roles', 'name'),
             ],
+            'description' => ['nullable', 'string', 'max:255'],
             'permissions' => ['nullable', 'array'],
             'permissions.*' => ['string', 'exists:permissions,name'],
+            'copy_from' => ['nullable', 'integer', 'exists:roles,id'],
         ];
     }
 }

@@ -44,6 +44,21 @@ class EmployeeBenefit extends Model
         return ! ($this->end_date && $this->end_date->lt($date));
     }
 
+    /**
+     * Whether the enrollment is in force on any day of the range.
+     */
+    public function isEffectiveDuring(\DateTimeInterface $from, \DateTimeInterface $to): bool
+    {
+        if ($this->participation_status !== 'active') {
+            return false;
+        }
+        if ($this->effective_date && $this->effective_date->gt($to)) {
+            return false;
+        }
+
+        return ! ($this->end_date && $this->end_date->lt($from));
+    }
+
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class);

@@ -252,7 +252,7 @@ export default function EmployeeRequestsPage(props: Props) {
 
 function breadcrumbs(employeeOnly: boolean): BreadcrumbItem[] {
     return [
-        { title: 'Employee Management', href: '/employee-management/roster' },
+        { title: 'Employee Management', href: '/employee-management' },
         { title: employeeOnly ? 'My Requests' : 'Employee Requests', href: REQUESTS_URL },
     ];
 }

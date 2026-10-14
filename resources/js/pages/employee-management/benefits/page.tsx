@@ -1,664 +1,697 @@
-import { Head, router } from '@inertiajs/react';
-import {
-    CreditCard,
-    DollarSign,
-    Gift,
-    HeartHandshake,
-    Layers,
-    Plus,
-    RefreshCw,
-    Shield,
-    Users,
-} from 'lucide-react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
+import { AlertTriangle, Archive, ArchiveRestore, CalendarX, Gift, HeartHandshake, Landmark, MoreHorizontal, Pencil, Plus, Search, Trash2, UserPlus, Users } from 'lucide-react';
 import * as React from 'react';
-import AppLayout from '@/layouts/app-layout';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import Heading from '@/components/heading';
-import { Badge } from '@/components/ui/badge';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
-import { formatPhpCurrency } from '@/lib/currency';
-import { toast } from '@/lib/toast';
-import type { BreadcrumbItem } from '@/types';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SegmentedControl, SegmentedControlItem, segmentedControlBadgeClass } from '@/components/ui/segmented-control';
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import AppLayout from '@/layouts/app-layout';
+import { hasAnyPermission } from '@/lib/permissions';
+import { cn } from '@/lib/utils';
+import type { BreadcrumbItem, SharedData } from '@/types';
+import { EndEnrollmentDialog, EnrollDialog, EnrollmentDialog, ModeBadge, ProgramDialog } from './components';
+import { BENEFITS_URL, CATEGORY_LABEL, fmtDate, MODE, peso, programAmounts, STATUS, TONE, type EmployeeRow, type Enrollment, type EnrollmentStatus, type Program } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management/roster' },
-    { title: 'Benefits Admin', href: '/employee-management/benefits' },
+    { title: 'Employee Management', href: '/employee-management' },
+    { title: 'Benefits Admin', href: BENEFITS_URL },
 ];
 
-type BenefitProgramItem = {
-    id: number;
-    code: string;
-    name: string;
-    category: 'statutory' | 'voluntary' | 'allowance';
-    employer_share_default: string | number;
-    employee_share_default: string | number;
-    description: string | null;
-    is_active: boolean;
-};
-
-type EnrollmentItem = {
-    id: number;
-    employee_id: number;
-    employee_name: string;
-    employee_code: string;
-    basic_pay: number;
-    program_id: number;
-    program_code: string;
-    program_name: string;
-    category: string;
-    employee_share: number;
-    employer_share: number;
-    total_contribution: number;
-    payroll_treatment: string;
-    participation_status: string;
-};
-
-type EmployeeOption = {
-    id: number;
-    employee_code: string;
-    firstname: string;
-    lastname: string;
-    position: string;
-};
-
 type Props = {
-    tab?: string;
-    programs: BenefitProgramItem[];
-    enrollments: EnrollmentItem[];
-    employees: EmployeeOption[];
-    totals?: {
-        totalEmployerExpense: number;
-        totalEmployeeDeductions: number;
-        totalContributions: number;
-    };
-    summary?: {
-        totalEmployerExpense: number;
-        totalEmployeeDeductions: number;
-        totalContributions?: number;
-        totalPrograms?: number;
-    };
+    today: string;
+    programs: Program[];
+    enrollments: Enrollment[];
+    employees: EmployeeRow[];
+    categories: string[];
 };
 
-export default function BenefitsAdministrationPage({
-    programs = [],
-    enrollments = [],
-    employees = [],
-    totals,
-    summary,
-}: Props) {
-    const kpiTotals = {
-        totalEmployerExpense: totals?.totalEmployerExpense ?? summary?.totalEmployerExpense ?? 0,
-        totalEmployeeDeductions: totals?.totalEmployeeDeductions ?? summary?.totalEmployeeDeductions ?? 0,
-        totalContributions:
-            totals?.totalContributions ??
-            summary?.totalContributions ??
-            ((totals?.totalEmployerExpense ?? summary?.totalEmployerExpense ?? 0) +
-                (totals?.totalEmployeeDeductions ?? summary?.totalEmployeeDeductions ?? 0)),
+type Tab = 'enrollments' | 'programs' | 'statutory';
+const TABS: Tab[] = ['enrollments', 'programs', 'statutory'];
+
+const readTab = (): Tab => {
+    try {
+        const t = new URLSearchParams(window.location.search).get('tab');
+        return TABS.includes(t as Tab) ? (t as Tab) : 'enrollments';
+    } catch {
+        return 'enrollments';
+    }
+};
+
+export default function BenefitsAdministrationPage({ today, programs, enrollments, employees, categories }: Props) {
+    const { auth } = usePage<SharedData>().props;
+    const canManage = hasAnyPermission(auth, ['payroll.manage', 'libraries.employees.manage']);
+
+    const [tab, setTabState] = React.useState<Tab>(readTab);
+    const [programFilter, setProgramFilter] = React.useState('all');
+    const [enrollFor, setEnrollFor] = React.useState<{ programId: number | null } | null>(null);
+    const [editing, setEditing] = React.useState<Enrollment | null>(null);
+    const [ending, setEnding] = React.useState<Enrollment | null>(null);
+    const [removing, setRemoving] = React.useState<Enrollment | null>(null);
+    const [programDialog, setProgramDialog] = React.useState<{ program: Program | null } | null>(null);
+
+    const setTab = (t: Tab) => {
+        setTabState(t);
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('tab', t);
+            window.history.replaceState(window.history.state, '', url);
+        } catch {
+            /* ignore */
+        }
     };
 
-    const [activeTab, setActiveTab] = React.useState<'enrollments' | 'programs'>('enrollments');
-    const [isEnrollModalOpen, setIsEnrollModalOpen] = React.useState(false);
-    const [isProgramModalOpen, setIsProgramModalOpen] = React.useState(false);
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const programById = React.useMemo(() => new Map(programs.map((p) => [p.id, p])), [programs]);
+    const employeeById = React.useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+    const companyPrograms = programs.filter((p) => p.payroll_mode !== 'statutory');
+    const statutoryPrograms = programs.filter((p) => p.payroll_mode === 'statutory');
 
-    // Form: Enroll Employee
-    const [enrollForm, setEnrollForm] = React.useState({
-        employee_id: employees[0]?.id ? String(employees[0].id) : '',
-        benefit_program_id: programs[0]?.id ? String(programs[0].id) : '',
-        employee_share: '0.00',
-        employer_share: '0.00',
-        payroll_treatment: 'pre_tax',
-    });
-
-    // Form: Create Program
-    const [programForm, setProgramForm] = React.useState({
-        code: '',
-        name: '',
-        category: 'statutory',
-        employee_share_default: '0.00',
-        employer_share_default: '0.00',
-        description: '',
-    });
-
-    const handleEnrollSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-
-        router.post('/employee-management/benefits/enroll', enrollForm, {
-            onSuccess: () => {
-                toast.success('Employee enrolled in benefit program.');
-                setIsEnrollModalOpen(false);
-            },
-            onError: (err) => {
-                const message = Object.values(err)[0] as string;
-                toast.error(message || 'Failed to enroll employee.');
-            },
-            onFinish: () => setIsSubmitting(false),
-        });
+    // Monthly figures for enrollments in force today.
+    const active = enrollments.filter((e) => e.status === 'active');
+    const sumBy = (rows: Enrollment[], mode: string, key: 'employee_share' | 'employer_share') =>
+        rows.filter((e) => programById.get(e.program_id)?.payroll_mode === mode).reduce((a, e) => a + e[key], 0);
+    const kpi = {
+        allowances: sumBy(active, 'earning', 'employer_share'),
+        employeeShare: sumBy(active, 'contribution', 'employee_share'),
+        employerShare: sumBy(active, 'contribution', 'employer_share'),
+        statutoryEmployer: employees.reduce((a, e) => a + e.statutory.sss.employer + e.statutory.sss.ec + e.statutory.philhealth.employer + e.statutory.pagibig.employer, 0),
+        enrolledEmployees: new Set(active.map((e) => e.employee_id)).size,
     };
+    const pendingCount = enrollments.filter((e) => e.status === 'pending').length;
 
-    const handleProgramSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-
-        router.post('/employee-management/benefits/programs', programForm, {
-            onSuccess: () => {
-                toast.success('Benefit program created.');
-                setIsProgramModalOpen(false);
-            },
-            onError: (err) => {
-                const message = Object.values(err)[0] as string;
-                toast.error(message || 'Failed to create program.');
-            },
-            onFinish: () => setIsSubmitting(false),
-        });
+    const openEnroll = (programId: number | null = null) => setEnrollFor({ programId });
+    const viewEnrollees = (programId: number) => {
+        setProgramFilter(String(programId));
+        setTab('enrollments');
     };
+    const quickStatus = (e: Enrollment, participation_status: Enrollment['participation_status']) =>
+        router.put(
+            `${BENEFITS_URL}/enrollments/${e.id}`,
+            { employee_share: e.employee_share, employer_share: e.employer_share, participation_status, effective_date: e.effective_date, end_date: e.end_date, notes: e.notes },
+            { preserveScroll: true },
+        );
+
+    const label = (e: Enrollment | null) => (e ? `${employeeById.get(e.employee_id)?.name ?? 'Employee'} · ${programById.get(e.program_id)?.name ?? 'Program'}` : '');
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Benefits Administration" />
 
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <Heading
-                            title="Benefits Administration"
-                            description="Slide 57-58: Statutory contributions (SSS, PhilHealth, Pag-IBIG) and company optical allowances."
-                        />
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            onClick={() => setIsProgramModalOpen(true)}
-                            className="gap-2"
-                        >
-                            <Gift className="h-4 w-4 text-primary" />
-                            New Benefit Program
-                        </Button>
-                        <Button
-                            onClick={() => setIsEnrollModalOpen(true)}
-                            className="gap-2 shadow-sm"
-                        >
-                            <Plus className="h-4 w-4" />
-                            Enroll Employee
-                        </Button>
-                    </div>
+            <div className="flex flex-1 flex-col gap-5 p-4 sm:p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <Heading
+                        title="Benefits Administration"
+                        description="Company benefit programs and who is enrolled. Active enrollments are applied automatically every time a payroll is computed."
+                    />
+                    {canManage && (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button variant="outline" onClick={() => setProgramDialog({ program: null })}>
+                                <Gift className="size-4" /> New program
+                            </Button>
+                            <Button onClick={() => openEnroll()} disabled={companyPrograms.every((p) => !p.is_active)}>
+                                <UserPlus className="size-4" /> Enroll employees
+                            </Button>
+                        </div>
+                    )}
                 </div>
 
-                {/* KPI Summary */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Total Employer Expense
-                            </CardTitle>
-                            <div className="rounded-full bg-primary/10 p-2 text-primary">
-                                <DollarSign className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-primary">
-                                {formatPhpCurrency(kpiTotals.totalEmployerExpense)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Monthly company-paid statutory & optical subsidies
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Employee Deductions
-                            </CardTitle>
-                            <div className="rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
-                                <CreditCard className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
-                                {formatPhpCurrency(kpiTotals.totalEmployeeDeductions)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Monthly payroll withholding deductions
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Total Remittance Fund
-                            </CardTitle>
-                            <div className="rounded-full bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
-                                <HeartHandshake className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                                {formatPhpCurrency(kpiTotals.totalContributions)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Combined employer + employee monthly pool
-                            </p>
-                        </CardContent>
-                    </Card>
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <Tile label="Allowances / month" value={peso(kpi.allowances)} hint="Paid on payslips" />
+                    <Tile label="Employee contributions / month" value={peso(kpi.employeeShare)} hint="Deducted from pay" />
+                    <Tile label="Employer premiums / month" value={peso(kpi.employerShare)} hint="Company-paid, booked to 6020" />
+                    <Tile label="Statutory employer share / month" value={peso(kpi.statutoryEmployer)} hint="SSS + EC, PhilHealth, Pag-IBIG (estimate)" />
                 </div>
 
-                {/* Tabs */}
-                <div className="flex border-b border-border">
-                    <button
-                        onClick={() => setActiveTab('enrollments')}
-                        className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                            activeTab === 'enrollments'
-                                ? 'border-primary text-primary font-semibold'
-                                : 'border-transparent text-muted-foreground hover:text-foreground'
-                        }`}
-                    >
-                        <Users className="h-4 w-4" />
-                        Active Employee Enrollments ({enrollments.length})
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('programs')}
-                        className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                            activeTab === 'programs'
-                                ? 'border-primary text-primary font-semibold'
-                                : 'border-transparent text-muted-foreground hover:text-foreground'
-                        }`}
-                    >
-                        <Shield className="h-4 w-4" />
-                        Programs Catalog ({programs.length})
-                    </button>
+                <div className={cn('flex flex-col gap-2 rounded-lg border px-3.5 py-2.5 text-sm sm:flex-row sm:items-center sm:justify-between', TONE.sky)}>
+                    <p>
+                        <span className="font-semibold">How this reaches payroll:</span> amounts are monthly — semi-monthly payrolls apply half on each cut-off. Changes take effect the next time a payroll is
+                        computed; recompute a draft to pick them up.
+                    </p>
+                    <Link href="/payroll/runs" className="shrink-0 text-xs font-semibold underline underline-offset-2">
+                        Go to Payroll
+                    </Link>
                 </div>
 
-                {/* Tab 1: Enrollments Table */}
-                {activeTab === 'enrollments' && (
-                    <Card className="border-border/80 shadow-xs">
-                        <CardContent className="p-0">
-                            <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow className="bg-muted/40 hover:bg-muted/40">
-                                            <TableHead>Employee</TableHead>
-                                            <TableHead>Program</TableHead>
-                                            <TableHead>Category</TableHead>
-                                            <TableHead className="text-right">Employee Share</TableHead>
-                                            <TableHead className="text-right">Employer Share</TableHead>
-                                            <TableHead className="text-right">Total Remittance</TableHead>
-                                            <TableHead>Payroll Treatment</TableHead>
-                                            <TableHead>Status</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {enrollments.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                                                    No employee benefit enrollments found.
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            enrollments.map((enr) => (
-                                                <TableRow key={enr.id} className="hover:bg-muted/30">
-                                                    <TableCell>
-                                                        <div className="font-semibold text-xs">
-                                                            {enr.employee_name}
-                                                        </div>
-                                                        <div className="font-mono text-[11px] text-muted-foreground">
-                                                            {enr.employee_code}
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <div className="font-medium text-xs">{enr.program_name}</div>
-                                                        <div className="font-mono text-[11px] text-muted-foreground">
-                                                            {enr.program_code}
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <Badge
-                                                            variant="outline"
-                                                            className={
-                                                                enr.category === 'statutory'
-                                                                    ? 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs'
-                                                                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-xs'
-                                                            }
-                                                        >
-                                                            {enr.category.toUpperCase()}
-                                                        </Badge>
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-xs">
-                                                        {formatPhpCurrency(enr.employee_share)}
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-xs">
-                                                        {formatPhpCurrency(enr.employer_share)}
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-xs font-semibold text-primary">
-                                                        {formatPhpCurrency(enr.total_contribution)}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <Badge variant="secondary" className="font-mono text-[10px] uppercase">
-                                                            {enr.payroll_treatment.replace('_', ' ')}
-                                                        </Badge>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <Badge
-                                                            variant="outline"
-                                                            className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-xs"
-                                                        >
-                                                            {enr.participation_status}
-                                                        </Badge>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </CardContent>
-                    </Card>
+                <SegmentedControl aria-label="Benefits views">
+                    <SegmentedControlItem active={tab === 'enrollments'} onClick={() => setTab('enrollments')}>
+                        <Users className="size-4" /> Enrollments
+                        <span className={segmentedControlBadgeClass(tab === 'enrollments')}>{enrollments.length}</span>
+                    </SegmentedControlItem>
+                    <SegmentedControlItem active={tab === 'programs'} onClick={() => setTab('programs')}>
+                        <HeartHandshake className="size-4" /> Programs
+                        <span className={segmentedControlBadgeClass(tab === 'programs')}>{companyPrograms.length}</span>
+                    </SegmentedControlItem>
+                    <SegmentedControlItem active={tab === 'statutory'} onClick={() => setTab('statutory')}>
+                        <Landmark className="size-4" /> Statutory
+                    </SegmentedControlItem>
+                </SegmentedControl>
+
+                {tab === 'enrollments' && (
+                    <EnrollmentsView
+                        enrollments={enrollments}
+                        programs={companyPrograms}
+                        programById={programById}
+                        employeeById={employeeById}
+                        programFilter={programFilter}
+                        onProgramFilter={setProgramFilter}
+                        pendingCount={pendingCount}
+                        enrolledEmployees={kpi.enrolledEmployees}
+                        totalEmployees={employees.length}
+                        canManage={canManage}
+                        onEnroll={() => openEnroll(programFilter !== 'all' ? Number(programFilter) : null)}
+                        onEdit={setEditing}
+                        onEnd={setEnding}
+                        onRemove={setRemoving}
+                        onStatus={quickStatus}
+                    />
                 )}
 
-                {/* Tab 2: Programs Catalog */}
-                {activeTab === 'programs' && (
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {programs.map((prog) => (
-                            <Card key={prog.id} className="border-border/80 shadow-xs">
-                                <CardHeader className="flex flex-row items-start justify-between pb-2">
-                                    <div>
-                                        <CardTitle className="text-base font-semibold">{prog.name}</CardTitle>
-                                        <div className="font-mono text-xs text-muted-foreground">{prog.code}</div>
-                                    </div>
-                                    <Badge
-                                        variant="outline"
-                                        className={
-                                            prog.category === 'statutory'
-                                                ? 'border-blue-500/30 bg-blue-500/10 text-blue-700'
-                                                : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700'
-                                        }
-                                    >
-                                        {prog.category.toUpperCase()}
-                                    </Badge>
-                                </CardHeader>
-                                <CardContent className="space-y-3">
-                                    <p className="text-xs text-muted-foreground line-clamp-2">
-                                        {prog.description || 'Statutory contribution or company allowance.'}
-                                    </p>
-                                    <div className="rounded-lg border border-border/80 bg-muted/30 p-2.5 text-xs space-y-1 font-mono">
-                                        <div className="flex justify-between">
-                                            <span className="text-muted-foreground">Default EE Share:</span>
-                                            <span className="font-semibold">{formatPhpCurrency(prog.employee_share_default)}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-muted-foreground">Default ER Share:</span>
-                                            <span className="font-semibold">{formatPhpCurrency(prog.employer_share_default)}</span>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        ))}
-                    </div>
+                {tab === 'programs' && (
+                    <ProgramsView
+                        programs={companyPrograms}
+                        canManage={canManage}
+                        onNew={() => setProgramDialog({ program: null })}
+                        onEdit={(p) => setProgramDialog({ program: p })}
+                        onEnroll={(p) => openEnroll(p.id)}
+                        onView={(p) => viewEnrollees(p.id)}
+                    />
                 )}
+
+                {tab === 'statutory' && <StatutoryView employees={employees} programs={statutoryPrograms} />}
             </div>
 
-            {/* Modal: Enroll Employee */}
-            <Dialog open={isEnrollModalOpen} onOpenChange={setIsEnrollModalOpen}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <form onSubmit={handleEnrollSubmit}>
-                        <DialogHeader>
-                            <DialogTitle>Enroll Employee in Benefit Program</DialogTitle>
-                            <DialogDescription>
-                                Set contribution amounts and payroll deduction treatment.
-                            </DialogDescription>
-                        </DialogHeader>
-
-                        <div className="grid gap-4 py-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="enroll_emp">Employee *</Label>
-                                <Select
-                                    value={enrollForm.employee_id}
-                                    onValueChange={(val) => setEnrollForm({ ...enrollForm, employee_id: val })}
-                                >
-                                    <SelectTrigger id="enroll_emp">
-                                        <SelectValue placeholder="Select employee" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {employees.map((emp) => (
-                                            <SelectItem key={emp.id} value={String(emp.id)}>
-                                                {emp.firstname} {emp.lastname} ({emp.position})
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="enroll_prog">Benefit Program *</Label>
-                                <Select
-                                    value={enrollForm.benefit_program_id}
-                                    onValueChange={(val) => {
-                                        const prog = programs.find((p) => String(p.id) === val);
-                                        setEnrollForm({
-                                            ...enrollForm,
-                                            benefit_program_id: val,
-                                            employee_share: prog ? String(prog.employee_share_default) : '0.00',
-                                            employer_share: prog ? String(prog.employer_share_default) : '0.00',
-                                        });
-                                    }}
-                                >
-                                    <SelectTrigger id="enroll_prog">
-                                        <SelectValue placeholder="Select program" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {programs.map((p) => (
-                                            <SelectItem key={p.id} value={String(p.id)}>
-                                                {p.name} ({p.code})
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="ee_share">Employee Share (PHP) *</Label>
-                                    <Input
-                                        id="ee_share"
-                                        type="number"
-                                        step="0.01"
-                                        value={enrollForm.employee_share}
-                                        onChange={(e) =>
-                                            setEnrollForm({ ...enrollForm, employee_share: e.target.value })
-                                        }
-                                        required
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="er_share">Employer Share (PHP) *</Label>
-                                    <Input
-                                        id="er_share"
-                                        type="number"
-                                        step="0.01"
-                                        value={enrollForm.employer_share}
-                                        onChange={(e) =>
-                                            setEnrollForm({ ...enrollForm, employer_share: e.target.value })
-                                        }
-                                        required
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="payroll_treatment">Payroll Treatment</Label>
-                                <Select
-                                    value={enrollForm.payroll_treatment}
-                                    onValueChange={(val) =>
-                                        setEnrollForm({ ...enrollForm, payroll_treatment: val })
-                                    }
-                                >
-                                    <SelectTrigger id="payroll_treatment">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="pre_tax">Pre-Tax Deduction (Statutory SSS/PH/PI)</SelectItem>
-                                        <SelectItem value="post_tax">Post-Tax Voluntary Deduction</SelectItem>
-                                        <SelectItem value="company_paid">Company-Paid (Non-taxable Allowance)</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        </div>
-
-                        <DialogFooter>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsEnrollModalOpen(false)}
-                                disabled={isSubmitting}
-                            >
-                                Cancel
-                            </Button>
-                            <Button type="submit" disabled={isSubmitting}>
-                                {isSubmitting ? 'Enrolling...' : 'Save Enrollment'}
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
-
-            {/* Modal: Create Program */}
-            <Dialog open={isProgramModalOpen} onOpenChange={setIsProgramModalOpen}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <form onSubmit={handleProgramSubmit}>
-                        <DialogHeader>
-                            <DialogTitle>Create Benefit Program</DialogTitle>
-                            <DialogDescription>
-                                Add a new statutory tier or company optical allowance program.
-                            </DialogDescription>
-                        </DialogHeader>
-
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="prog_code">Program Code *</Label>
-                                    <Input
-                                        id="prog_code"
-                                        placeholder="e.g. SSS-2026, EYEWEAR"
-                                        value={programForm.code}
-                                        onChange={(e) => setProgramForm({ ...programForm, code: e.target.value })}
-                                        required
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="prog_cat">Category *</Label>
-                                    <Select
-                                        value={programForm.category}
-                                        onValueChange={(val) => setProgramForm({ ...programForm, category: val })}
-                                    >
-                                        <SelectTrigger id="prog_cat">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="statutory">Statutory (Govt Mandated)</SelectItem>
-                                            <SelectItem value="allowance">Company Allowance / Subsidy</SelectItem>
-                                            <SelectItem value="voluntary">Voluntary Savings</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="prog_name">Program Name *</Label>
-                                <Input
-                                    id="prog_name"
-                                    placeholder="e.g. Annual Eyewear & Lens Subsidy"
-                                    value={programForm.name}
-                                    onChange={(e) => setProgramForm({ ...programForm, name: e.target.value })}
-                                    required
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="ee_def">Default EE Share (PHP)</Label>
-                                    <Input
-                                        id="ee_def"
-                                        type="number"
-                                        step="0.01"
-                                        value={programForm.employee_share_default}
-                                        onChange={(e) =>
-                                            setProgramForm({ ...programForm, employee_share_default: e.target.value })
-                                        }
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="er_def">Default ER Share (PHP)</Label>
-                                    <Input
-                                        id="er_def"
-                                        type="number"
-                                        step="0.01"
-                                        value={programForm.employer_share_default}
-                                        onChange={(e) =>
-                                            setProgramForm({ ...programForm, employer_share_default: e.target.value })
-                                        }
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="prog_desc">Description / Rules</Label>
-                                <Textarea
-                                    id="prog_desc"
-                                    placeholder="State eligibility criteria, voucher value, or statutory guidelines..."
-                                    value={programForm.description}
-                                    onChange={(e) => setProgramForm({ ...programForm, description: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <DialogFooter>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsProgramModalOpen(false)}
-                                disabled={isSubmitting}
-                            >
-                                Cancel
-                            </Button>
-                            <Button type="submit" disabled={isSubmitting}>
-                                {isSubmitting ? 'Creating...' : 'Create Program'}
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
+            {canManage && (
+                <>
+                    <EnrollDialog
+                        open={enrollFor !== null}
+                        onOpenChange={(o) => !o && setEnrollFor(null)}
+                        programs={programs}
+                        employees={employees}
+                        enrollments={enrollments}
+                        programId={enrollFor?.programId ?? null}
+                        today={today}
+                    />
+                    <EnrollmentDialog
+                        enrollment={editing}
+                        program={editing ? programById.get(editing.program_id) : undefined}
+                        employee={editing ? employeeById.get(editing.employee_id) : undefined}
+                        onClose={() => setEditing(null)}
+                    />
+                    <EndEnrollmentDialog enrollment={ending} label={label(ending)} today={today} onClose={() => setEnding(null)} />
+                    <ProgramDialog open={programDialog !== null} program={programDialog?.program ?? null} categories={categories} onClose={() => setProgramDialog(null)} />
+                    <ConfirmDialog
+                        open={removing !== null}
+                        onOpenChange={(o) => !o && setRemoving(null)}
+                        title="Remove enrollment?"
+                        description={`${label(removing)}. Use this for mistakes only — payslips already computed keep their amounts. To stop a real enrollment, end it instead so the history stays.`}
+                        confirmLabel="Remove"
+                        variant="destructive"
+                        onConfirm={() => removing && router.delete(`${BENEFITS_URL}/enrollments/${removing.id}`, { preserveScroll: true })}
+                    />
+                </>
+            )}
         </AppLayout>
     );
 }
 
+function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+    return (
+        <div className="rounded-xl border bg-card p-3.5 shadow-sm">
+            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{label}</p>
+            <p className="mt-1 font-mono text-xl font-semibold tabular-nums">{value}</p>
+            {hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p>}
+        </div>
+    );
+}
+
+function StatusBadge({ status }: { status: EnrollmentStatus }) {
+    const s = STATUS[status];
+    return (
+        <span title={s.hint} className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium', TONE[s.tone])}>
+            {s.label}
+        </span>
+    );
+}
+
+const fmtDay = (d: string) => fmtDate(d, { month: 'short', day: 'numeric', year: 'numeric' });
+
+function coverage(e: Enrollment) {
+    if (e.effective_date && e.end_date) return `${fmtDay(e.effective_date)} – ${fmtDay(e.end_date)}`;
+    if (e.end_date) return `Until ${fmtDay(e.end_date)}`;
+    if (e.effective_date) return `Since ${fmtDay(e.effective_date)}`;
+    return '—';
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Enrollments                                                                                     */
+/* ---------------------------------------------------------------------------------------------- */
+
+const STATUS_FILTERS: { key: 'current' | EnrollmentStatus | 'all'; label: string }[] = [
+    { key: 'current', label: 'Current' },
+    { key: 'pending', label: 'Pending' },
+    { key: 'waived', label: 'Waived' },
+    { key: 'ended', label: 'Ended' },
+    { key: 'all', label: 'All' },
+];
+
+function EnrollmentsView({
+    enrollments,
+    programs,
+    programById,
+    employeeById,
+    programFilter,
+    onProgramFilter,
+    pendingCount,
+    enrolledEmployees,
+    totalEmployees,
+    canManage,
+    onEnroll,
+    onEdit,
+    onEnd,
+    onRemove,
+    onStatus,
+}: {
+    enrollments: Enrollment[];
+    programs: Program[];
+    programById: Map<number, Program>;
+    employeeById: Map<number, EmployeeRow>;
+    programFilter: string;
+    onProgramFilter: (v: string) => void;
+    pendingCount: number;
+    enrolledEmployees: number;
+    totalEmployees: number;
+    canManage: boolean;
+    onEnroll: () => void;
+    onEdit: (e: Enrollment) => void;
+    onEnd: (e: Enrollment) => void;
+    onRemove: (e: Enrollment) => void;
+    onStatus: (e: Enrollment, s: Enrollment['participation_status']) => void;
+}) {
+    const [query, setQuery] = React.useState('');
+    const [status, setStatus] = React.useState<(typeof STATUS_FILTERS)[number]['key']>('current');
+
+    const rows = enrollments.filter((e) => {
+        const emp = employeeById.get(e.employee_id);
+        const q = query.trim().toLowerCase();
+        if (q && ![emp?.name, emp?.employee_code, emp?.department].some((v) => v?.toLowerCase().includes(q))) return false;
+        if (programFilter !== 'all' && String(e.program_id) !== programFilter) return false;
+        if (status === 'current') return e.status === 'active' || e.status === 'scheduled';
+        return status === 'all' || e.status === status;
+    });
+
+    const num = 'text-right font-mono text-sm tabular-nums';
+    const totals = rows.reduce(
+        (a, e) => {
+            const earning = programById.get(e.program_id)?.payroll_mode === 'earning';
+            return { employee: a.employee + (earning ? 0 : e.employee_share), employer: a.employer + e.employer_share };
+        },
+        { employee: 0, employer: 0 },
+    );
+
+    return (
+        <section className="rounded-xl border bg-card shadow-sm">
+            <header className="flex flex-col gap-2 border-b px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-1 flex-wrap items-center gap-2">
+                    <div className="relative w-full sm:w-64">
+                        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search employee or department" className="pl-8" />
+                    </div>
+                    <Select value={programFilter} onValueChange={onProgramFilter}>
+                        <SelectTrigger className="w-full sm:w-56">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All programs</SelectItem>
+                            {programs.map((p) => (
+                                <SelectItem key={p.id} value={String(p.id)}>
+                                    {p.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <div className="flex flex-wrap gap-1">
+                        {STATUS_FILTERS.map((f) => (
+                            <Button key={f.key} size="sm" variant={status === f.key ? 'default' : 'ghost'} className="h-8" onClick={() => setStatus(f.key)}>
+                                {f.label}
+                                {f.key === 'pending' && pendingCount > 0 && <span className="ml-0.5 rounded-full bg-amber-500 px-1.5 text-[10px] text-white">{pendingCount}</span>}
+                            </Button>
+                        ))}
+                    </div>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                    {enrolledEmployees} of {totalEmployees} employees enrolled in at least one program
+                </span>
+            </header>
+
+            {rows.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 px-4 py-14 text-center">
+                    <Users className="size-8 text-muted-foreground/50" />
+                    <div>
+                        <p className="text-sm font-medium">{enrollments.length === 0 ? 'No one is enrolled yet' : 'No enrollments match these filters'}</p>
+                        <p className="text-xs text-muted-foreground">
+                            {enrollments.length === 0 ? 'Enroll employees in a program to start applying it to payroll.' : 'Try another status or program.'}
+                        </p>
+                    </div>
+                    {canManage && programs.some((p) => p.is_active) && (
+                        <Button size="sm" onClick={onEnroll}>
+                            <UserPlus className="size-4" /> Enroll employees
+                        </Button>
+                    )}
+                </div>
+            ) : (
+                <div className="overflow-x-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="bg-muted/40 hover:bg-muted/40">
+                                <TableHead>Employee</TableHead>
+                                <TableHead>Program</TableHead>
+                                <TableHead className="text-right">Employee / mo</TableHead>
+                                <TableHead className="text-right">Employer / mo</TableHead>
+                                <TableHead>Coverage</TableHead>
+                                <TableHead>Status</TableHead>
+                                {canManage && <TableHead className="w-10" />}
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {rows.map((e) => {
+                                const emp = employeeById.get(e.employee_id);
+                                const prog = programById.get(e.program_id);
+                                const earning = prog?.payroll_mode === 'earning';
+                                return (
+                                    <TableRow key={e.id} className={cn((e.status === 'ended' || e.status === 'waived') && 'text-muted-foreground')}>
+                                        <TableCell>
+                                            <div className="flex items-center gap-2.5">
+                                                <PersonAvatar src={emp?.avatar_url} seed={emp?.employee_code ?? String(e.employee_id)} name={emp?.name} className="size-8" />
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-sm font-medium">{emp?.name ?? '—'}</p>
+                                                    <p className="truncate text-[11px] text-muted-foreground">
+                                                        {emp?.employee_code} · {emp?.position ?? '—'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <p className="text-sm">{prog?.name}</p>
+                                            <div className="mt-0.5 flex items-center gap-1.5">
+                                                {prog && <ModeBadge mode={prog.payroll_mode} />}
+                                                {prog && !prog.is_active && <span className="text-[10px] text-muted-foreground">archived</span>}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className={num}>{earning ? <span className="text-muted-foreground">—</span> : peso(e.employee_share)}</TableCell>
+                                        <TableCell className={num}>
+                                            {peso(e.employer_share)}
+                                            {earning && <span className="block text-[10px] text-muted-foreground">allowance</span>}
+                                        </TableCell>
+                                        <TableCell className="text-sm whitespace-nowrap">
+                                            {coverage(e)}
+                                            {e.notes && <p className="max-w-56 truncate text-[11px] text-muted-foreground" title={e.notes}>{e.notes}</p>}
+                                        </TableCell>
+                                        <TableCell>
+                                            <StatusBadge status={e.status} />
+                                        </TableCell>
+                                        {canManage && (
+                                            <TableCell>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button size="icon" variant="ghost" className="size-8" aria-label={`Actions for ${emp?.name}`}>
+                                                            <MoreHorizontal className="size-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem onSelect={() => onEdit(e)}>
+                                                            <Pencil className="size-4" /> Edit
+                                                        </DropdownMenuItem>
+                                                        {e.participation_status === 'pending' && e.status !== 'ended' && (
+                                                            <DropdownMenuItem onSelect={() => onStatus(e, 'active')}>
+                                                                <Plus className="size-4" /> Activate
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {e.participation_status === 'waived' && e.status !== 'ended' && (
+                                                            <DropdownMenuItem onSelect={() => onStatus(e, 'active')}>
+                                                                <Plus className="size-4" /> Reactivate
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {e.participation_status !== 'waived' && e.status !== 'ended' && (
+                                                            <DropdownMenuItem onSelect={() => onStatus(e, 'waived')}>
+                                                                <Archive className="size-4" /> Mark waived
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {e.status !== 'ended' && (
+                                                            <DropdownMenuItem onSelect={() => onEnd(e)}>
+                                                                <CalendarX className="size-4" /> End enrollment…
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        <DropdownMenuSeparator />
+                                                        <DropdownMenuItem variant="destructive" onSelect={() => onRemove(e)}>
+                                                            <Trash2 className="size-4" /> Remove
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </TableCell>
+                                        )}
+                                    </TableRow>
+                                );
+                            })}
+                        </TableBody>
+                        <TableFooter>
+                            <TableRow className="font-semibold">
+                                <TableCell colSpan={2}>
+                                    {rows.length} enrollment{rows.length === 1 ? '' : 's'}
+                                </TableCell>
+                                <TableCell className={num}>{peso(totals.employee)}</TableCell>
+                                <TableCell className={num}>{peso(totals.employer)}</TableCell>
+                                <TableCell colSpan={canManage ? 3 : 2} />
+                            </TableRow>
+                        </TableFooter>
+                    </Table>
+                </div>
+            )}
+        </section>
+    );
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Programs                                                                                        */
+/* ---------------------------------------------------------------------------------------------- */
+
+function ProgramsView({
+    programs,
+    canManage,
+    onNew,
+    onEdit,
+    onEnroll,
+    onView,
+}: {
+    programs: Program[];
+    canManage: boolean;
+    onNew: () => void;
+    onEdit: (p: Program) => void;
+    onEnroll: (p: Program) => void;
+    onView: (p: Program) => void;
+}) {
+    const [showArchived, setShowArchived] = React.useState(false);
+    const archived = programs.filter((p) => !p.is_active).length;
+    const shown = programs.filter((p) => showArchived || p.is_active);
+
+    return (
+        <div className="space-y-3">
+            {archived > 0 && (
+                <div className="flex justify-end">
+                    <Button size="sm" variant="ghost" onClick={() => setShowArchived((v) => !v)}>
+                        {showArchived ? 'Hide archived' : `Show archived (${archived})`}
+                    </Button>
+                </div>
+            )}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {shown.map((p) => (
+                    <article key={p.id} className={cn('flex flex-col rounded-xl border bg-card p-4 shadow-sm', !p.is_active && 'opacity-70')}>
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                                <h3 className="truncate font-semibold">{p.name}</h3>
+                                <p className="font-mono text-[11px] text-muted-foreground">
+                                    {p.code} · {CATEGORY_LABEL[p.category] ?? p.category}
+                                    {!p.is_active && ' · archived'}
+                                </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                                <ModeBadge mode={p.payroll_mode} />
+                                {canManage && (
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button size="icon" variant="ghost" className="size-7" aria-label={`Actions for ${p.name}`}>
+                                                <MoreHorizontal className="size-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem onSelect={() => onEdit(p)}>
+                                                <Pencil className="size-4" /> Edit program
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => router.post(`${BENEFITS_URL}/programs/${p.id}/toggle`, {}, { preserveScroll: true })}>
+                                                {p.is_active ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}
+                                                {p.is_active ? 'Archive' : 'Restore'}
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                )}
+                            </div>
+                        </div>
+
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{p.description || MODE[p.payroll_mode].effect}</p>
+
+                        <dl className="mt-3 grid grid-cols-2 gap-2 rounded-lg bg-muted/40 p-2.5 text-xs">
+                            <div className="col-span-2">
+                                <dt className="text-muted-foreground">Default</dt>
+                                <dd className="font-mono font-medium">
+                                    {programAmounts(p)}
+                                    {p.payroll_mode === 'earning' && <span className="ml-1 font-sans text-muted-foreground">({p.is_taxable ? 'taxable' : 'non-taxable'})</span>}
+                                </dd>
+                            </div>
+                            <div>
+                                <dt className="text-muted-foreground">Enrolled now</dt>
+                                <dd className="font-medium">{p.enrolled}</dd>
+                            </div>
+                            <div>
+                                <dt className="text-muted-foreground">Monthly cost</dt>
+                                <dd className="font-mono font-medium">{peso(p.monthly_employer)}</dd>
+                            </div>
+                        </dl>
+
+                        <div className="mt-auto flex gap-2 pt-3">
+                            {canManage && p.is_active && (
+                                <Button size="sm" variant="outline" className="flex-1" onClick={() => onEnroll(p)}>
+                                    <UserPlus className="size-3.5" /> Enroll
+                                </Button>
+                            )}
+                            <Button size="sm" variant="ghost" className="flex-1" onClick={() => onView(p)} disabled={p.enrollments_total === 0}>
+                                <Users className="size-3.5" /> View enrollees
+                            </Button>
+                        </div>
+                    </article>
+                ))}
+
+                {canManage && (
+                    <button
+                        type="button"
+                        onClick={onNew}
+                        className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-sm text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                    >
+                        <Gift className="size-6" />
+                        <span className="font-medium">New program</span>
+                        <span className="px-6 text-center text-xs">Allowance, HMO, insurance, savings plan…</span>
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Statutory                                                                                       */
+/* ---------------------------------------------------------------------------------------------- */
+
+function StatutoryView({ employees, programs }: { employees: EmployeeRow[]; programs: Program[] }) {
+    const num = 'text-right font-mono text-sm tabular-nums';
+    const totals = employees.reduce(
+        (a, e) => {
+            const s = e.statutory;
+            return {
+                sssEe: a.sssEe + s.sss.employee,
+                sssEr: a.sssEr + s.sss.employer + s.sss.ec,
+                phEe: a.phEe + s.philhealth.employee,
+                phEr: a.phEr + s.philhealth.employer,
+                hdmfEe: a.hdmfEe + s.pagibig.employee,
+                hdmfEr: a.hdmfEr + s.pagibig.employer,
+            };
+        },
+        { sssEe: 0, sssEr: 0, phEe: 0, phEr: 0, hdmfEe: 0, hdmfEr: 0 },
+    );
+    const missing = employees.filter((e) => e.missing_ids.length > 0).length;
+
+    return (
+        <div className="space-y-3">
+            <div className="rounded-xl border bg-card p-4 text-sm shadow-sm">
+                <p className="font-semibold">{programs.map((p) => p.name).join(' · ') || 'SSS · PhilHealth · Pag-IBIG'}</p>
+                <p className="mt-1 text-muted-foreground">
+                    Mandatory for every employee and computed by payroll each cut-off — nothing to enroll. The figures below are a monthly estimate from each employee’s rate. Daily and hourly-paid
+                    staff are estimated at a full month; payroll uses what they actually earned.
+                </p>
+                {missing > 0 && (
+                    <p className={cn('mt-2 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs', TONE.amber)}>
+                        <AlertTriangle className="size-3.5" /> {missing} employee{missing === 1 ? ' is' : 's are'} missing a government ID needed for remittance.
+                    </p>
+                )}
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border bg-card shadow-sm">
+                <Table>
+                    <TableHeader>
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            <TableHead rowSpan={2}>Employee</TableHead>
+                            <TableHead rowSpan={2} className="text-right">
+                                Monthly basis
+                            </TableHead>
+                            <TableHead colSpan={2} className="border-l text-center">
+                                SSS
+                            </TableHead>
+                            <TableHead colSpan={2} className="border-l text-center">
+                                PhilHealth
+                            </TableHead>
+                            <TableHead colSpan={2} className="border-l text-center">
+                                Pag-IBIG
+                            </TableHead>
+                        </TableRow>
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            {['', '', ''].map((_, i) => (
+                                <React.Fragment key={i}>
+                                    <TableHead className="border-l text-right">EE</TableHead>
+                                    <TableHead className="text-right">ER</TableHead>
+                                </React.Fragment>
+                            ))}
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {employees.map((e) => (
+                            <TableRow key={e.id}>
+                                <TableCell>
+                                    <p className="text-sm font-medium">{e.name}</p>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        {e.employee_code}
+                                        {e.missing_ids.length > 0 && <span className="ml-1.5 text-amber-700 dark:text-amber-400">No {e.missing_ids.join(', ')}</span>}
+                                    </p>
+                                </TableCell>
+                                <TableCell className={num}>
+                                    {peso(e.monthly_rate)}
+                                    {e.pay_type !== 'monthly' && <span className="block text-[10px] text-muted-foreground">{peso(e.basic_pay)} {e.pay_type === 'daily' ? '/ day' : '/ hr'}</span>}
+                                </TableCell>
+                                <TableCell className={cn(num, 'border-l')}>{peso(e.statutory.sss.employee)}</TableCell>
+                                <TableCell className={num} title={`Incl. EC ${peso(e.statutory.sss.ec)}`}>
+                                    {peso(e.statutory.sss.employer + e.statutory.sss.ec)}
+                                </TableCell>
+                                <TableCell className={cn(num, 'border-l')}>{peso(e.statutory.philhealth.employee)}</TableCell>
+                                <TableCell className={num}>{peso(e.statutory.philhealth.employer)}</TableCell>
+                                <TableCell className={cn(num, 'border-l')}>{peso(e.statutory.pagibig.employee)}</TableCell>
+                                <TableCell className={num}>{peso(e.statutory.pagibig.employer)}</TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                    <TableFooter>
+                        <TableRow className="font-semibold">
+                            <TableCell colSpan={2}>Monthly total · {employees.length} employees</TableCell>
+                            <TableCell className={cn(num, 'border-l')}>{peso(totals.sssEe)}</TableCell>
+                            <TableCell className={num}>{peso(totals.sssEr)}</TableCell>
+                            <TableCell className={cn(num, 'border-l')}>{peso(totals.phEe)}</TableCell>
+                            <TableCell className={num}>{peso(totals.phEr)}</TableCell>
+                            <TableCell className={cn(num, 'border-l')}>{peso(totals.hdmfEe)}</TableCell>
+                            <TableCell className={num}>{peso(totals.hdmfEr)}</TableCell>
+                        </TableRow>
+                    </TableFooter>
+                </Table>
+            </div>
+            <p className="text-[11px] text-muted-foreground">SSS employer share includes EC. Rates and ceilings are set in config/people.php.</p>
+        </div>
+    );
+}

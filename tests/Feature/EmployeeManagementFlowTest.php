@@ -35,7 +35,7 @@ beforeEach(function () {
         'attendance.view', 'attendance.punch', 'attendance.manage',
         'leave.view', 'leave.file', 'leave.approve',
         'benefits.view', 'benefits.manage',
-        'compliance.view', 'compliance.manage',
+        'compliance.view', 'compliance.manage', 'compliance.verify',
         'portal.view',
         'payroll.view', 'payroll.manage',
         'periods.view', 'dashboard.view', 'ap.view',
@@ -383,14 +383,21 @@ test('compliance calendar auto-generates statutory items and progresses through 
         ->post("/employee-management/compliance/{$item->id}/status", [
             'status' => 'submitted',
             'reference_no' => 'BIR-EAFS-987654321',
+            'filed_on' => now()->toDateString(),
         ]);
     $update2->assertSessionHas('status');
     $item->refresh();
     expect($item->status)->toBe('submitted');
     expect($item->reference_no)->toBe('BIR-EAFS-987654321');
 
-    // 4. Progress status: submitted -> verified
-    $update3 = $this->withSession(['current_entity_id' => $this->entity->id])
+    // 4. The preparer cannot verify their own filing; a second person signs it off.
+    $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post("/employee-management/compliance/{$item->id}/verify")->assertSessionHasErrors('status');
+
+    $reviewer = User::factory()->create();
+    $reviewer->givePermissionTo('compliance.verify');
+    $reviewer->entities()->attach($this->entity->id);
+    $update3 = $this->actingAs($reviewer)->withSession(['current_entity_id' => $this->entity->id])
         ->post("/employee-management/compliance/{$item->id}/verify");
     $update3->assertSessionHas('status');
     $item->refresh();

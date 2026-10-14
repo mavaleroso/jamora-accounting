@@ -371,6 +371,7 @@ class DemoDataSeeder extends Seeder
             [
                 'name' => 'Social Security System (SSS)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'description' => 'Mandatory Philippine social insurance scheme',
                 'default_employee_share' => 1350.00,
                 'default_employer_share' => 2850.00,
@@ -384,6 +385,7 @@ class DemoDataSeeder extends Seeder
             [
                 'name' => 'Philippine Health Insurance (PhilHealth)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'description' => 'Mandatory national health insurance',
                 'default_employee_share' => 750.00,
                 'default_employer_share' => 750.00,
@@ -397,6 +399,7 @@ class DemoDataSeeder extends Seeder
             [
                 'name' => 'Home Development Mutual Fund (Pag-IBIG)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'description' => 'Mandatory provident & housing mutual fund',
                 'default_employee_share' => 200.00,
                 'default_employer_share' => 200.00,
@@ -410,6 +413,7 @@ class DemoDataSeeder extends Seeder
             [
                 'name' => 'Monthly Clinic Meal Allowance',
                 'category' => 'allowance',
+                'payroll_mode' => 'earning',
                 'description' => 'De minimis non-taxable clinic meal support',
                 'default_employee_share' => 0.00,
                 'default_employer_share' => 1500.00,
@@ -423,6 +427,7 @@ class DemoDataSeeder extends Seeder
             [
                 'name' => 'Annual Staff Optical & Lens Subsidy',
                 'category' => 'company',
+                'payroll_mode' => 'none', // annual grant, claimed separately
                 'description' => 'Company-provided prescription eyewear grant',
                 'default_employee_share' => 0.00,
                 'default_employer_share' => 3000.00,

@@ -166,5 +166,12 @@ class RolesAndPermissionsSeeder extends Seeder
             PermissionEnum::ReportsDailySalesView->value,
             PermissionEnum::SettingsProfileManage->value,
         ]);
+
+        // Compliance: accounting and payroll prepare and file; verification (a second person) is
+        // Finance Manager / Admin. The Auditor already sees it through the *.view permissions.
+        $seniorAccountant->givePermissionTo([PermissionEnum::ComplianceView->value, PermissionEnum::ComplianceManage->value]);
+        $payroll->givePermissionTo([PermissionEnum::ComplianceView->value, PermissionEnum::ComplianceManage->value]);
+        $accountingStaff->givePermissionTo([PermissionEnum::ComplianceView->value]);
+        $management->givePermissionTo([PermissionEnum::ComplianceView->value]);
     }
 }

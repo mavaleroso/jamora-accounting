@@ -3,11 +3,13 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToEntity;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Statutory / regulatory filing. Workflow: pending -> prepared -> submitted -> verified (no skipping).
+ * Statutory / regulatory filing. Workflow: pending -> prepared -> submitted -> verified, one step at a time;
+ * a different person verifies (segregation of duties) and may return a submitted filing for correction.
  */
 class ComplianceItem extends Model
 {
@@ -61,6 +63,27 @@ class ComplianceItem extends Model
         $idx = array_search($this->status, self::STATUSES, true);
 
         return $idx === false ? null : (self::STATUSES[$idx + 1] ?? null);
+    }
+
+    /** Filed after the due date (penalty exposure), whatever happened afterwards. */
+    public function isLate(): bool
+    {
+        return $this->submitted_at !== null && $this->due_date !== null && $this->submitted_at->toDateString() > $this->due_date->toDateString();
+    }
+
+    public function daysLate(): int
+    {
+        return $this->isLate() ? (int) $this->due_date->diffInDays($this->submitted_at->copy()->startOfDay()) : 0;
+    }
+
+    /** First day of the month this item covers ("October 2026"). */
+    public function periodStart(): ?Carbon
+    {
+        try {
+            return Carbon::parse('first day of '.$this->period)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function preparedByUser(): BelongsTo

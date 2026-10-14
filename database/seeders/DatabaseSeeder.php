@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
             PeopleSetupSeeder::class,
             EmployeeDirectorySeeder::class,
             AttendanceDemoSeeder::class,
+            PayrollDemoSeeder::class,
         ]);
     }
 }

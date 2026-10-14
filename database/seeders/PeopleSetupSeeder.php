@@ -109,6 +109,7 @@ class PeopleSetupSeeder extends Seeder
             [
                 'name' => 'Social Security System (SSS)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'contribution_basis' => 'statutory_sss',
                 'description' => 'Mandatory SSS monthly contributions and EC coverage',
                 'is_active' => true,
@@ -120,6 +121,7 @@ class PeopleSetupSeeder extends Seeder
             [
                 'name' => 'Philippine Health Insurance (PhilHealth)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'contribution_basis' => 'statutory_philhealth',
                 'description' => 'Universal Health Care statutory premium',
                 'is_active' => true,
@@ -131,6 +133,7 @@ class PeopleSetupSeeder extends Seeder
             [
                 'name' => 'Home Development Mutual Fund (Pag-IBIG)',
                 'category' => 'statutory',
+                'payroll_mode' => 'statutory',
                 'contribution_basis' => 'statutory_pagibig',
                 'description' => 'Mandatory HDMF savings contribution',
                 'is_active' => true,

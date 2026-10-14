@@ -1,4 +1,4 @@
-import { useForm } from '@inertiajs/react';
+import { Link, useForm } from '@inertiajs/react';
 import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
@@ -58,6 +58,7 @@ export function PayslipDialog({
     const days = m.days;
     const rates = m.rates;
     const adjustments = m.adjustments ?? [];
+    const benefits = m.benefits ?? [];
 
     return (
         <Dialog open={p !== null} onOpenChange={(o) => !o && onClose()}>
@@ -141,6 +142,7 @@ export function PayslipDialog({
                                     <Line label="SSS EC" value={p.sss_ec} />
                                     <Line label="PhilHealth" value={p.philhealth_er} />
                                     <Line label="Pag-IBIG" value={p.pagibig_er} />
+                                    <Line label="Benefit programs" value={p.employer_benefits} />
                                     <Line label="Total employer cost" value={p.gross_pay + p.employer_contributions} strong />
                                 </Section>
                             </div>
@@ -156,6 +158,9 @@ export function PayslipDialog({
                                         .map((a) => (
                                             <Line key={a.id} label={a.description} value={a.amount} />
                                         ))}
+                                    {benefits.map((b) => (
+                                        <Line key={`b${b.id}`} label={b.name} value={b.employee} note="benefit" />
+                                    ))}
                                     <Line label="Total deductions" value={p.total_deductions} strong />
                                 </Section>
 
@@ -167,6 +172,31 @@ export function PayslipDialog({
                                     {p.employee?.bank_name ? `Credited to ${p.employee.bank_name} ${p.employee.bank_account_hint ?? ''}` : 'No payroll bank account — pay by cash or cheque.'}
                                     {' · '}13th month accrual {peso(p.thirteenth_month_accrual)}
                                 </p>
+
+                                {benefits.length > 0 && (
+                                    <Section title="Benefit programs">
+                                        <ul className="space-y-1">
+                                            {benefits.map((b) => (
+                                                <li key={b.id} className="flex items-center gap-2 text-sm">
+                                                    <span className={cn('rounded px-1.5 text-[10px] font-medium', b.mode === 'earning' ? TONE.emerald : TONE.violet)}>
+                                                        {b.mode === 'earning' ? (b.taxable ? 'Taxable' : 'Non-taxable') : 'Contribution'}
+                                                    </span>
+                                                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                                                    <span className="font-mono text-xs">
+                                                        {b.mode === 'earning' ? peso(b.earning) : `${peso(b.employee)} / ER ${peso(b.employer)}`}
+                                                    </span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                        <p className="mt-1 text-[11px] text-muted-foreground">
+                                            From enrollments in{' '}
+                                            <Link href="/employee-management/benefits" className="underline underline-offset-2">
+                                                Benefits Admin
+                                            </Link>
+                                            . Recompute the draft after changing them.
+                                        </p>
+                                    </Section>
+                                )}
 
                                 <Section title="Adjustments">
                                     {adjustments.length === 0 ? (

@@ -2,8 +2,10 @@
 
 namespace App\Services\Payroll;
 
+use App\Models\BenefitProgram;
 use App\Models\DtrEntry;
 use App\Models\Employee;
+use App\Models\EmployeeBenefit;
 use App\Models\LeaveRequest;
 use App\Models\PayrollAdjustment;
 use App\Models\PayrollPeriod;
@@ -35,6 +37,9 @@ use Illuminate\Support\Collection;
  *  - Withholding tax from the BIR table for the period frequency on taxable compensation (gross less
  *    non-taxable benefits and employee contributions). Minimum wage earners: only income other than the
  *    SMW, holiday, OT and night differential is taxable.
+ *  - Benefit enrollments (Benefits Administration): monthly amounts spread over the month's cut-offs.
+ *    Allowance programs are earnings (taxable per program); contribution programs deduct the employee share
+ *    and book the employer share as employer cost. Skipped when there is no basic pay for the cut-off.
  *  - 13th month accrual = basic salary actually earned / 12 (PD 851).
  */
 class PayrollCalculator
@@ -48,9 +53,10 @@ class PayrollCalculator
      * @param  Collection<int, DtrEntry>  $dtrs  time records of this employee within the period
      * @param  Collection<int, LeaveRequest>  $leaves  leave requests referenced by those records, keyed by id
      * @param  Collection<int, PayrollAdjustment>  $adjustments  this employee's adjustments on the run
+     * @param  Collection<int, EmployeeBenefit>  $benefits  this employee's enrollments in force during the period (with program)
      * @return array<string, mixed>
      */
-    public function compute(Employee $employee, PayrollPeriod $period, Collection $dtrs, Collection $leaves, Collection $adjustments): array
+    public function compute(Employee $employee, PayrollPeriod $period, Collection $dtrs, Collection $leaves, Collection $adjustments, Collection $benefits = new Collection): array
     {
         $factor = (int) config('people.timekeeping.days_per_year', 313);
         $hoursPerDay = (int) config('people.timekeeping.regular_hours_per_day', 8);
@@ -209,6 +215,38 @@ class PayrollCalculator
         $otherDeductions = (float) $adjustments->where('kind', PayrollAdjustment::KIND_DEDUCTION)->sum('amount');
 
         $basicEarned = $basic - $basicDeductions;
+
+        // Benefit enrollments, at the monthly amount / cut-offs in the month.
+        $benefitLines = [];
+        $benefitDeductions = 0.0;
+        $employerBenefits = 0.0;
+        if ($basicEarned > 0) {
+            $perPeriod = 1 / $period->periodsPerMonth();
+            foreach ($benefits as $enrollment) {
+                $program = $enrollment->program;
+                if (! $program?->affectsPayroll()) {
+                    continue;
+                }
+
+                $line = ['id' => $enrollment->id, 'code' => $program->code, 'name' => $program->name, 'mode' => $program->payroll_mode, 'earning' => 0.0, 'taxable' => (bool) $program->is_taxable, 'employee' => 0.0, 'employer' => 0.0];
+                if ($program->payroll_mode === BenefitProgram::MODE_EARNING) {
+                    $line['earning'] = round((float) $enrollment->employer_share * $perPeriod, 2);
+                    if ($program->is_taxable) {
+                        $taxableAllowances += $line['earning'];
+                    } else {
+                        $nonTaxableAllowances += $line['earning'];
+                    }
+                } else {
+                    $line['employee'] = round((float) $enrollment->employee_share * $perPeriod, 2);
+                    $line['employer'] = round((float) $enrollment->employer_share * $perPeriod, 2);
+                    $benefitDeductions += $line['employee'];
+                    $employerBenefits += $line['employer'];
+                }
+                $benefitLines[] = $line;
+            }
+        }
+        $otherDeductions += $benefitDeductions;
+
         $gross = $basicEarned + $otPay + $holidayPay + $nightDiffPay + $taxableAllowances + $nonTaxableAllowances;
 
         // Statutory contributions on the monthly compensation, allocated to this cut-off. Monthly-paid: the
@@ -279,10 +317,12 @@ class PayrollCalculator
             'philhealth_er' => $phEr,
             'pagibig' => $hdmfEe,
             'pagibig_er' => $hdmfEr,
+            'employer_benefits' => round($employerBenefits, 2),
             'taxable_income' => round($taxable, 2),
             'is_mwe' => $isMwe,
             'withholding_tax' => $tax,
             'other_deductions' => round($otherDeductions, 2),
+            'benefit_deductions' => round($benefitDeductions, 2),
             'net_pay' => round($net, 2),
             'thirteenth_month_accrual' => round(max(0, $basicEarned) / 12, 2),
             'meta' => [
@@ -306,6 +346,7 @@ class PayrollCalculator
                     'amount' => (float) $a->amount,
                     'taxable' => (bool) $a->taxable,
                 ])->values()->all(),
+                'benefits' => $benefitLines,
                 'warnings' => $warnings,
             ],
         ];

@@ -39,6 +39,7 @@ beforeEach(function () {
         'payroll.view', 'payroll.manage',
         'periods.view', 'dashboard.view', 'ap.view',
         'admin.roles-permissions.manage', 'admin.users.manage',
+        'compliance.view', 'compliance.manage',
     ];
     foreach ($perms as $p) {
         Permission::findOrCreate($p, 'web');
@@ -303,9 +304,11 @@ test('benefits administration page renders and programs can be created and enrol
         ->post('/employee-management/benefits/programs', [
             'code' => 'OPT-SUBSIDY',
             'name' => 'Prescription Eyewear Subsidy',
-            'category' => 'company_allowance',
-            'employee_share_default' => 0.00,
-            'employer_share_default' => 500.00,
+            'category' => 'allowance',
+            'payroll_mode' => 'earning',
+            'contribution_basis' => 'fixed',
+            'default_employer_share' => 500.00,
+            'is_taxable' => false,
             'description' => 'Semi-annual clinic allowance for prescription frames & lenses',
         ]);
     $programResponse->assertSessionHas('status');
@@ -316,11 +319,8 @@ test('benefits administration page renders and programs can be created and enrol
     // 3. Enroll employee
     $enrollResponse = $this->withSession(['current_entity_id' => $this->entity->id])
         ->post('/employee-management/benefits/enroll', [
-            'employee_id' => $employee->id,
+            'employee_ids' => [$employee->id],
             'benefit_program_id' => $program->id,
-            'employee_share' => 0.00,
-            'employer_share' => 500.00,
-            'payroll_treatment' => 'non_taxable_benefit',
             'participation_status' => 'active',
         ]);
     $enrollResponse->assertSessionHas('status');
@@ -346,14 +346,17 @@ test('all employee management module pages render successfully', function () {
         '/employee-management/requests',
         '/employee-management/portal',
         '/employee-management/reports',
-        '/employee-management/access',
         '/employee-management/compliance',
+        '/admin/roles',
     ];
 
     foreach ($pages as $url) {
         $response = $this->withSession(['current_entity_id' => $this->entity->id])->get($url);
         $response->assertOk();
     }
+
+    // People Access now lives in Admin › Roles & Permissions.
+    $this->get('/employee-management/access')->assertRedirect('/admin/roles?tab=users');
 });
 
 test('coordinates-based attendance check-in, break-out, break-in, and check-out enforce geofencing and calculate hours', function () {

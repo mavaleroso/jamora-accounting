@@ -73,9 +73,11 @@ export type PayslipRow = {
     philhealth_er: number;
     pagibig: number;
     pagibig_er: number;
+    employer_benefits: number;
     taxable_income: number;
     withholding_tax: number;
     other_deductions: number;
+    benefit_deductions: number;
     net_pay: number;
     thirteenth_month_accrual: number;
     is_mwe: boolean;
@@ -95,6 +97,7 @@ export type PayslipRow = {
         contribution_base?: number;
         sss_msc?: number | null;
         adjustments?: { id: number; kind: 'earning' | 'deduction'; category: string; description: string; amount: number; taxable: boolean }[];
+        benefits?: PayslipBenefit[];
         warnings?: string[];
     };
 };
@@ -122,7 +125,21 @@ export function remittanceDue(agency: string, periodEnd: string): string {
             return fmt(next(10)); // eFPS filers: staggered 11th–15th
         case 'SSS':
             return fmt(lastOfNext);
+        case 'Benefits':
+            return 'Per provider billing';
         default:
             return `${fmt(next(15))} (11th–15th by employer no.)`;
     }
 }
+
+/** A benefit enrollment applied to a payslip (Benefits Administration). Amounts are for the cut-off. */
+export type PayslipBenefit = {
+    id: number;
+    code: string;
+    name: string;
+    mode: 'earning' | 'contribution';
+    earning: number;
+    taxable: boolean;
+    employee: number;
+    employer: number;
+};
