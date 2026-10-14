@@ -240,7 +240,7 @@ export function AppSidebar() {
         }
 
         if (item.href === '/employee-management/attendance') {
-            return { ...item, title: 'Clock Attendance' };
+            return { ...item, title: 'My Attendance' };
         }
 
         return item;

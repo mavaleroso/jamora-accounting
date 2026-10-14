@@ -325,9 +325,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('geofence', 'updateGeofence')->name('geofence')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('requests', 'storeRequest')->name('requests.store')->middleware('permission:attendance.view|attendance.punch|payroll.view');
             Route::post('requests/{attendanceRequest}/review', 'reviewRequest')->name('requests.review')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('requests/{attendanceRequest}/cancel', 'cancelRequest')->name('requests.cancel')->middleware('permission:attendance.view|attendance.punch|payroll.view');
             Route::post('daily-close', 'runDailyClose')->name('daily-close')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('approve-bulk', 'approveBulk')->name('approve-bulk')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/verify', 'verifyPunch')->name('verify')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/approve', 'approveDtr')->name('approve')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('{dtr}/reopen', 'reopenDtr')->name('reopen')->middleware('permission:attendance.manage|payroll.manage');
         });
 
         Route::controller(LeaveManagementController::class)->prefix('leave')->name('leave.')->group(function () {

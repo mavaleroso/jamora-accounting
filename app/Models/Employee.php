@@ -7,13 +7,14 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Storage;
 
 class Employee extends Model
 {
     use SoftDeletes, BelongsToEntity;
 
     protected $fillable = [
-        'entity_id', 'user_id', 'employee_code', 'firstname', 'middlename', 'lastname',
+        'entity_id', 'user_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar',
         'gender', 'civil_status',
         'position', 'department', 'biometric_id', 'email', 'phone',
         'default_shift_template_id', 'rest_days',
@@ -24,7 +25,7 @@ class Employee extends Model
         'is_active',
     ];
 
-    protected $appends = ['name'];
+    protected $appends = ['name', 'avatar_url'];
 
     protected function casts(): array
     {
@@ -44,6 +45,16 @@ class Employee extends Model
     public function getNameAttribute(): string
     {
         return trim(implode(' ', array_filter([$this->firstname, $this->middlename, $this->lastname])));
+    }
+
+    public function getAvatarUrlAttribute(): ?string
+    {
+        if (! $this->avatar) {
+            return null;
+        }
+
+        // Relative URL so photos load regardless of the host the app is opened on.
+        return str_starts_with($this->avatar, 'http') ? $this->avatar : '/storage/'.ltrim($this->avatar, '/');
     }
 
     /**

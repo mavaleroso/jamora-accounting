@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "laravel-boost": {
+      "command": "php",
+      "args": [
+        "c:/laragon2/www/jamora-accounting/artisan",
+        "boost:mcp"
+      ],
+      "cwd": "c:/laragon2/www/jamora-accounting"
+    }
+  }
+}
+
