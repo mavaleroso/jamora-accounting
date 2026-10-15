@@ -1,55 +1,30 @@
-import { Head, router, Link } from '@inertiajs/react';
-import {
-    AlertTriangle,
-    ArrowDownRight,
-    ArrowUpRight,
-    CheckCircle2,
-    Clock,
-    FileSpreadsheet,
-    Filter,
-    Layers,
-    Package,
-    Plus,
-    Receipt,
-    RefreshCw,
-    Search,
-    ShieldAlert,
-} from 'lucide-react';
-import * as React from 'react';
-import AppLayout from '@/layouts/app-layout';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { formatPhpCurrency, formatPhpNumber } from '@/lib/currency';
+import AppLayout from '@/layouts/app-layout';
+import { formatPhpCurrency } from '@/lib/currency';
 import { toast } from '@/lib/toast';
 import type { BreadcrumbItem } from '@/types';
+import { Head, Link, router } from '@inertiajs/react';
+import { AlertTriangle, CheckCircle2, Clock, Filter, Layers, Package, Plus, Receipt, RefreshCw, Search, ShieldAlert } from 'lucide-react';
+import * as React from 'react';
+
+const postingPreview: Record<string, string> = {
+    receipt: 'Dr Inventory · Cr Goods received not billed (cleared when the supplier bill is entered)',
+    return: 'Dr Goods received not billed · Cr Inventory',
+    sales_issue: 'Dr Cost of goods sold · Cr Inventory',
+    edging_loss: 'Dr Cost of goods sold · Cr Inventory — flagged for review',
+    adjustment: 'Inventory ± against Cost of goods sold (enter a negative quantity for shrinkage) — flagged for review',
+};
+
+const linkLabel: Record<string, string> = { cogs: 'COGS', ap_receipt: 'Receipt / GRNI', inventory_loss: 'Loss → COGS', adjustment: 'Adjustment' };
 
 const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Integration', href: '/integration/optical' },
@@ -73,11 +48,11 @@ type InventoryItemType = {
 type MovementItem = {
     id: number;
     movement_reference: string;
-    movement_type: 'receipt' | 'sales_issue' | 'edging_loss' | 'adjustment' | 'return';
+    movement_type: 'receipt' | 'supplier_receipt' | 'sales_issue' | 'edging_loss' | 'adjustment' | 'return' | 'transfer';
     quantity: number;
     unit_cost: string | number;
     total_cost: string | number;
-    accounting_link_type: 'cogs' | 'ap' | 'expense' | 'none';
+    accounting_link_type: 'cogs' | 'ap_receipt' | 'inventory_loss' | 'adjustment';
     review_status: 'matched' | 'needs_review' | 'resolved';
     notes: string | null;
     created_at: string;
@@ -127,13 +102,7 @@ type Props = {
     };
 };
 
-export default function InventoryIntegrationPage({
-    items,
-    movements,
-    glAccounts,
-    kpis,
-    filters,
-}: Props) {
+export default function InventoryIntegrationPage({ items, movements, glAccounts, kpis, filters }: Props) {
     const [activeTab, setActiveTab] = React.useState<'movements' | 'valuation'>('movements');
     const [search, setSearch] = React.useState(filters.search || '');
     const [reviewFilter, setReviewFilter] = React.useState(filters.review_status || 'all');
@@ -151,7 +120,6 @@ export default function InventoryIntegrationPage({
         quantity: '1',
         unit_cost: items[0]?.unit_cost ? String(items[0].unit_cost) : '',
         movement_reference: '',
-        accounting_link_type: 'ap',
         notes: '',
     });
 
@@ -164,7 +132,7 @@ export default function InventoryIntegrationPage({
                 review_status: reviewFilter === 'all' ? undefined : reviewFilter,
                 ...params,
             },
-            { preserveState: true, preserveScroll: true }
+            { preserveState: true, preserveScroll: true },
         );
     };
 
@@ -186,7 +154,6 @@ export default function InventoryIntegrationPage({
                     quantity: '1',
                     unit_cost: items[0]?.unit_cost ? String(items[0].unit_cost) : '',
                     movement_reference: '',
-                    accounting_link_type: 'ap',
                     notes: '',
                 });
             },
@@ -210,7 +177,7 @@ export default function InventoryIntegrationPage({
                 },
                 onError: () => toast.error('Failed to review movement.'),
                 onFinish: () => setIsSubmitting(false),
-            }
+            },
         );
     };
 
@@ -223,14 +190,11 @@ export default function InventoryIntegrationPage({
                     <div>
                         <Heading
                             title="Inventory Integration"
-                            description="Slide 37-38: Optical inventory sync, stock valuation, COGS/AP accounting links, and exception reviews."
+                            description="Stock from the optical inventory system, linked to the books: receipts, issues and losses post to inventory and cost of goods sold automatically."
                         />
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button
-                            onClick={() => setIsCreateOpen(true)}
-                            className="gap-2 shadow-sm"
-                        >
+                        <Button onClick={() => setIsCreateOpen(true)} className="gap-2 shadow-sm">
                             <Plus className="h-4 w-4" />
                             Record Stock Movement
                         </Button>
@@ -241,45 +205,33 @@ export default function InventoryIntegrationPage({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <Card className="border-border/80 shadow-xs">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Stock Valuation
-                            </CardTitle>
-                            <div className="rounded-full bg-primary/10 p-2 text-primary">
+                            <CardTitle className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">Stock Valuation</CardTitle>
+                            <div className="bg-primary/10 text-primary rounded-full p-2">
                                 <Layers className="h-4 w-4" />
                             </div>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-primary">
-                                {formatPhpCurrency(kpis.totalValuation)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                {items.length} optical items in active inventory
-                            </p>
+                            <div className="text-primary text-2xl font-bold tracking-tight">{formatPhpCurrency(kpis.totalValuation)}</div>
+                            <p className="text-muted-foreground mt-1 text-xs">{items.length} optical items in active inventory</p>
                         </CardContent>
                     </Card>
 
                     <Card className="border-border/80 shadow-xs">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Low / Out of Stock
-                            </CardTitle>
+                            <CardTitle className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">Low / Out of Stock</CardTitle>
                             <div className="rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
                                 <AlertTriangle className="h-4 w-4" />
                             </div>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
-                                {kpis.lowStockCount} items
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Stock on hand &le; reorder threshold
-                            </p>
+                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">{kpis.lowStockCount} items</div>
+                            <p className="text-muted-foreground mt-1 text-xs">Stock on hand &le; reorder threshold</p>
                         </CardContent>
                     </Card>
 
                     <Card className="border-border/80 shadow-xs">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                            <CardTitle className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
                                 Needs Accounting Review
                             </CardTitle>
                             <div className="rounded-full bg-rose-500/10 p-2 text-rose-600 dark:text-rose-400">
@@ -290,15 +242,13 @@ export default function InventoryIntegrationPage({
                             <div className="text-2xl font-bold tracking-tight text-rose-600 dark:text-rose-400">
                                 {kpis.pendingReviewCount} movements
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Edging loss, damage, or discrepancy flags
-                            </p>
+                            <p className="text-muted-foreground mt-1 text-xs">Edging loss, damage, or discrepancy flags</p>
                         </CardContent>
                     </Card>
 
                     <Card className="border-border/80 shadow-xs">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                            <CardTitle className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
                                 Matched & GL Linked
                             </CardTitle>
                             <div className="rounded-full bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
@@ -309,21 +259,19 @@ export default function InventoryIntegrationPage({
                             <div className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
                                 {kpis.matchedCount} verified
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Synced with COGS / AP journal entries
-                            </p>
+                            <p className="text-muted-foreground mt-1 text-xs">Synced with COGS / AP journal entries</p>
                         </CardContent>
                     </Card>
                 </div>
 
                 {/* Tab Switcher */}
-                <div className="flex border-b border-border">
+                <div className="border-border flex border-b">
                     <button
                         onClick={() => setActiveTab('movements')}
                         className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
                             activeTab === 'movements'
                                 ? 'border-primary text-primary font-semibold'
-                                : 'border-transparent text-muted-foreground hover:text-foreground'
+                                : 'text-muted-foreground hover:text-foreground border-transparent'
                         }`}
                     >
                         <Receipt className="h-4 w-4" />
@@ -339,13 +287,16 @@ export default function InventoryIntegrationPage({
                         className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
                             activeTab === 'valuation'
                                 ? 'border-primary text-primary font-semibold'
-                                : 'border-transparent text-muted-foreground hover:text-foreground'
+                                : 'text-muted-foreground hover:text-foreground border-transparent'
                         }`}
                     >
                         <Package className="h-4 w-4" />
                         Stock Valuation & Reorder Alerts
                         {kpis.lowStockCount > 0 && (
-                            <Badge variant="outline" className="ml-1 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[10px]">
+                            <Badge
+                                variant="outline"
+                                className="ml-1 border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400"
+                            >
                                 {kpis.lowStockCount}
                             </Badge>
                         )}
@@ -359,7 +310,7 @@ export default function InventoryIntegrationPage({
                             <CardContent className="pt-4 pb-4">
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
                                     <div className="relative">
-                                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                        <Search className="text-muted-foreground absolute top-2.5 left-2.5 h-4 w-4" />
                                         <Input
                                             placeholder="Search movement ref or SKU..."
                                             value={search}
@@ -388,11 +339,7 @@ export default function InventoryIntegrationPage({
                                     </Select>
 
                                     <div className="flex gap-2">
-                                        <Button
-                                            variant="secondary"
-                                            onClick={() => handleFilterChange({ search })}
-                                            className="gap-1.5"
-                                        >
+                                        <Button variant="secondary" onClick={() => handleFilterChange({ search })} className="gap-1.5">
                                             <Filter className="h-4 w-4" />
                                             Filter
                                         </Button>
@@ -431,7 +378,7 @@ export default function InventoryIntegrationPage({
                                         <TableBody>
                                             {movements.data.length === 0 ? (
                                                 <TableRow>
-                                                    <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
+                                                    <TableCell colSpan={9} className="text-muted-foreground h-32 text-center">
                                                         No stock movements found.
                                                     </TableCell>
                                                 </TableRow>
@@ -440,14 +387,10 @@ export default function InventoryIntegrationPage({
                                                     const isNeedsReview = m.review_status === 'needs_review';
                                                     return (
                                                         <TableRow key={m.id} className="hover:bg-muted/30">
-                                                            <TableCell className="font-mono text-xs font-semibold">
-                                                                {m.movement_reference}
-                                                            </TableCell>
+                                                            <TableCell className="font-mono text-xs font-semibold">{m.movement_reference}</TableCell>
                                                             <TableCell>
-                                                                <div className="font-medium text-xs">
-                                                                    {m.inventory_item?.name || 'Unknown Item'}
-                                                                </div>
-                                                                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                                                <div className="text-xs font-medium">{m.inventory_item?.name || 'Unknown Item'}</div>
+                                                                <div className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
                                                                     <span className="font-mono">{m.inventory_item?.sku}</span>
                                                                     <span>&bull;</span>
                                                                     <span>{m.inventory_item?.category}</span>
@@ -460,8 +403,8 @@ export default function InventoryIntegrationPage({
                                                                         m.movement_type === 'receipt'
                                                                             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                                                                             : m.movement_type === 'edging_loss'
-                                                                            ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400'
-                                                                            : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400'
+                                                                              ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400'
+                                                                              : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400'
                                                                     }
                                                                 >
                                                                     {m.movement_type.toUpperCase().replace('_', ' ')}
@@ -475,14 +418,14 @@ export default function InventoryIntegrationPage({
                                                             </TableCell>
                                                             <TableCell>
                                                                 <Badge variant="secondary" className="font-mono text-[11px] uppercase">
-                                                                    {m.accounting_link_type}
+                                                                    {linkLabel[m.accounting_link_type] ?? m.accounting_link_type}
                                                                 </Badge>
                                                             </TableCell>
                                                             <TableCell>
                                                                 {isNeedsReview ? (
                                                                     <Badge
                                                                         variant="outline"
-                                                                        className="border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400 gap-1"
+                                                                        className="gap-1 border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400"
                                                                     >
                                                                         <AlertTriangle className="h-3 w-3" />
                                                                         Needs Review
@@ -490,7 +433,7 @@ export default function InventoryIntegrationPage({
                                                                 ) : (
                                                                     <Badge
                                                                         variant="outline"
-                                                                        className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 gap-1"
+                                                                        className="gap-1 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                                                                     >
                                                                         <CheckCircle2 className="h-3 w-3" />
                                                                         {m.review_status}
@@ -501,7 +444,7 @@ export default function InventoryIntegrationPage({
                                                                 {m.journal_entry ? (
                                                                     <Link
                                                                         href={`/accounting/journal-entries?search=${m.journal_entry.entry_no}`}
-                                                                        className="inline-flex items-center gap-1 font-mono text-xs text-primary hover:underline"
+                                                                        className="text-primary inline-flex items-center gap-1 font-mono text-xs hover:underline"
                                                                     >
                                                                         <Receipt className="h-3 w-3" />
                                                                         {m.journal_entry.entry_no}
@@ -515,7 +458,7 @@ export default function InventoryIntegrationPage({
                                                                     <Button
                                                                         size="sm"
                                                                         variant="outline"
-                                                                        className="h-7 text-xs border-rose-500/30 text-rose-600 hover:bg-rose-50"
+                                                                        className="h-7 border-rose-500/30 text-xs text-rose-600 hover:bg-rose-50"
                                                                         onClick={() => {
                                                                             setSelectedMovement(m);
                                                                             setIsReviewOpen(true);
@@ -543,9 +486,7 @@ export default function InventoryIntegrationPage({
                         <CardHeader className="flex flex-row items-center justify-between pb-3">
                             <div>
                                 <CardTitle className="text-base font-semibold">Stock Valuation & Reorder Dashboard</CardTitle>
-                                <CardDescription>
-                                    Live quantities on hand, unit cost, selling price, and stock depletion alerts.
-                                </CardDescription>
+                                <CardDescription>Live quantities on hand, unit cost, selling price, and stock depletion alerts.</CardDescription>
                             </div>
                         </CardHeader>
                         <CardContent className="p-0">
@@ -566,7 +507,7 @@ export default function InventoryIntegrationPage({
                                     <TableBody>
                                         {items.length === 0 ? (
                                             <TableRow>
-                                                <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                                                <TableCell colSpan={8} className="text-muted-foreground h-32 text-center">
                                                     No inventory items found.
                                                 </TableCell>
                                             </TableRow>
@@ -576,15 +517,11 @@ export default function InventoryIntegrationPage({
                                                 const isLow = item.status === 'low_stock';
                                                 return (
                                                     <TableRow key={item.id} className="hover:bg-muted/30">
-                                                        <TableCell className="font-mono text-xs font-semibold">
-                                                            {item.sku}
-                                                        </TableCell>
+                                                        <TableCell className="font-mono text-xs font-semibold">{item.sku}</TableCell>
                                                         <TableCell>
-                                                            <div className="font-medium text-xs">{item.name}</div>
+                                                            <div className="text-xs font-medium">{item.name}</div>
                                                             {item.brand && (
-                                                                <div className="text-[11px] text-muted-foreground">
-                                                                    Brand: {item.brand}
-                                                                </div>
+                                                                <div className="text-muted-foreground text-[11px]">Brand: {item.brand}</div>
                                                             )}
                                                         </TableCell>
                                                         <TableCell>
@@ -600,26 +537,28 @@ export default function InventoryIntegrationPage({
                                                         </TableCell>
                                                         <TableCell className="text-center">
                                                             <div className="inline-flex items-center gap-1 font-mono text-xs font-semibold">
-                                                                <span className={isOut ? 'text-rose-600' : isLow ? 'text-amber-600' : 'text-foreground'}>
+                                                                <span
+                                                                    className={isOut ? 'text-rose-600' : isLow ? 'text-amber-600' : 'text-foreground'}
+                                                                >
                                                                     {item.qty_on_hand}
                                                                 </span>
                                                                 <span className="text-muted-foreground">/</span>
                                                                 <span className="text-muted-foreground">{item.reorder_level}</span>
                                                             </div>
                                                         </TableCell>
-                                                        <TableCell className="text-right font-mono text-xs font-semibold text-primary">
+                                                        <TableCell className="text-primary text-right font-mono text-xs font-semibold">
                                                             {formatPhpCurrency(item.valuation)}
                                                         </TableCell>
                                                         <TableCell>
                                                             {isOut ? (
-                                                                <Badge variant="destructive" className="text-xs gap-1">
+                                                                <Badge variant="destructive" className="gap-1 text-xs">
                                                                     <AlertTriangle className="h-3 w-3" />
                                                                     Out of Stock
                                                                 </Badge>
                                                             ) : isLow ? (
                                                                 <Badge
                                                                     variant="outline"
-                                                                    className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs gap-1"
+                                                                    className="gap-1 border-amber-500/30 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-400"
                                                                 >
                                                                     <Clock className="h-3 w-3" />
                                                                     Low Stock
@@ -627,7 +566,7 @@ export default function InventoryIntegrationPage({
                                                             ) : (
                                                                 <Badge
                                                                     variant="outline"
-                                                                    className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-xs gap-1"
+                                                                    className="gap-1 border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-700 dark:text-emerald-400"
                                                                 >
                                                                     <CheckCircle2 className="h-3 w-3" />
                                                                     Healthy
@@ -652,9 +591,7 @@ export default function InventoryIntegrationPage({
                     <form onSubmit={handleCreateMovement}>
                         <DialogHeader>
                             <DialogTitle>Record Stock Movement</DialogTitle>
-                            <DialogDescription>
-                                Add a stock movement and define its automatic GL accounting link.
-                            </DialogDescription>
+                            <DialogDescription>Add a stock movement and define its automatic GL accounting link.</DialogDescription>
                         </DialogHeader>
 
                         <div className="grid gap-4 py-4">
@@ -687,24 +624,7 @@ export default function InventoryIntegrationPage({
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <Label htmlFor="movement_type">Movement Type *</Label>
-                                    <Select
-                                        value={formData.movement_type}
-                                        onValueChange={(val) => {
-                                            const autoLink =
-                                                val === 'receipt'
-                                                    ? 'ap'
-                                                    : val === 'sales_issue'
-                                                    ? 'cogs'
-                                                    : val === 'edging_loss'
-                                                    ? 'expense'
-                                                    : 'cogs';
-                                            setFormData({
-                                                ...formData,
-                                                movement_type: val,
-                                                accounting_link_type: autoLink,
-                                            });
-                                        }}
-                                    >
+                                    <Select value={formData.movement_type} onValueChange={(val) => setFormData({ ...formData, movement_type: val })}>
                                         <SelectTrigger id="movement_type">
                                             <SelectValue />
                                         </SelectTrigger>
@@ -719,23 +639,10 @@ export default function InventoryIntegrationPage({
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label htmlFor="accounting_link_type">Accounting Link *</Label>
-                                    <Select
-                                        value={formData.accounting_link_type}
-                                        onValueChange={(val) =>
-                                            setFormData({ ...formData, accounting_link_type: val })
-                                        }
-                                    >
-                                        <SelectTrigger id="accounting_link_type">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="ap">Accounts Payable (Supplier)</SelectItem>
-                                            <SelectItem value="cogs">Cost of Goods Sold (COGS)</SelectItem>
-                                            <SelectItem value="expense">Operating Expense / Loss</SelectItem>
-                                            <SelectItem value="none">No GL Posting (Memo)</SelectItem>
-                                        </SelectContent>
-                                    </Select>
+                                    <Label>Posts to the ledger as</Label>
+                                    <div className="bg-muted/40 rounded-md border px-3 py-2 text-xs leading-relaxed">
+                                        {postingPreview[formData.movement_type] ?? '—'}
+                                    </div>
                                 </div>
                             </div>
 
@@ -771,9 +678,7 @@ export default function InventoryIntegrationPage({
                                     id="movement_reference"
                                     placeholder="e.g. PO-9912, DR-8821, LAB-004"
                                     value={formData.movement_reference}
-                                    onChange={(e) =>
-                                        setFormData({ ...formData, movement_reference: e.target.value })
-                                    }
+                                    onChange={(e) => setFormData({ ...formData, movement_reference: e.target.value })}
                                 />
                             </div>
 
@@ -789,12 +694,7 @@ export default function InventoryIntegrationPage({
                         </div>
 
                         <DialogFooter>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsCreateOpen(false)}
-                                disabled={isSubmitting}
-                            >
+                            <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)} disabled={isSubmitting}>
                                 Cancel
                             </Button>
                             <Button type="submit" disabled={isSubmitting}>
@@ -814,8 +714,7 @@ export default function InventoryIntegrationPage({
                             Review Stock Exception
                         </DialogTitle>
                         <DialogDescription>
-                            Review movement reference {selectedMovement?.movement_reference} for{' '}
-                            {selectedMovement?.inventory_item?.name}.
+                            Review movement reference {selectedMovement?.movement_reference} for {selectedMovement?.inventory_item?.name}.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -831,9 +730,7 @@ export default function InventoryIntegrationPage({
                             </div>
                             <div className="flex justify-between border-b pb-1.5">
                                 <span className="text-muted-foreground">Total Valuation:</span>
-                                <span className="font-mono font-semibold text-rose-600">
-                                    {formatPhpCurrency(selectedMovement.total_cost)}
-                                </span>
+                                <span className="font-mono font-semibold text-rose-600">{formatPhpCurrency(selectedMovement.total_cost)}</span>
                             </div>
                             <div className="flex justify-between border-b pb-1.5">
                                 <span className="text-muted-foreground">Notes:</span>
@@ -843,18 +740,10 @@ export default function InventoryIntegrationPage({
                     )}
 
                     <DialogFooter>
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => setIsReviewOpen(false)}
-                            disabled={isSubmitting}
-                        >
+                        <Button type="button" variant="outline" onClick={() => setIsReviewOpen(false)} disabled={isSubmitting}>
                             Dismiss
                         </Button>
-                        <Button
-                            onClick={() => selectedMovement && handleApproveReview(selectedMovement.id)}
-                            disabled={isSubmitting}
-                        >
+                        <Button onClick={() => selectedMovement && handleApproveReview(selectedMovement.id)} disabled={isSubmitting}>
                             {isSubmitting ? 'Approving...' : 'Approve & Link to GL'}
                         </Button>
                     </DialogFooter>
@@ -863,4 +752,3 @@ export default function InventoryIntegrationPage({
         </AppLayout>
     );
 }
-

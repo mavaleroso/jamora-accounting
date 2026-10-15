@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class BankReconciliation extends Model
 {
     protected $fillable = [
-        'bank_account_id', 'entity_id', 'statement_date', 'statement_ending_balance',
+        'bank_account_id', 'entity_id', 'statement_date', 'beginning_balance', 'statement_ending_balance',
         'cleared_balance', 'difference', 'status', 'reconciled_by', 'reconciled_at',
     ];
 
@@ -17,6 +17,7 @@ class BankReconciliation extends Model
     {
         return [
             'statement_date' => 'date',
+            'beginning_balance' => 'decimal:2',
             'statement_ending_balance' => 'decimal:2',
             'cleared_balance' => 'decimal:2',
             'difference' => 'decimal:2',
@@ -27,6 +28,11 @@ class BankReconciliation extends Model
     public function bankAccount(): BelongsTo
     {
         return $this->belongsTo(BankAccount::class);
+    }
+
+    public function reconciledBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reconciled_by');
     }
 
     public function transactions(): HasMany

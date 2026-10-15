@@ -121,19 +121,24 @@ test('cash and bank records register can be accessed and transactions recorded',
         ->get('/accounting/cash-bank-records');
     $response->assertOk();
 
-    // 2. Record an inflow transaction
+    // 2. Record a direct receipt into the bank: it posts a journal entry and lands on the bank register.
+    $this->seed(\Database\Seeders\AccountingSetupSeeder::class);
+    $this->bankAccount->entities()->syncWithoutDetaching([$this->entity->id]);
+    $revenue = Account::where('code', '4010')->firstOrFail();
+
     $postResponse = $this->withSession(['current_entity_id' => $this->entity->id])
         ->post('/accounting/cash-bank-records', [
+            'kind' => 'receipt',
+            'payment_method' => 'bank_transfer',
             'bank_account_id' => $this->bankAccount->id,
-            'direction' => 'in',
-            'txn_date' => '2026-09-15',
+            'counter_account_id' => $revenue->id,
+            'txn_date' => now()->toDateString(),
             'amount' => 45000.00,
             'reference' => 'CR-2026-001',
-            'source_type' => 'customer_payment',
             'description' => 'Prescription eyewear payment',
         ]);
 
-    $postResponse->assertSessionHas('status');
+    $postResponse->assertSessionHasNoErrors()->assertSessionHas('status');
 
     $this->assertDatabaseHas('bank_transactions', [
         'entity_id' => $this->entity->id,
@@ -141,7 +146,9 @@ test('cash and bank records register can be accessed and transactions recorded',
         'reference' => 'CR-2026-001',
         'amount' => 45000.00,
         'direction' => 'in',
+        'source_type' => 'cash_receipt',
     ]);
+    $this->assertDatabaseHas('journal_entries', ['reference' => 'CR-2026-001', 'source_type' => 'cash_receipt']);
 });
 
 test('inventory movements post correctly and update stock and exception status', function () {
@@ -181,7 +188,7 @@ test('inventory movements post correctly and update stock and exception status',
     $this->assertDatabaseHas('inventory_movements', [
         'inventory_item_id' => $item->id,
         'movement_type' => 'edging_loss',
-        'quantity' => 1,
+        'quantity' => -1, // stored signed: stock out
         'review_status' => 'needs_review',
     ]);
 

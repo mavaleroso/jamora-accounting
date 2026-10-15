@@ -1,3 +1,13 @@
+import Heading from '@/components/heading';
+import { StatCard } from '@/components/stat-card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import AppLayout from '@/layouts/app-layout';
+import { formatPhpCurrency } from '@/lib/currency';
+import type { BreadcrumbItem, SyncRun } from '@/types';
 import { Head, Link } from '@inertiajs/react';
 import {
     AlertTriangleIcon,
@@ -13,34 +23,9 @@ import {
     TrendingUpIcon,
     WalletIcon,
 } from 'lucide-react';
-import * as React from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
-import AppLayout from '@/layouts/app-layout';
-import Heading from '@/components/heading';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    ChartContainer,
-    ChartLegend,
-    ChartLegendContent,
-    ChartTooltip,
-    ChartTooltipContent,
-} from '@/components/ui/chart';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { formatPhpCurrency } from '@/lib/currency';
-import type { BreadcrumbItem, SyncRun } from '@/types';
 
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Dashboard', href: '/accounting/dashboard' },
-];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'Dashboard', href: '/accounting/dashboard' }];
 
 type TrendPoint = {
     month: string;
@@ -106,49 +91,6 @@ function formatDate(value: string | null | undefined): string {
     });
 }
 
-function StatCard({
-    title,
-    value,
-    description,
-    icon: Icon,
-    href,
-    accent = 'bg-primary/10 text-primary',
-}: {
-    title: string;
-    value: string;
-    description?: string;
-    icon: React.ComponentType<{ className?: string }>;
-    href?: string;
-    accent?: string;
-}) {
-    const content = (
-        <Card className="border-border/60 shadow-sm transition-colors hover:border-primary/30">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{title}</CardTitle>
-                <div className={`rounded-lg p-2 ${accent}`}>
-                    <Icon className="size-4" />
-                </div>
-            </CardHeader>
-            <CardContent>
-                <div className="text-2xl font-bold font-mono tabular-nums">{value}</div>
-                {description ? (
-                    <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-                ) : null}
-            </CardContent>
-        </Card>
-    );
-
-    if (href) {
-        return (
-            <Link href={href} className="block">
-                {content}
-            </Link>
-        );
-    }
-
-    return content;
-}
-
 export default function AccountingDashboardPage({
     unpostedEntriesCount,
     syncExceptionCount,
@@ -175,14 +117,10 @@ export default function AccountingDashboardPage({
 
             <div className="space-y-6 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
-                    <Heading
-                        title="Accounting Dashboard"
-                        description="Overview of cash, revenue, expenses, and journal activity."
-                    />
+                    <Heading title="Accounting Dashboard" description="Overview of cash, revenue, expenses, and journal activity." />
                     {currentPeriod ? (
                         <Badge variant="secondary" className="text-sm">
-                            Open period P{currentPeriod.period_no}: {currentPeriod.start_date} –{' '}
-                            {currentPeriod.end_date}
+                            Open period P{currentPeriod.period_no}: {currentPeriod.start_date} – {currentPeriod.end_date}
                         </Badge>
                     ) : null}
                 </div>
@@ -208,7 +146,7 @@ export default function AccountingDashboardPage({
                         description="Open bill balances"
                         icon={TrendingDownIcon}
                         href="/reports/ap-aging"
-                        accent="bg-orange-500/10 text-orange-600"
+                        tone="warning"
                     />
                     <StatCard
                         title="Customer Deposits"
@@ -223,53 +161,53 @@ export default function AccountingDashboardPage({
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <Link
                         href="/accounting/cash-bank-records"
-                        className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-sm hover:border-amber-400/60 transition-colors"
+                        className="bg-card flex items-center gap-3 rounded-lg border p-3 shadow-sm transition-colors hover:border-amber-400/60"
                     >
                         <div className="rounded-md bg-amber-500/10 p-2.5 text-amber-600 dark:text-amber-400">
                             <Coins className="h-5 w-5" />
                         </div>
                         <div>
-                            <div className="text-xs font-semibold text-foreground">Cash & Bank Records</div>
-                            <div className="text-[11px] text-muted-foreground">Inflows, outflows & reconciliation</div>
+                            <div className="text-foreground text-xs font-semibold">Cash & Bank Records</div>
+                            <div className="text-muted-foreground text-[11px]">Inflows, outflows & reconciliation</div>
                         </div>
                     </Link>
 
                     <Link
                         href="/integration/inventory"
-                        className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-sm hover:border-amber-400/60 transition-colors"
+                        className="bg-card flex items-center gap-3 rounded-lg border p-3 shadow-sm transition-colors hover:border-amber-400/60"
                     >
                         <div className="rounded-md bg-blue-500/10 p-2.5 text-blue-600 dark:text-blue-400">
                             <Boxes className="h-5 w-5" />
                         </div>
                         <div>
-                            <div className="text-xs font-semibold text-foreground">Inventory & Movements</div>
-                            <div className="text-[11px] text-muted-foreground">COGS/AP auto-posting & reorders</div>
+                            <div className="text-foreground text-xs font-semibold">Inventory & Movements</div>
+                            <div className="text-muted-foreground text-[11px]">COGS/AP auto-posting & reorders</div>
                         </div>
                     </Link>
 
                     <Link
                         href="/employee-management/roster"
-                        className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-sm hover:border-amber-400/60 transition-colors"
+                        className="bg-card flex items-center gap-3 rounded-lg border p-3 shadow-sm transition-colors hover:border-amber-400/60"
                     >
                         <div className="rounded-md bg-emerald-500/10 p-2.5 text-emerald-600 dark:text-emerald-400">
                             <CalendarCheck className="h-5 w-5" />
                         </div>
                         <div>
-                            <div className="text-xs font-semibold text-foreground">Shift & Attendance</div>
-                            <div className="text-[11px] text-muted-foreground">Weekly rosters & biometric punches</div>
+                            <div className="text-foreground text-xs font-semibold">Shift & Attendance</div>
+                            <div className="text-muted-foreground text-[11px]">Weekly rosters & biometric punches</div>
                         </div>
                     </Link>
 
                     <Link
                         href="/employee-management/compliance"
-                        className="flex items-center gap-3 rounded-lg border bg-card p-3 shadow-sm hover:border-amber-400/60 transition-colors"
+                        className="bg-card flex items-center gap-3 rounded-lg border p-3 shadow-sm transition-colors hover:border-amber-400/60"
                     >
                         <div className="rounded-md bg-purple-500/10 p-2.5 text-purple-600 dark:text-purple-400">
                             <ShieldCheck className="h-5 w-5" />
                         </div>
                         <div>
-                            <div className="text-xs font-semibold text-foreground">Compliance Mgmt</div>
-                            <div className="text-[11px] text-muted-foreground">BIR, SSS, PhilHealth & LGU filings</div>
+                            <div className="text-foreground text-xs font-semibold">Compliance Mgmt</div>
+                            <div className="text-muted-foreground text-[11px]">BIR, SSS, PhilHealth & LGU filings</div>
                         </div>
                     </Link>
                 </div>
@@ -280,14 +218,14 @@ export default function AccountingDashboardPage({
                         value={formatPhpCurrency(revenueMTD)}
                         description={`YTD ${formatPhpCurrency(revenueYTD)}`}
                         icon={TrendingUpIcon}
-                        accent="bg-primary/10 text-primary"
+                        tone="default"
                     />
                     <StatCard
                         title="Expenses MTD"
                         value={formatPhpCurrency(expenseMTD)}
                         description="Posted expense accounts"
                         icon={TrendingDownIcon}
-                        accent="bg-orange-500/10 text-orange-600"
+                        tone="warning"
                     />
                     <StatCard
                         title="Unposted Entries"
@@ -302,7 +240,7 @@ export default function AccountingDashboardPage({
                         description="Failed sync documents"
                         icon={AlertTriangleIcon}
                         href="/integration/optical/exceptions"
-                        accent="bg-destructive/10 text-destructive"
+                        tone="danger"
                     />
                 </div>
 
@@ -328,13 +266,7 @@ export default function AccountingDashboardPage({
                                             })
                                         }
                                     />
-                                    <ChartTooltip
-                                        content={
-                                            <ChartTooltipContent
-                                                formatter={(value) => formatPhpCurrency(Number(value))}
-                                            />
-                                        }
-                                    />
+                                    <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatPhpCurrency(Number(value))} />} />
                                     <ChartLegend content={<ChartLegendContent />} />
                                     <Area
                                         type="monotone"
@@ -374,24 +306,14 @@ export default function AccountingDashboardPage({
                                             width={100}
                                             tickLine={false}
                                             axisLine={false}
-                                            tickFormatter={(value) =>
-                                                value.length > 14 ? `${value.slice(0, 14)}…` : value
-                                            }
+                                            tickFormatter={(value) => (value.length > 14 ? `${value.slice(0, 14)}…` : value)}
                                         />
-                                        <ChartTooltip
-                                            content={
-                                                <ChartTooltipContent
-                                                    formatter={(value) => formatPhpCurrency(Number(value))}
-                                                />
-                                            }
-                                        />
+                                        <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatPhpCurrency(Number(value))} />} />
                                         <Bar dataKey="amount" fill="var(--color-amount)" radius={4} />
                                     </BarChart>
                                 </ChartContainer>
                             ) : (
-                                <p className="py-16 text-center text-sm text-muted-foreground">
-                                    No expense activity this month.
-                                </p>
+                                <p className="text-muted-foreground py-16 text-center text-sm">No expense activity this month.</p>
                             )}
                         </CardContent>
                     </Card>
@@ -427,12 +349,8 @@ export default function AccountingDashboardPage({
                                         entries.map((entry) => (
                                             <TableRow key={entry.id}>
                                                 <TableCell>{formatDate(entry.entry_date)}</TableCell>
-                                                <TableCell className="font-mono text-sm">
-                                                    {entry.entry_no}
-                                                </TableCell>
-                                                <TableCell className="text-muted-foreground">
-                                                    {entry.journal?.code ?? '—'}
-                                                </TableCell>
+                                                <TableCell className="font-mono text-sm">{entry.entry_no}</TableCell>
+                                                <TableCell className="text-muted-foreground">{entry.journal?.code ?? '—'}</TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline" className="capitalize">
                                                         {entry.status}
@@ -445,10 +363,7 @@ export default function AccountingDashboardPage({
                                         ))
                                     ) : (
                                         <TableRow>
-                                            <TableCell
-                                                colSpan={5}
-                                                className="h-20 text-center text-muted-foreground"
-                                            >
+                                            <TableCell colSpan={5} className="text-muted-foreground h-20 text-center">
                                                 No journal entries yet.
                                             </TableCell>
                                         </TableRow>
@@ -464,13 +379,13 @@ export default function AccountingDashboardPage({
                                 <CardTitle className="text-base">Last Optical Sync</CardTitle>
                                 <CardDescription>Most recent sync run</CardDescription>
                             </div>
-                            <BanknoteIcon className="size-5 text-primary" />
+                            <BanknoteIcon className="text-primary size-5" />
                         </CardHeader>
                         <CardContent className="space-y-4">
                             {lastSyncRun ? (
                                 <>
                                     <div className="flex items-center justify-between">
-                                        <span className="text-sm text-muted-foreground">Status</span>
+                                        <span className="text-muted-foreground text-sm">Status</span>
                                         <Badge
                                             variant={
                                                 lastSyncRun.status === 'completed'
@@ -498,15 +413,11 @@ export default function AccountingDashboardPage({
                                         </div>
                                         <div className="flex justify-between">
                                             <span className="text-muted-foreground">Failed</span>
-                                            <span className={lastSyncRun.failed > 0 ? 'text-destructive' : ''}>
-                                                {lastSyncRun.failed}
-                                            </span>
+                                            <span className={lastSyncRun.failed > 0 ? 'text-destructive' : ''}>{lastSyncRun.failed}</span>
                                         </div>
                                     </div>
                                     {lastSyncRun.message ? (
-                                        <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-                                            {lastSyncRun.message}
-                                        </p>
+                                        <p className="bg-muted/50 text-muted-foreground rounded-md p-3 text-xs">{lastSyncRun.message}</p>
                                     ) : null}
                                     <Button variant="outline" size="sm" className="w-full" asChild>
                                         <Link href="/integration/optical">
@@ -516,9 +427,7 @@ export default function AccountingDashboardPage({
                                     </Button>
                                 </>
                             ) : (
-                                <p className="py-8 text-center text-sm text-muted-foreground">
-                                    No sync runs recorded yet.
-                                </p>
+                                <p className="text-muted-foreground py-8 text-center text-sm">No sync runs recorded yet.</p>
                             )}
                         </CardContent>
                     </Card>

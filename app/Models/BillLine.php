@@ -20,4 +20,9 @@ class BillLine extends Model
     {
         return $this->belongsTo(Bill::class);
     }
+
+    public function account(): BelongsTo
+    {
+        return $this->belongsTo(Account::class);
+    }
 }

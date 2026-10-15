@@ -15,27 +15,34 @@ class VendorsController extends Controller
 {
     public function index(Request $request): Response
     {
-        $pageSize = max(1, min(100, (int) $request->get('per_page', 10)));
-        $page = max(1, (int) $request->get('page', 1));
-        $search = trim((string) $request->get('search', ''));
+        $filters = [
+            'search' => trim((string) $request->get('search', '')),
+            'status' => $request->get('status'),
+        ];
+        $open = fn ($q) => $q->whereIn('status', ['posted', 'partially_paid']);
 
-        $query = Vendor::query()->orderBy('code');
-
-        if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('code', 'like', "%{$search}%")
-                    ->orWhere('name', 'like', "%{$search}%");
-            });
-        }
-
-        $paginator = $query->paginate($pageSize, ['*'], 'page', $page);
+        $vendors = Vendor::query()
+            ->withSum(['bills as open_balance' => $open], 'balance_due')
+            ->withCount(['bills as open_invoices' => $open])
+            ->when($filters['search'] !== '', fn ($q) => $q->where(fn ($q) => $q
+                ->where('code', 'like', "%{$filters['search']}%")
+                ->orWhere('name', 'like', "%{$filters['search']}%")
+                ->orWhere('tin', 'like', "%{$filters['search']}%")))
+            ->when($filters['status'] === 'active', fn ($q) => $q->where('is_active', true))
+            ->when($filters['status'] === 'inactive', fn ($q) => $q->where('is_active', false))
+            ->orderBy('name')
+            ->paginate(20)
+            ->withQueryString();
 
         return Inertia::render('libraries/vendors/page', [
-            'vendors' => $paginator->items(),
-            'totalVendors' => $paginator->total(),
-            'pageSize' => $pageSize,
-            'currentPage' => $paginator->currentPage(),
-            'search' => $search,
+            'parties' => $vendors,
+            'filters' => $filters,
+            'summary' => [
+                'total' => Vendor::query()->count(),
+                'active' => Vendor::query()->where('is_active', true)->count(),
+                'withBalance' => Vendor::query()->whereHas('bills', $open)->count(),
+                'outstanding' => round((float) \App\Models\Bill::query()->whereIn('status', ['posted', 'partially_paid'])->sum('balance_due'), 2),
+            ],
         ]);
     }
 
