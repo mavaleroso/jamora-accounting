@@ -9,7 +9,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * Daily Time Record.
  *
- * Lifecycle (status): open -> approved -> locked (locked once a payroll run is computed for the cut-off).
+ * Lifecycle (status): open -> approved | rejected -> locked (locked once the cut-off's payroll is approved).
+ * A rejected day is not credited: payroll treats it like an absence on a scheduled day.
  * attendance_status: present | late | undertime | absent | on_leave | rest_day | holiday | incomplete
  * day_type: regular | rest_day | special_holiday | special_holiday_rest_day | regular_holiday | regular_holiday_rest_day
  * ot_hours = OT rendered (computed from punches); ot_hours_approved = OT payable (via approved OT request).
@@ -21,6 +22,8 @@ class DtrEntry extends Model
     public const STATUS_OPEN = 'open';
 
     public const STATUS_APPROVED = 'approved';
+
+    public const STATUS_REJECTED = 'rejected';
 
     public const STATUS_LOCKED = 'locked';
 

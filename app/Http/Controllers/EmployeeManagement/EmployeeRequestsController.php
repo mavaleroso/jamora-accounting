@@ -72,7 +72,8 @@ class EmployeeRequestsController extends Controller
         $kind = in_array($request->query('kind'), self::KINDS, true) ? $request->query('kind') : '';
         $status = in_array($request->query('status'), [...self::STATUSES, 'all'], true) ? $request->query('status') : 'all';
         $employeeId = $view === 'all' ? ($request->integer('employee_id') ?: null) : null;
-        $approvable = $this->approvableKinds($perspective);
+        // Time corrections are decided on the day itself in Time & Attendance › Timesheets, not here.
+        $approvable = array_values(array_diff($this->approvableKinds($perspective), [AttendanceRequest::TYPE_CORRECTION]));
 
         // --- Feed for the current view ------------------------------------------------------
         $feed = null;
@@ -130,6 +131,10 @@ class EmployeeRequestsController extends Controller
                 'mine' => $myPending,
                 'inbox' => (int) $inboxByKind->sum(),
                 'inboxByKind' => $inboxByKind,
+                'corrections' => $perspective['canApproveAttendance']
+                    ? AttendanceRequest::query()->where('entity_id', $entityId)->where('request_type', AttendanceRequest::TYPE_CORRECTION)->where('status', 'pending')
+                        ->when($self, fn ($q) => $q->where('employee_id', '!=', $self->id))->count()
+                    : 0,
             ],
             'self' => $self ? [
                 ...$self->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department', 'gender', 'leave_type_ids']),

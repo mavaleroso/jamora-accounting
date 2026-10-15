@@ -92,6 +92,7 @@ class PayrollService
                 ->withoutEntityScope()
                 ->whereIn('employee_id', $run->payslips()->pluck('employee_id'))
                 ->whereBetween('work_date', [$period->start_date->toDateString(), $period->end_date->toDateString()])
+                ->where('status', '!=', DtrEntry::STATUS_REJECTED)
                 ->update(['status' => DtrEntry::STATUS_LOCKED, 'payroll_period_id' => $period->id]);
 
             $run->update([

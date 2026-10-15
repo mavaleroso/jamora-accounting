@@ -363,7 +363,7 @@ const CHECK_ICON = { error: AlertCircle, warning: AlertTriangle, info: Info } as
 const CHECK_TONE = { error: TONE.rose, warning: TONE.amber, info: 'bg-muted/40' } as const;
 const CHECK_LINK: Record<string, [string, string]> = {
     open_records: ['/employee-management/attendance?view=timesheets', 'Open timesheets'],
-    incomplete: ['/employee-management/attendance?view=timesheets&exceptions_only=1', 'Fix missing punches'],
+    incomplete: ['/employee-management/attendance?view=timesheets&status=open', 'Fix missing punches'],
     pending_requests: ['/employee-management/requests?view=inbox', 'Open approvals'],
     no_record_days: ['/employee-management/attendance?view=timesheets', 'Open timesheets'],
     no_bank: ['/libraries/employees', 'Employee Directory'],

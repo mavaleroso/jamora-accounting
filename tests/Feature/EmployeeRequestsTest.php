@@ -7,6 +7,7 @@ use App\Models\Entity;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
+use App\Models\PayrollPeriod;
 use App\Models\ShiftRoster;
 use App\Models\User;
 use App\Services\People\AttendanceCalculator;
@@ -426,4 +427,90 @@ test('the portal summarises the employee day, requests, credits, posted payslips
             ->where('payslips.0.period.code', 'PP-B')
             ->where('payslips.0.total_deductions', 1325)
             ->where('payslips.0.net_pay', 13675));
+});
+
+test('a time correction is decided on its day in the timesheet, not in the requests inbox', function () {
+    $dtr = new DtrEntry(['entity_id' => $this->entity->id, 'employee_id' => $this->staffEmployee->id, 'work_date' => '2026-10-13', 'time_in' => '09:00:00']);
+    app(AttendanceCalculator::class)->compute($dtr, $this->staffEmployee)->save();
+    expect($dtr->attendance_status)->toBe('incomplete');
+
+    ($this->as)($this->staffUser)->post('/employee-management/requests', [
+        'kind' => 'correction',
+        'work_date' => '2026-10-13',
+        'requested_time_out' => '18:00',
+        'reason' => 'Forgot to clock out',
+    ])->assertSessionHasNoErrors();
+    $correction = AttendanceRequest::firstOrFail();
+
+    ($this->as)($this->hrUser)->get('/employee-management/requests')
+        ->assertInertia(fn (Assert $page) => $page->where('badges.inbox', 0)->where('badges.corrections', 1));
+
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('approval.corrections', 1)
+            ->where('entries.data.0.pending_correction.id', $correction->id)
+            ->where('entries.data.0.pending_correction.requested_time_out', '18:00:00'));
+
+    // Bulk approval leaves the day alone; approving the day applies the correction.
+    ($this->as)($this->hrUser)->post('/employee-management/attendance/approve-bulk', ['ids' => [$dtr->id]]);
+    expect($dtr->fresh()->status)->toBe(DtrEntry::STATUS_OPEN);
+
+    ($this->as)($this->hrUser)->post("/employee-management/attendance/{$dtr->id}/approve")->assertSessionHasNoErrors();
+    $dtr->refresh();
+    expect($dtr->status)->toBe(DtrEntry::STATUS_APPROVED)
+        ->and($dtr->time_out)->toBe('18:00:00')
+        ->and($correction->fresh()->status)->toBe('approved');
+});
+
+test('a rejected day needs a reason, is left out of the summary, and can be undone', function () {
+    foreach (['2026-10-12', '2026-10-13'] as $date) {
+        $dtr = new DtrEntry(['entity_id' => $this->entity->id, 'employee_id' => $this->staffEmployee->id, 'work_date' => $date, 'time_in' => '09:00:00', 'time_out' => '18:00:00']);
+        app(AttendanceCalculator::class)->compute($dtr, $this->staffEmployee)->save();
+    }
+    $day = DtrEntry::whereDate('work_date', '2026-10-13')->firstOrFail();
+    $hoursPerDay = (float) $day->regular_hours;
+
+    ($this->as)($this->hrUser)->post("/employee-management/attendance/{$day->id}/reject")->assertSessionHasErrors('remarks');
+    ($this->as)($this->hrUser)->post("/employee-management/attendance/{$day->id}/reject", ['remarks' => 'No proof of attendance'])->assertSessionHasNoErrors();
+    expect($day->fresh()->status)->toBe(DtrEntry::STATUS_REJECTED);
+
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15')
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('summary', 1)
+            ->where('summary.0.days_worked', 1)
+            ->where('summary.0.regular_hours', fn ($v) => (float) $v === $hoursPerDay)
+            ->where('summary.0.total_hours', fn ($v) => (float) $v === $hoursPerDay)
+            ->where('summary.0.rejected', 1)
+            ->where('approval.rejected', 1));
+
+    ($this->as)($this->hrUser)->post("/employee-management/attendance/{$day->id}/reopen")->assertSessionHasNoErrors();
+    expect($day->fresh()->status)->toBe(DtrEntry::STATUS_OPEN);
+});
+
+test('timesheets open on the current pay period and the overtime tab lists only overtime', function () {
+    PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => 'PP-2026-10-1', 'frequency' => 'semi_monthly', 'start_date' => '2026-10-01', 'end_date' => '2026-10-15', 'status' => 'open']);
+
+    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'overtime', 'work_date' => '2026-10-16', 'requested_ot_hours' => 2, 'reason' => 'Inventory count'])->assertSessionHasNoErrors();
+    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'correction', 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Biometric was down'])->assertSessionHasNoErrors();
+
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=requests')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('filters.date_from', '2026-10-01')
+            ->where('filters.date_to', '2026-10-15')
+            ->has('periods', 1)
+            ->where('attendanceRequests.total', 1)
+            ->where('attendanceRequests.data.0.request_type', 'overtime'));
+});
+
+test('a pay period can be changed until payroll is computed for it', function () {
+    $first = PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => 'PP-A', 'frequency' => 'semi_monthly', 'start_date' => '2026-10-01', 'end_date' => '2026-10-15', 'status' => 'open']);
+    PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => 'PP-B', 'frequency' => 'semi_monthly', 'start_date' => '2026-10-16', 'end_date' => '2026-10-31', 'status' => 'open']);
+
+    ($this->as)($this->hrUser)->put("/payroll/periods/{$first->id}", ['code' => 'PP-A', 'start_date' => '2026-09-26', 'end_date' => '2026-10-10', 'pay_date' => '2026-10-15'])
+        ->assertSessionHasNoErrors();
+    expect($first->fresh()->start_date->toDateString())->toBe('2026-09-26')
+        ->and($first->fresh()->end_date->toDateString())->toBe('2026-10-10');
+
+    ($this->as)($this->hrUser)->put("/payroll/periods/{$first->id}", ['code' => 'PP-A', 'start_date' => '2026-10-01', 'end_date' => '2026-10-20'])
+        ->assertSessionHasErrors('start_date');
 });

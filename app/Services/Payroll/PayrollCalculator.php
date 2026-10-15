@@ -125,6 +125,15 @@ class PayrollCalculator
                 $openRecords++;
             }
 
+            // A day the approver rejected is not credited.
+            if ($dtr->status === DtrEntry::STATUS_REJECTED) {
+                if (! $isRestDay) {
+                    $days['absent']++;
+                }
+
+                continue;
+            }
+
             $status = $dtr->attendance_status;
             $dayType = $dtr->day_type ?: 'regular';
             $cfg = $premiums[$dayType] ?? $premiums['regular'];

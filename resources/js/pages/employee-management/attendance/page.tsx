@@ -1,5 +1,5 @@
 import { Head, router } from '@inertiajs/react';
-import { CalendarCheck, Clock, Eye, Inbox, ListChecks, MapPin, Plus, ShieldCheck, Users } from 'lucide-react';
+import { CalendarCheck, Clock, Eye, Hourglass, ListChecks, MapPin, Plus, ShieldCheck, Users } from 'lucide-react';
 import * as React from 'react';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
@@ -8,10 +8,10 @@ import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import {
-    ApproveDialog,
     DailyCloseDialog,
     GeofenceDialog,
     ManualEntryDialog,
+    RejectDayDialog,
     RequestDialog,
     ReviewDialog,
     type ManualEntryTarget,
@@ -29,11 +29,12 @@ import {
     type BranchLocation,
     type DtrRow,
     type Filters,
-    type Kpis,
     type MyDay,
     type Paginated,
+    type PayPeriodOption,
     type Person,
     type Perspective,
+    type SummaryRow,
 } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -48,8 +49,9 @@ type Props = {
     view: View;
     filters: Filters;
     entries: Paginated<DtrRow>;
-    kpis: Kpis;
     approval: Approval;
+    summary: SummaryRow[];
+    periods: PayPeriodOption[];
     attendanceRequests: Paginated<AttendanceRequestRow>;
     requestCounts: Record<'pending' | 'approved' | 'rejected' | 'cancelled', number>;
     employees: Person[];
@@ -60,12 +62,12 @@ type Props = {
 };
 
 export default function AttendancePage(props: Props) {
-    const { perspective, view, filters, entries, kpis, approval, attendanceRequests, requestCounts, employees, board, myDay, branchLocation, today } = props;
+    const { perspective, view, filters, entries, approval, summary, periods, attendanceRequests, requestCounts, employees, board, myDay, branchLocation, today } = props;
     const { canManage, canViewTeam, hasSelf } = perspective;
 
     const [manualTarget, setManualTarget] = React.useState<ManualEntryTarget>(null);
     const [requestTarget, setRequestTarget] = React.useState<RequestTarget>(null);
-    const [approveEntry, setApproveEntry] = React.useState<DtrRow | null>(null);
+    const [rejectEntry, setRejectEntry] = React.useState<DtrRow | null>(null);
     const [review, setReview] = React.useState<{ request: AttendanceRequestRow; decision: 'approved' | 'rejected' } | null>(null);
     const [closeOpen, setCloseOpen] = React.useState(false);
     const [geoOpen, setGeoOpen] = React.useState(false);
@@ -74,7 +76,7 @@ export default function AttendancePage(props: Props) {
         (changes: Partial<Filters> & { view?: View }) => {
             const next = { view, ...filters, ...changes };
             const params = Object.fromEntries(
-                Object.entries(next).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== false),
+                Object.entries(next).filter(([, v]) => v !== '' && v !== null && v !== undefined),
             );
             router.get(ATTENDANCE_URL, params, { preserveState: true, preserveScroll: true, replace: true });
         },
@@ -84,14 +86,14 @@ export default function AttendancePage(props: Props) {
     const tabs: { id: View; label: string; icon: typeof Clock; badge?: number; show: boolean }[] = [
         { id: 'clock', label: 'My day', icon: Clock, show: hasSelf },
         { id: 'today', label: 'Today', icon: Users, show: canViewTeam },
-        { id: 'timesheets', label: canViewTeam ? 'Timesheets' : 'My timesheet', icon: ListChecks, badge: canManage ? approval.readyToApprove : undefined, show: true },
-        { id: 'requests', label: canViewTeam ? 'Requests' : 'My requests', icon: Inbox, badge: requestCounts.pending, show: true },
+        { id: 'timesheets', label: canViewTeam ? 'Timesheets' : 'My timesheet', icon: ListChecks, badge: canManage ? approval.open : undefined, show: true },
+        { id: 'requests', label: 'Overtime', icon: Hourglass, badge: requestCounts.pending, show: true },
     ];
     // Timekeepers start from the team; employees from their own clock.
     const orderedTabs = canManage ? [...tabs.filter((t) => t.id !== 'clock'), ...tabs.filter((t) => t.id === 'clock')] : tabs;
 
     const role = canManage
-        ? { label: 'Timekeeper', icon: ShieldCheck, description: 'Track today’s attendance, resolve issues and approve time records for payroll.' }
+        ? { label: 'Timekeeper', icon: ShieldCheck, description: 'Track today’s attendance, approve each day for payroll and decide overtime.' }
         : canViewTeam
           ? { label: 'Read-only', icon: Eye, description: 'Attendance overview for your branch. Changes are made by HR / payroll.' }
           : { label: 'My attendance', icon: Clock, description: 'Clock in and out, check your hours, and request fixes when something is off.' };
@@ -173,15 +175,16 @@ export default function AttendancePage(props: Props) {
                 {view === 'timesheets' && (
                     <Timesheets
                         entries={entries}
-                        kpis={kpis}
                         approval={approval}
+                        summary={summary}
+                        periods={periods}
                         filters={filters}
                         employees={employees}
                         perspective={perspective}
                         today={today}
                         onFilter={navigate}
                         onEdit={(entry) => setManualTarget({ entry, employeeId: entry.employee_id, date: entry.work_date })}
-                        onApprove={setApproveEntry}
+                        onReject={setRejectEntry}
                         onRequest={(entry, type) => setRequestTarget({ entry, type, employeeId: entry.employee_id })}
                     />
                 )}
@@ -194,7 +197,7 @@ export default function AttendancePage(props: Props) {
                         perspective={perspective}
                         onFilter={navigate}
                         onReview={(request, decision) => setReview({ request, decision })}
-                        onNew={() => setRequestTarget({ employeeId: myDay?.employee.id })}
+                        onNew={() => router.visit('/employee-management/requests?file=overtime')}
                     />
                 )}
             </div>
@@ -208,7 +211,7 @@ export default function AttendancePage(props: Props) {
                 today={today}
                 canPickEmployee={canManage}
             />
-            <ApproveDialog open={approveEntry !== null} onOpenChange={(o) => !o && setApproveEntry(null)} entry={approveEntry} />
+            <RejectDayDialog open={rejectEntry !== null} onOpenChange={(o) => !o && setRejectEntry(null)} entry={rejectEntry} />
             <ReviewDialog open={review !== null} onOpenChange={(o) => !o && setReview(null)} request={review?.request ?? null} decision={review?.decision ?? 'approved'} />
             {canManage && (
                 <>

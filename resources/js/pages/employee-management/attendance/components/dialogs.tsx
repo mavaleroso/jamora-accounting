@@ -14,7 +14,6 @@ import {
     ATTENDANCE_URL,
     fmtDate,
     fmtHours,
-    fmtMinutes,
     fmtTime,
     fullName,
     toTimeInput,
@@ -358,84 +357,56 @@ function RequestForm({
 }
 
 /* ----------------------------------------------------------------------------------------------
- * Approve a single record (timekeeper) — reviewer sets payable OT
+ * Reject a day (approver) — not credited in payroll
  * -------------------------------------------------------------------------------------------- */
 
-export function ApproveDialog({ open, onOpenChange, entry }: Open & { entry: DtrRow | null }) {
+export function RejectDayDialog({ open, onOpenChange, entry }: Open & { entry: DtrRow | null }) {
     return (
         <Shell open={open} onOpenChange={onOpenChange}>
-            {entry && <ApproveForm entry={entry} onDone={() => onOpenChange(false)} />}
+            {entry && <RejectDayForm entry={entry} onDone={() => onOpenChange(false)} />}
         </Shell>
     );
 }
 
-function ApproveForm({ entry, onDone }: { entry: DtrRow; onDone: () => void }) {
-    const rendered = Number(entry.ot_hours);
-    const payable = Number(entry.ot_hours_approved);
-    const unpaid = Math.max(0, rendered - payable);
-    const form = useForm({});
+function RejectDayForm({ entry, onDone }: { entry: DtrRow; onDone: () => void }) {
+    const form = useForm({ remarks: '' });
 
     return (
         <form
             className="space-y-4"
             onSubmit={(e) => {
                 e.preventDefault();
-                form.post(`${ATTENDANCE_URL}/${entry.id}/approve`, { preserveScroll: true, onSuccess: onDone });
+                form.post(`${ATTENDANCE_URL}/${entry.id}/reject`, { preserveScroll: true, onSuccess: onDone });
             }}
         >
             <DialogHeader>
-                <DialogTitle>Approve time record</DialogTitle>
+                <DialogTitle>Reject this day</DialogTitle>
                 <DialogDescription>
-                    {fullName(entry.employee)} · {fmtDate(entry.work_date, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {fullName(entry.employee)} · {fmtDate(entry.work_date, { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTime(entry.time_in)} –{' '}
+                    {fmtTime(entry.time_out)}
                 </DialogDescription>
             </DialogHeader>
-            <dl className="grid grid-cols-3 gap-3 rounded-lg border p-3 text-sm">
-                <div>
-                    <dt className="text-[11px] text-muted-foreground uppercase">Punches</dt>
-                    <dd className="font-mono">
-                        {fmtTime(entry.time_in)} – {fmtTime(entry.time_out)}
-                    </dd>
-                </div>
-                <div>
-                    <dt className="text-[11px] text-muted-foreground uppercase">Regular</dt>
-                    <dd className="font-mono">{fmtHours(entry.regular_hours)}</dd>
-                </div>
-                <div>
-                    <dt className="text-[11px] text-muted-foreground uppercase">Late / UT</dt>
-                    <dd className="font-mono">
-                        {fmtMinutes(entry.tardiness_minutes)} / {fmtMinutes(entry.undertime_minutes)}
-                    </dd>
-                </div>
-            </dl>
-            {rendered > 0 ? (
-                <div
-                    className={cn(
-                        'rounded-lg border p-3 text-sm',
-                        unpaid > 0 ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200' : 'bg-muted/40',
-                    )}
-                >
-                    <div className="font-medium">
-                        Overtime: {fmtHours(payable)} payable of {fmtHours(rendered)} rendered
-                    </div>
-                    <p className="mt-0.5 text-xs opacity-90">
-                        {unpaid === 0
-                            ? 'All overtime on this day is covered by approved OT requests.'
-                            : entry.ot_request_pending
-                              ? `${fmtHours(unpaid)} has a pending OT pre-approval — approve it in Requests to make it payable.`
-                              : `${fmtHours(unpaid)} will not be paid — it was not pre-approved. Overtime must be filed before it is worked.`}
-                    </p>
-                </div>
-            ) : (
-                <p className="text-sm text-muted-foreground">No overtime rendered on this day.</p>
-            )}
-            {(form.errors as Record<string, string>).dtr && <InputError message={(form.errors as Record<string, string>).dtr} />}
+            <p className="text-sm text-muted-foreground">
+                The day will not be credited in payroll.
+                {entry.pending_correction && ' The time correction the employee filed for this day is rejected too.'} You can undo this until payroll is approved.
+            </p>
+            <Field label="Reason" error={form.errors.remarks} hint="The employee sees this.">
+                <Textarea
+                    value={form.data.remarks}
+                    onChange={(e) => form.setData('remarks', e.target.value)}
+                    rows={3}
+                    maxLength={255}
+                    autoFocus
+                    placeholder="e.g. No proof of attendance for this day"
+                />
+            </Field>
             <DialogFooter>
                 <Button type="button" variant="outline" onClick={onDone}>
                     Cancel
                 </Button>
-                <Button type="submit" disabled={form.processing}>
+                <Button type="submit" variant="destructive" disabled={form.processing || !form.data.remarks.trim()}>
                     {form.processing && <Loader2 className="size-4 animate-spin" />}
-                    Approve
+                    Reject day
                 </Button>
             </DialogFooter>
         </form>

@@ -7,14 +7,18 @@ use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Entity;
+use App\Models\PayrollPeriod;
 use App\Services\People\AttendanceCalculator;
 use App\Services\People\AttendanceRequestService;
 use App\Services\People\EmployeeResolver;
 use App\Services\People\TeamBoard;
 use App\Support\EntityContext;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -24,8 +28,9 @@ use Inertia\Response;
  *
  * One page, three perspectives:
  *  - Employee (linked employee, no attendance.manage): own clock, own timesheet, own requests.
- *  - Timekeeper / HR (attendance.manage or payroll.manage): live team board, review & approval queue,
- *    request inbox, manual entries, daily close and geofence settings.
+ *  - Timekeeper / HR (attendance.manage or payroll.manage): live team board, timesheet approval
+ *    (approve or reject each day; employee time corrections are decided on the day itself), per-staff
+ *    hours summary for the pay period, overtime inbox, manual entries, daily close and geofence settings.
  *  - Viewer (attendance.view without a linked employee, e.g. Auditor): team board and timesheets, read-only.
  */
 class AttendanceController extends Controller
@@ -78,16 +83,21 @@ class AttendanceController extends Controller
         }
 
         $today = Carbon::today();
-        $dateFrom = $this->dateParam($request->query('date_from')) ?? $today->copy()->startOfWeek()->toDateString();
-        $dateTo = $this->dateParam($request->query('date_to')) ?? $today->copy()->endOfWeek()->toDateString();
+        $periods = PayrollPeriod::query()
+            ->where('entity_id', $entityId)
+            ->orderByDesc('start_date')
+            ->limit(24)
+            ->get(['id', 'code', 'start_date', 'end_date']);
+        [$cutStart, $cutEnd] = $this->currentCutoff($periods, $today);
+        $dateFrom = $this->dateParam($request->query('date_from')) ?? $cutStart;
+        $dateTo = $this->dateParam($request->query('date_to')) ?? $cutEnd;
         if ($dateTo < $dateFrom) {
             [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
         }
 
         $employeeId = $canViewTeam ? ($request->integer('employee_id') ?: null) : $self?->id;
-        $recordStatus = in_array($request->query('status'), [DtrEntry::STATUS_OPEN, DtrEntry::STATUS_APPROVED, DtrEntry::STATUS_LOCKED], true)
+        $recordStatus = in_array($request->query('status'), [DtrEntry::STATUS_OPEN, DtrEntry::STATUS_APPROVED, DtrEntry::STATUS_REJECTED, DtrEntry::STATUS_LOCKED], true)
             ? $request->query('status') : '';
-        $exceptionsOnly = $request->boolean('exceptions_only');
         $requestStatus = in_array($request->query('request_status'), ['pending', 'approved', 'rejected', 'cancelled', 'all'], true)
             ? $request->query('request_status') : ($canManage ? 'pending' : 'all');
 
@@ -100,7 +110,6 @@ class AttendanceController extends Controller
         $entries = (clone $periodQuery)
             ->with([self::EMPLOYEE_COLUMNS, 'approver:id,firstname,lastname'])
             ->when($recordStatus !== '', fn ($q) => $q->where('status', $recordStatus))
-            ->when($exceptionsOnly, fn ($q) => $this->scopeExceptions($q))
             ->orderByDesc('work_date')
             ->orderBy('employee_id')
             ->paginate(25)
@@ -119,30 +128,29 @@ class AttendanceController extends Controller
             'ot_request_pending',
             $pendingOt->has($e->employee_id.'|'.$e->work_date->toDateString())
         ));
+        $this->attachPendingCorrections($entries->getCollection());
 
         $period = (clone $periodQuery)->get();
-        $kpis = [
-            'regularHours' => round((float) $period->sum('regular_hours'), 2),
-            'otRendered' => round((float) $period->sum('ot_hours'), 2),
-            'otApproved' => round((float) $period->sum('ot_hours_approved'), 2),
-            'tardinessMinutes' => (int) $period->sum('tardiness_minutes'),
-            'undertimeMinutes' => (int) $period->sum('undertime_minutes'),
-            'lateDays' => $period->where('tardiness_minutes', '>', 0)->count(),
-            'absences' => $period->where('is_absent', true)->count(),
-            'incomplete' => $period->where('attendance_status', 'incomplete')->count(),
-            'exceptions' => $period->filter(fn (DtrEntry $e) => $this->isException($e))->count(),
-            'daysWorked' => $period->whereIn('attendance_status', AttendanceCalculator::WORKED_STATUSES)->count(),
-        ];
+        $pendingCorrections = AttendanceRequest::query()
+            ->where('entity_id', $entityId)
+            ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
+            ->where('status', 'pending')
+            ->whereBetween('work_date', [$dateFrom, $dateTo])
+            ->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId))
+            ->count();
         $approval = [
             'open' => $period->where('status', DtrEntry::STATUS_OPEN)->count(),
             'approved' => $period->where('status', DtrEntry::STATUS_APPROVED)->count(),
+            'rejected' => $period->where('status', DtrEntry::STATUS_REJECTED)->count(),
             'locked' => $period->where('status', DtrEntry::STATUS_LOCKED)->count(),
             'readyToApprove' => $period->where('status', DtrEntry::STATUS_OPEN)->where('attendance_status', '!=', 'incomplete')->count(),
+            'corrections' => $pendingCorrections,
         ];
 
-        // Correction / OT requests
+        // Overtime requests. Time corrections are decided on the day itself, in Timesheets.
         $requestsBase = AttendanceRequest::query()
             ->where('entity_id', $entityId)
+            ->where('request_type', AttendanceRequest::TYPE_OVERTIME)
             ->when(! $canViewTeam && $self, fn ($q) => $q->where('employee_id', $self->id));
 
         $attendanceRequests = (clone $requestsBase)
@@ -178,12 +186,17 @@ class AttendanceController extends Controller
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
                 'status' => $recordStatus,
-                'exceptions_only' => $exceptionsOnly,
                 'request_status' => $requestStatus,
             ],
             'entries' => $entries,
-            'kpis' => $kpis,
             'approval' => $approval,
+            'summary' => $this->staffSummary($period),
+            'periods' => $periods->map(fn (PayrollPeriod $p) => [
+                'id' => $p->id,
+                'code' => $p->code,
+                'from' => $p->start_date->toDateString(),
+                'to' => $p->end_date->toDateString(),
+            ]),
             'attendanceRequests' => $attendanceRequests,
             'requestCounts' => [
                 'pending' => (int) ($requestCounts['pending'] ?? 0),
@@ -451,27 +464,74 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Approve a single DTR. Approving the day never grants overtime — payable OT comes only
-     * from approved overtime requests.
+     * Approve a single DTR. A pending time correction for the day is approved with it, so each day
+     * is reviewed once. Approving the day never grants overtime — payable OT comes only from
+     * approved overtime requests.
      */
     public function approveDtr(Request $request, DtrEntry $dtr): RedirectResponse
     {
         $this->attendanceCalculator->assertEditable($dtr);
 
-        if ($dtr->attendance_status === 'incomplete') {
-            throw ValidationException::withMessages([
-                'dtr' => 'This day has a missing punch. Fix the record before approving it.',
-            ]);
-        }
+        $correction = $this->pendingCorrection($dtr);
 
-        $this->attendanceCalculator->syncApprovedOt($dtr);
-        $dtr->fill([
-            'status' => DtrEntry::STATUS_APPROVED,
-            'approved_by' => $request->user()?->id,
-            'approved_at' => now(),
-        ])->save();
+        // Rolled back as a whole if the corrected day is still missing a punch.
+        DB::transaction(function () use ($request, $dtr, $correction) {
+            if ($correction) {
+                $this->attendanceRequests->review($correction, $request->user(), 'approved');
+                $dtr->refresh();
+            }
 
-        return redirect()->back()->with('status', 'Time record approved for payroll.');
+            if ($dtr->attendance_status === 'incomplete') {
+                throw ValidationException::withMessages([
+                    'dtr' => $correction
+                        ? 'Even with the correction this day is missing a punch. Edit the times or reject the day.'
+                        : 'This day has a missing punch. Edit the times or reject the day.',
+                ]);
+            }
+
+            $this->attendanceCalculator->syncApprovedOt($dtr);
+            $dtr->fill([
+                'status' => DtrEntry::STATUS_APPROVED,
+                'approved_by' => $request->user()?->id,
+                'approved_at' => now(),
+            ])->save();
+        });
+
+        return redirect()->back()->with('status', $correction ? 'Correction applied and day approved.' : 'Day approved.');
+    }
+
+    /**
+     * Reject a day outright: it is not credited in payroll. A pending time correction for the day
+     * is rejected with the same reason.
+     */
+    public function rejectDtr(Request $request, DtrEntry $dtr): RedirectResponse
+    {
+        $this->attendanceCalculator->assertEditable($dtr);
+
+        $validated = $request->validate([
+            'remarks' => ['required', 'string', 'max:255'],
+        ], [
+            'remarks.required' => 'Tell the employee why the day was rejected.',
+        ]);
+
+        $user = $request->user();
+        $by = trim(($user?->firstname ?? '').' '.($user?->lastname ?? '')) ?: 'HR';
+
+        DB::transaction(function () use ($dtr, $user, $by, $validated) {
+            $correction = $this->pendingCorrection($dtr);
+            if ($correction) {
+                $this->attendanceRequests->review($correction, $user, 'rejected', $validated['remarks']);
+            }
+
+            $dtr->fill([
+                'status' => DtrEntry::STATUS_REJECTED,
+                'approved_by' => $user?->id,
+                'approved_at' => now(),
+                'notes' => trim(($dtr->notes ?? '')." [Rejected by {$by}: {$validated['remarks']}]"),
+            ])->save();
+        });
+
+        return redirect()->back()->with('status', 'Day rejected. It will not be credited in payroll.');
     }
 
     /**
@@ -489,8 +549,19 @@ class AttendanceController extends Controller
         $approved = 0;
         $skipped = 0;
 
+        $withCorrection = AttendanceRequest::query()
+            ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
+            ->where('status', 'pending')
+            ->whereIn('employee_id', $entries->pluck('employee_id')->unique())
+            ->get(['employee_id', 'work_date'])
+            ->map(fn ($r) => $r->employee_id.'|'.$r->work_date->toDateString())
+            ->flip();
+
         foreach ($entries as $dtr) {
-            if ($dtr->status !== DtrEntry::STATUS_OPEN || $dtr->attendance_status === 'incomplete') {
+            // A day with a pending correction is approved on its own, after looking at the change.
+            if ($dtr->status !== DtrEntry::STATUS_OPEN
+                || $dtr->attendance_status === 'incomplete'
+                || $withCorrection->has($dtr->employee_id.'|'.$dtr->work_date->toDateString())) {
                 $skipped++;
 
                 continue;
@@ -506,14 +577,14 @@ class AttendanceController extends Controller
 
         $message = "Approved {$approved} time ".str('record')->plural($approved).'.';
         if ($skipped > 0) {
-            $message .= " Skipped {$skipped} (incomplete, already approved or locked).";
+            $message .= " Skipped {$skipped} (missing punch, pending correction, or already decided).";
         }
 
         return redirect()->back()->with('status', $message);
     }
 
     /**
-     * Send an approved (not yet locked) DTR back for review.
+     * Send an approved or rejected (not yet locked) DTR back to pending.
      */
     public function reopenDtr(DtrEntry $dtr): RedirectResponse
     {
@@ -525,7 +596,7 @@ class AttendanceController extends Controller
             'approved_at' => null,
         ]);
 
-        return redirect()->back()->with('status', 'Time record reopened for review.');
+        return redirect()->back()->with('status', 'Day is back to pending.');
     }
 
     /**
@@ -684,26 +755,91 @@ class AttendanceController extends Controller
         ];
     }
 
-    private function scopeExceptions($query)
+    /**
+     * The pay period that contains today, else the calendar cut-off (1–15 or 16–end of month).
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function currentCutoff(EloquentCollection $periods, Carbon $today): array
     {
-        return $query->where(function ($q) {
-            $q->where('tardiness_minutes', '>', 0)
-                ->orWhere('undertime_minutes', '>', 0)
-                ->orWhereColumn('ot_hours', '>', 'ot_hours_approved')
-                ->orWhere('is_absent', true)
-                ->orWhere('attendance_status', 'incomplete')
-                ->orWhere('location_status', 'out_of_bounds');
-        });
+        $current = $periods->first(fn (PayrollPeriod $p) => $p->start_date->lte($today) && $p->end_date->gte($today));
+        if ($current) {
+            return [$current->start_date->toDateString(), $current->end_date->toDateString()];
+        }
+
+        return $today->day <= 15
+            ? [$today->copy()->startOfMonth()->toDateString(), $today->copy()->day(15)->toDateString()]
+            : [$today->copy()->day(16)->toDateString(), $today->copy()->endOfMonth()->toDateString()];
     }
 
-    private function isException(DtrEntry $e): bool
+    /**
+     * Hours per staff for the period. Rejected days are not counted; overtime is only what an
+     * approved overtime request covers.
+     *
+     * @param  EloquentCollection<int, DtrEntry>  $period
+     * @return array<int, array<string, mixed>>
+     */
+    private function staffSummary(EloquentCollection $period): array
     {
-        return $e->tardiness_minutes > 0
-            || $e->undertime_minutes > 0
-            || (float) $e->ot_hours > (float) $e->ot_hours_approved
-            || $e->is_absent
-            || $e->attendance_status === 'incomplete'
-            || $e->location_status === 'out_of_bounds';
+        $period->load(self::EMPLOYEE_COLUMNS);
+
+        return $period
+            ->groupBy('employee_id')
+            ->map(function ($days) {
+                $credited = $days->where('status', '!=', DtrEntry::STATUS_REJECTED);
+                $regular = round((float) $credited->sum('regular_hours'), 2);
+                $overtime = round((float) $credited->sum('ot_hours_approved'), 2);
+
+                return [
+                    'employee' => $days->first()->employee,
+                    'days_worked' => $credited->whereIn('attendance_status', AttendanceCalculator::WORKED_STATUSES)->count(),
+                    'regular_hours' => $regular,
+                    'ot_hours' => $overtime,
+                    'total_hours' => round($regular + $overtime, 2),
+                    'pending' => $days->where('status', DtrEntry::STATUS_OPEN)->count(),
+                    'rejected' => $days->where('status', DtrEntry::STATUS_REJECTED)->count(),
+                ];
+            })
+            ->sortBy(fn ($row) => $row['employee']?->lastname)
+            ->values()
+            ->all();
+    }
+
+    private function pendingCorrection(DtrEntry $dtr): ?AttendanceRequest
+    {
+        return AttendanceRequest::query()
+            ->where('employee_id', $dtr->employee_id)
+            ->whereDate('work_date', $dtr->work_date)
+            ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
+            ->where('status', 'pending')
+            ->latest()
+            ->first();
+    }
+
+    /**
+     * Put each day's pending time correction on its row, so it is decided together with the day.
+     *
+     * @param  Collection<int, DtrEntry>  $entries
+     */
+    private function attachPendingCorrections(Collection $entries): void
+    {
+        if ($entries->isEmpty()) {
+            return;
+        }
+
+        $corrections = AttendanceRequest::query()
+            ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
+            ->where('status', 'pending')
+            ->whereIn('employee_id', $entries->pluck('employee_id')->unique())
+            ->whereDate('work_date', '>=', $entries->min(fn (DtrEntry $e) => $e->work_date->toDateString()))
+            ->whereDate('work_date', '<=', $entries->max(fn (DtrEntry $e) => $e->work_date->toDateString()))
+            ->get(['id', 'employee_id', 'work_date', 'requested_time_in', 'requested_break_out', 'requested_break_in', 'requested_time_out', 'reason', 'created_at'])
+            ->keyBy(fn ($r) => $r->employee_id.'|'.$r->work_date->toDateString());
+
+        $entries->each(fn (DtrEntry $e) => $e->setAttribute(
+            'pending_correction',
+            $corrections->get($e->employee_id.'|'.$e->work_date->toDateString())
+        ));
     }
 
     private function dateParam(mixed $value): ?string

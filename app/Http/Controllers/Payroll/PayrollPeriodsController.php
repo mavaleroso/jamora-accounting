@@ -111,6 +111,34 @@ class PayrollPeriodsController extends Controller
         return redirect()->back()->with('status', "Pay period {$data['code']} created.");
     }
 
+    /**
+     * Change a period's dates (e.g. a cut-off that does not follow the calendar halves). Only
+     * before a payroll is computed for it.
+     */
+    public function update(Request $request, PayrollPeriod $payrollPeriod): RedirectResponse
+    {
+        if ($payrollPeriod->activeRun()->exists()) {
+            throw ValidationException::withMessages(['status' => 'This period already has a payroll. Void the draft first.']);
+        }
+
+        $data = $request->validate([
+            'code' => ['required', 'string', 'max:50', Rule::unique('payroll_periods', 'code')->where('entity_id', $payrollPeriod->entity_id)->ignore($payrollPeriod->id)],
+            'start_date' => ['required', 'date'],
+            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
+            'pay_date' => ['nullable', 'date', 'after_or_equal:end_date'],
+        ], [
+            'pay_date.after_or_equal' => 'Pay day cannot be before the cut-off ends.',
+        ]);
+
+        if ($this->overlaps(Carbon::parse($data['start_date']), Carbon::parse($data['end_date']), $payrollPeriod->id)) {
+            throw ValidationException::withMessages(['start_date' => 'This range overlaps another pay period.']);
+        }
+
+        $payrollPeriod->update($data);
+
+        return redirect()->back()->with('status', "Pay period {$data['code']} updated.");
+    }
+
     public function destroy(PayrollPeriod $payrollPeriod): RedirectResponse
     {
         if ($payrollPeriod->activeRun()->exists()) {
@@ -122,11 +150,12 @@ class PayrollPeriodsController extends Controller
         return redirect()->back()->with('status', "Pay period {$payrollPeriod->code} removed.");
     }
 
-    private function overlaps(Carbon $start, Carbon $end): bool
+    private function overlaps(Carbon $start, Carbon $end, ?int $exceptId = null): bool
     {
         return PayrollPeriod::query()
             ->whereDate('start_date', '<=', $end->toDateString())
             ->whereDate('end_date', '>=', $start->toDateString())
+            ->when($exceptId, fn ($q) => $q->whereKeyNot($exceptId))
             ->exists();
     }
 }

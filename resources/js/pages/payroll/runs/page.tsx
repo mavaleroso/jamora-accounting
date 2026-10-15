@@ -1,5 +1,5 @@
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
-import { AlertTriangle, ArrowRight, CalendarPlus, CalendarRange, Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CalendarPlus, CalendarRange, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
 import * as React from 'react';
 import Heading from '@/components/heading';
 import InputError from '@/components/input-error';
@@ -56,6 +56,7 @@ export default function PayrollPage({ year, years, periods, ytd, next, activeEmp
     const canRun = hasAnyPermission(auth, ['payroll.run']);
     const [generateOpen, setGenerateOpen] = React.useState(false);
     const [customOpen, setCustomOpen] = React.useState(false);
+    const [editing, setEditing] = React.useState<PeriodRow | null>(null);
     const [computing, setComputing] = React.useState<number | null>(null);
 
     const compute = (periodId: number) => {
@@ -159,6 +160,7 @@ export default function PayrollPage({ year, years, periods, ytd, next, activeEmp
                                                 canManage={canManage}
                                                 computing={computing === p.id}
                                                 onCompute={() => compute(p.id)}
+                                                onEdit={() => setEditing(p)}
                                             />
                                         ))}
                                     </ul>
@@ -179,6 +181,7 @@ export default function PayrollPage({ year, years, periods, ytd, next, activeEmp
                 <>
                     <GenerateDialog open={generateOpen} onOpenChange={setGenerateOpen} today={today} payDays={policy.payDays} />
                     <CustomPeriodDialog open={customOpen} onOpenChange={setCustomOpen} />
+                    <CustomPeriodDialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)} period={editing} />
                 </>
             )}
         </AppLayout>
@@ -290,7 +293,21 @@ function NextUp({
     );
 }
 
-function PeriodItem({ period: p, today, canManage, computing, onCompute }: { period: PeriodRow; today: string; canManage: boolean; computing: boolean; onCompute: () => void }) {
+function PeriodItem({
+    period: p,
+    today,
+    canManage,
+    computing,
+    onCompute,
+    onEdit,
+}: {
+    period: PeriodRow;
+    today: string;
+    canManage: boolean;
+    computing: boolean;
+    onCompute: () => void;
+    onEdit: () => void;
+}) {
     const run = p.run;
     const late = !!p.pay_date && p.pay_date < today && run?.status !== 'paid';
 
@@ -344,6 +361,9 @@ function PeriodItem({ period: p, today, canManage, computing, onCompute }: { per
                         <>
                             <Button size="sm" variant="outline" onClick={onCompute} disabled={computing}>
                                 {computing && <Loader2 className="size-3.5 animate-spin" />} Compute
+                            </Button>
+                            <Button size="icon" variant="ghost" className="size-8 text-muted-foreground" aria-label={`Edit ${p.code}`} onClick={onEdit}>
+                                <Pencil className="size-4" />
                             </Button>
                             <Button
                                 size="icon"
@@ -455,9 +475,24 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
     );
 }
 
-function CustomPeriodDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+/** Add a custom cut-off, or change the dates of one (`period`) that has no payroll yet. */
+function CustomPeriodDialog({ open, onOpenChange, period }: { open: boolean; onOpenChange: (o: boolean) => void; period?: PeriodRow | null }) {
     const form = useForm({ code: '', start_date: '', end_date: '', pay_date: '', frequency: 'semi_monthly' });
     const { data, setData, errors, processing } = form;
+
+    React.useEffect(() => {
+        if (open && period) {
+            form.setData({
+                code: period.code,
+                start_date: period.start_date.slice(0, 10),
+                end_date: period.end_date.slice(0, 10),
+                pay_date: period.pay_date?.slice(0, 10) ?? '',
+                frequency: period.frequency,
+            });
+            form.clearErrors();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, period]);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -466,11 +501,13 @@ function CustomPeriodDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                     className="space-y-4"
                     onSubmit={(e) => {
                         e.preventDefault();
-                        form.post('/payroll/periods', { preserveScroll: true, onSuccess: () => { form.reset(); onOpenChange(false); } });
+                        const done = { preserveScroll: true, onSuccess: () => { form.reset(); onOpenChange(false); } };
+                        if (period) form.put(`/payroll/periods/${period.id}`, done);
+                        else form.post('/payroll/periods', done);
                     }}
                 >
                     <DialogHeader>
-                        <DialogTitle>Custom cut-off</DialogTitle>
+                        <DialogTitle>{period ? `Edit ${period.code}` : 'Custom cut-off'}</DialogTitle>
                         <DialogDescription>For cut-offs that do not follow the calendar halves, e.g. 26th–10th paid on the 15th and 11th–25th paid on the 30th.</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-1.5">
@@ -498,7 +535,7 @@ function CustomPeriodDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                             Cancel
                         </Button>
                         <Button type="submit" disabled={processing || !data.code || !data.start_date || !data.end_date}>
-                            {processing && <Loader2 className="size-4 animate-spin" />} Create period
+                            {processing && <Loader2 className="size-4 animate-spin" />} {period ? 'Save changes' : 'Create period'}
                         </Button>
                     </DialogFooter>
                 </form>

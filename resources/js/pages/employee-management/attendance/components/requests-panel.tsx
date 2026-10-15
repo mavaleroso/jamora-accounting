@@ -99,7 +99,7 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                 </div>
                 {(!canViewTeam || canManage) && (
                     <Button variant="outline" onClick={onNew}>
-                        <Plus className="size-4" /> {canManage ? 'File on behalf' : 'New request'}
+                        <Plus className="size-4" /> {canManage ? 'File overtime on behalf' : 'File overtime'}
                     </Button>
                 )}
             </div>
@@ -108,11 +108,11 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                 <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-14 text-center">
                     <Inbox className="size-8 text-muted-foreground/50" />
                     <p className="text-sm font-medium">
-                        {filters.request_status === 'pending' ? (canManage ? 'Inbox zero — nothing waiting on you.' : 'No pending requests.') : 'No requests here.'}
+                        {filters.request_status === 'pending' ? (canManage ? 'No overtime waiting on you.' : 'No pending overtime.') : 'No overtime requests here.'}
                     </p>
                     {!canViewTeam && (
                         <p className="text-xs text-muted-foreground">
-                            Missed a punch? Request a correction from your timesheet. Overtime (filed in advance), leave and other requests are in{' '}
+                            File overtime before you work it. Missed a punch? Request a correction from your timesheet. Leave and other requests are in{' '}
                             <Link href="/employee-management/requests" className="text-primary hover:underline">
                                 My Requests
                             </Link>

@@ -235,6 +235,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.view');
             Route::post('/', 'store')->name('store')->middleware('permission:payroll.manage');
             Route::post('generate', 'generate')->name('generate')->middleware('permission:payroll.manage');
+            Route::put('{payrollPeriod}', 'update')->name('update')->middleware('permission:payroll.manage');
             Route::delete('{payrollPeriod}', 'destroy')->name('destroy')->middleware('permission:payroll.manage');
         });
 
@@ -355,6 +356,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('approve-bulk', 'approveBulk')->name('approve-bulk')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/verify', 'verifyPunch')->name('verify')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/approve', 'approveDtr')->name('approve')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('{dtr}/reject', 'rejectDtr')->name('reject')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/reopen', 'reopenDtr')->name('reopen')->middleware('permission:attendance.manage|payroll.manage');
         });
 

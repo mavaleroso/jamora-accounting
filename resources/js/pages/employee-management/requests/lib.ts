@@ -124,7 +124,7 @@ export function leaveTypesFor(person: LeaveEligibility | null | undefined, types
     );
 }
 
-export type Badges = { mine: number; inbox: number; inboxByKind: Partial<Record<Kind, number>> };
+export type Badges = { mine: number; inbox: number; inboxByKind: Partial<Record<Kind, number>>; corrections: number };
 
 export type FeedPage = Paginated<RequestItem>;
 
@@ -203,8 +203,9 @@ export function fileableKinds(p: Perspective): Kind[] {
     return KIND_ORDER.filter((k) => (KINDS[k].source === 'leave' ? p.canFileLeave : p.canFileAttendance));
 }
 
-/** Kinds the viewer may approve. */
+/** Kinds the viewer may approve here. Time corrections are decided on the day in Time & Attendance › Timesheets. */
 export function canDecide(p: Perspective, kind: Kind): boolean {
+    if (kind === 'correction') return false;
     return KINDS[kind].source === 'leave' ? p.canApproveLeave : p.canApproveAttendance;
 }
 

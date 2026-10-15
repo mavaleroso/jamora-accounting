@@ -34,12 +34,37 @@ export type DtrRow = {
     distance_meters?: string | number | null;
     location_status?: string | null;
     source?: string | null;
-    status: 'open' | 'approved' | 'locked';
+    status: 'open' | 'approved' | 'rejected' | 'locked';
     approved_at?: string | null;
     approver?: { id: number; firstname: string; lastname: string } | null;
     notes?: string | null;
     employee?: Person;
+    /** Employee-filed time correction waiting on this day; approving the day applies it. */
+    pending_correction?: PendingCorrection | null;
 };
+
+export type PendingCorrection = {
+    id: number;
+    requested_time_in: string | null;
+    requested_break_out: string | null;
+    requested_break_in: string | null;
+    requested_time_out: string | null;
+    reason: string;
+    created_at: string;
+};
+
+/** Hours per staff for the selected period (rejected days excluded, OT = approved OT only). */
+export type SummaryRow = {
+    employee: Person;
+    days_worked: number;
+    regular_hours: number;
+    ot_hours: number;
+    total_hours: number;
+    pending: number;
+    rejected: number;
+};
+
+export type PayPeriodOption = { id: number; code: string; from: string; to: string };
 
 export type AttendanceRequestRow = {
     id: number;
@@ -133,24 +158,10 @@ export type Filters = {
     date_from: string;
     date_to: string;
     status: string;
-    exceptions_only: boolean;
     request_status: string;
 };
 
-export type Kpis = {
-    regularHours: number;
-    otRendered: number;
-    otApproved: number;
-    tardinessMinutes: number;
-    undertimeMinutes: number;
-    lateDays: number;
-    absences: number;
-    incomplete: number;
-    exceptions: number;
-    daysWorked: number;
-};
-
-export type Approval = { open: number; approved: number; locked: number; readyToApprove: number };
+export type Approval = { open: number; approved: number; rejected: number; locked: number; readyToApprove: number; corrections: number };
 
 export const ATTENDANCE_URL = '/employee-management/attendance';
 
@@ -243,8 +254,9 @@ export const ATTENDANCE_STATUS: Record<string, { label: string; tone: Tone }> = 
 };
 
 export const RECORD_STATUS: Record<string, { label: string; tone: Tone }> = {
-    open: { label: 'For review', tone: 'amber' },
+    open: { label: 'Pending', tone: 'amber' },
     approved: { label: 'Approved', tone: 'emerald' },
+    rejected: { label: 'Rejected', tone: 'rose' },
     locked: { label: 'Locked', tone: 'slate' },
 };
 
@@ -264,43 +276,34 @@ export const DAY_TYPE: Record<string, string> = {
     regular_holiday_rest_day: 'Regular holiday + rest day',
 };
 
-/** What a record still needs, in plain words — drives the "Issues" column. */
-export function recordIssues(row: DtrRow): string[] {
-    const issues: string[] = [];
-    if (row.attendance_status === 'incomplete') issues.push(!row.time_in ? 'No check-in' : 'No check-out');
-    if (row.is_absent) issues.push('Absent');
-    if (Number(row.tardiness_minutes) > 0) issues.push(`Late ${fmtMinutes(row.tardiness_minutes)}`);
-    if (Number(row.undertime_minutes) > 0) issues.push(`Undertime ${fmtMinutes(row.undertime_minutes)}`);
-    const unpaidOt = Number(row.ot_hours) - Number(row.ot_hours_approved);
-    if (unpaidOt > 0) issues.push(`OT ${fmtHours(unpaidOt)} ${row.ot_request_pending ? 'approval pending' : 'not pre-approved'}`);
-    if (row.location_status === 'out_of_bounds') issues.push('Outside geofence');
-    return issues;
-}
+const fmtRange = (from: string, to: string) => {
+    const a = parseLocalDate(from);
+    const b = parseLocalDate(to);
+    const month = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short' });
+    const tail = b.getFullYear() !== new Date().getFullYear() ? `, ${b.getFullYear()}` : '';
+    return a.getMonth() === b.getMonth() ? `${month(a)} ${a.getDate()}–${b.getDate()}${tail}` : `${month(a)} ${a.getDate()} – ${month(b)} ${b.getDate()}${tail}`;
+};
 
-export function periodPresets(today: string) {
+/**
+ * Pay periods to pick from, newest first. Uses the periods set up in Payroll (1–15 / 16–end by
+ * default, or custom cut-offs); falls back to the calendar halves when none are set up yet.
+ */
+export function periodOptions(periods: PayPeriodOption[], today: string) {
+    if (periods.length > 0) {
+        return periods.map((p) => ({ id: `pp-${p.id}`, label: fmtRange(p.from, p.to), from: p.from, to: p.to, current: p.from <= today && p.to >= today }));
+    }
+
     const t = parseLocalDate(today);
-    const day = (t.getDay() + 6) % 7; // Monday = 0
-    const monday = new Date(t);
-    monday.setDate(t.getDate() - day);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    const lastMonday = new Date(monday);
-    lastMonday.setDate(monday.getDate() - 7);
-    const lastSunday = new Date(monday);
-    lastSunday.setDate(monday.getDate() - 1);
-    const monthStart = new Date(t.getFullYear(), t.getMonth(), 1);
-    const monthEnd = new Date(t.getFullYear(), t.getMonth() + 1, 0);
-    // PH semi-monthly payroll cut-offs: 1–15 and 16–end of month
-    const cutStart = t.getDate() <= 15 ? monthStart : new Date(t.getFullYear(), t.getMonth(), 16);
-    const cutEnd = t.getDate() <= 15 ? new Date(t.getFullYear(), t.getMonth(), 15) : monthEnd;
+    const offset = t.getDate() <= 15 ? 1 : 0; // start from the half that contains today
+    const halves = Array.from({ length: 6 }, (_, i) => {
+        const n = i + offset;
+        const m = new Date(t.getFullYear(), t.getMonth() - Math.floor(n / 2), 1);
+        return n % 2 === 0
+            ? { from: toIsoDate(new Date(m.getFullYear(), m.getMonth(), 16)), to: toIsoDate(new Date(m.getFullYear(), m.getMonth() + 1, 0)) }
+            : { from: toIsoDate(m), to: toIsoDate(new Date(m.getFullYear(), m.getMonth(), 15)) };
+    });
 
-    return [
-        { id: 'today', label: 'Today', from: today, to: today },
-        { id: 'week', label: 'This week', from: toIsoDate(monday), to: toIsoDate(sunday) },
-        { id: 'last_week', label: 'Last week', from: toIsoDate(lastMonday), to: toIsoDate(lastSunday) },
-        { id: 'cutoff', label: 'This cut-off', from: toIsoDate(cutStart), to: toIsoDate(cutEnd) },
-        { id: 'month', label: 'This month', from: toIsoDate(monthStart), to: toIsoDate(monthEnd) },
-    ];
+    return halves.map((h) => ({ id: h.from, label: fmtRange(h.from, h.to), from: h.from, to: h.to, current: h.from <= today && h.to >= today }));
 }
 
 export const firstError = (errors: Record<string, string>) => Object.values(errors)[0] ?? 'Something went wrong.';

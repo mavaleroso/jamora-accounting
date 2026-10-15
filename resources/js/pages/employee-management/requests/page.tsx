@@ -1,5 +1,5 @@
-import { Head, router } from '@inertiajs/react';
-import { Eye, Inbox, ListChecks, Plus, ShieldCheck, UserRound, Wallet, type LucideIcon } from 'lucide-react';
+import { Head, Link, router } from '@inertiajs/react';
+import { ArrowRight, Eye, Inbox, ListChecks, Plus, ShieldCheck, UserRound, Wallet, type LucideIcon } from 'lucide-react';
 import * as React from 'react';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +14,7 @@ import { BalancesPanel, OutPanel } from './components/panels';
 import { RequestFeed } from './components/request-feed';
 import { TeamBalances } from './components/team-balances';
 import {
+    canDecide,
     fileableKinds,
     leaveTypesFor,
     KIND_ORDER,
@@ -66,7 +67,7 @@ export default function EmployeeRequestsPage(props: Props) {
             ? canApproveLeave || (hasSelf && leaveTypesFor(self, leaveTypes).length > 0)
             : hasSelf || canApproveAttendance,
     );
-    const approvable = KIND_ORDER.filter((k) => (KINDS[k].source === 'leave' ? canApproveLeave : canApproveAttendance));
+    const approvable = KIND_ORDER.filter((k) => canDecide(perspective, k));
     const year = filters.year;
 
     // Deep link from elsewhere (e.g. the portal): ?file=leave opens the form.
@@ -210,7 +211,21 @@ export default function EmployeeRequestsPage(props: Props) {
                             <Stat label="Decided this month" value={team.stats.decidedThisMonth} hint={`${team.stats.leaveDaysThisMonth} leave days approved`} />
                         </div>
                         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-                            <div className="min-w-0">{sharedFeed({ kinds: approvable, kindCounts: badges.inboxByKind })}</div>
+                            <div className="min-w-0 space-y-3">
+                                {badges.corrections > 0 && (
+                                    <Link
+                                        href="/employee-management/attendance?view=timesheets&status=open"
+                                        className="flex items-center justify-between gap-3 rounded-xl border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"
+                                    >
+                                        <span>
+                                            <span className="font-semibold">{badges.corrections}</span> time {badges.corrections === 1 ? 'correction is' : 'corrections are'} waiting in
+                                            Timesheets — approve them together with the day.
+                                        </span>
+                                        <ArrowRight className="size-4 shrink-0" />
+                                    </Link>
+                                )}
+                                {sharedFeed({ kinds: approvable, kindCounts: badges.inboxByKind })}
+                            </div>
                             <aside className="space-y-4">
                                 <OutPanel title="Who’s out · next 2 weeks" items={team.out} today={today} showEmployee empty="Everyone is in for the next two weeks." />
                             </aside>
