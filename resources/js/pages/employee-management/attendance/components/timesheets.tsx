@@ -10,7 +10,7 @@ import { TableShell } from '@/components/ui/table-shell';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { router } from '@inertiajs/react';
-import { Check, CheckCheck, ChevronLeft, ChevronRight, FilePenLine, Lock, MapPinCheck, MoreHorizontal, Pencil, Undo2, X } from 'lucide-react';
+import { Check, CheckCheck, ChevronLeft, ChevronRight, FilePenLine, Lock, MapPinCheck, MoreHorizontal, NotebookPen, Pencil, Undo2, X } from 'lucide-react';
 import * as React from 'react';
 import {
     ATTENDANCE_URL,
@@ -20,6 +20,7 @@ import {
     fmtHours,
     fmtTime,
     fullName,
+    htmlToText,
     periodOptions,
     RECORD_STATUS,
     TONE,
@@ -325,6 +326,12 @@ function DayRow({
                     {weekday(e.work_date)}
                     {e.day_type !== 'regular' && <> · {DAY_TYPE[e.day_type] ?? e.day_type}</>}
                 </div>
+                {e.accomplishment && (
+                    <div className="mt-0.5 flex max-w-[180px] items-center gap-1 text-[11px] text-muted-foreground" title={htmlToText(e.accomplishment)}>
+                        <NotebookPen className="size-3 shrink-0" />
+                        <span className="truncate">{htmlToText(e.accomplishment)}</span>
+                    </div>
+                )}
             </TableCell>
             {canViewTeam && (
                 <TableCell>

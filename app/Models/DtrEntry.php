@@ -34,7 +34,7 @@ class DtrEntry extends Model
         'regular_hours', 'ot_hours', 'ot_hours_approved', 'tardiness_minutes', 'undertime_minutes',
         'night_diff_hours', 'day_type', 'attendance_status', 'leave_request_id', 'is_absent',
         'source', 'in_latitude', 'in_longitude', 'out_latitude', 'out_longitude',
-        'distance_meters', 'location_status', 'status', 'approved_by', 'approved_at', 'notes',
+        'distance_meters', 'location_status', 'status', 'approved_by', 'approved_at', 'notes', 'accomplishment',
     ];
 
     protected function casts(): array

@@ -457,6 +457,7 @@ test('coordinates-based attendance check-in, break-out, break-in, and check-out 
             'latitude' => 14.5353,
             'longitude' => 120.9823,
             'punch_time' => $today.' 18:45:00',
+            'accomplishment' => 'Closed the month-end inventory count',
         ]);
     $checkOutResponse->assertSessionHas('status');
 

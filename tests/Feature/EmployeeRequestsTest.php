@@ -514,3 +514,63 @@ test('a pay period can be changed until payroll is computed for it', function ()
     ($this->as)($this->hrUser)->put("/payroll/periods/{$first->id}", ['code' => 'PP-A', 'start_date' => '2026-10-01', 'end_date' => '2026-10-20'])
         ->assertSessionHasErrors('start_date');
 });
+
+test('checking out needs a check-in, the accomplishment of the day, and a remark when a break punch is missing', function () {
+    $punch = fn (array $data) => ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', [
+        'employee_id' => $this->staffEmployee->id,
+        'latitude' => 14.5547,
+        'longitude' => 121.0244,
+        ...$data,
+    ]);
+
+    // A forgotten check-in is fixed with a time correction, not at check-out.
+    $punch(['punch_type' => 'check_out', 'accomplishment' => 'Fitted 6 patients', 'notes' => 'Forgot to check in'])->assertSessionHasErrors('punch_type');
+
+    $punch(['punch_type' => 'check_in'])->assertSessionHasNoErrors();
+    Carbon::setTestNow('2026-10-14 18:00:00');
+    $punch(['punch_type' => 'check_out', 'notes' => 'No break today'])->assertSessionHasErrors('accomplishment');
+    $punch(['punch_type' => 'check_out', 'accomplishment' => 'Fitted 6 patients'])->assertSessionHasErrors('notes');
+    $punch(['punch_type' => 'check_out', 'accomplishment' => 'Fitted 6 patients', 'notes' => 'Worked through lunch'])->assertSessionHasNoErrors();
+
+    $dtr = DtrEntry::where('employee_id', $this->staffEmployee->id)->firstOrFail();
+    expect($dtr->time_out)->toBe('18:00:00')
+        ->and($dtr->accomplishment)->toBe('Fitted 6 patients')
+        ->and($dtr->notes)->toContain('Worked through lunch');
+});
+
+test('a full day with a break checks out with only the accomplishment', function () {
+    foreach (['check_in' => '09:00', 'break_out' => '12:00', 'break_in' => '13:00'] as $type => $time) {
+        Carbon::setTestNow("2026-10-14 {$time}:00");
+        ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', ['employee_id' => $this->staffEmployee->id, 'punch_type' => $type, 'latitude' => 14.5547, 'longitude' => 121.0244])
+            ->assertSessionHasNoErrors();
+    }
+
+    Carbon::setTestNow('2026-10-14 18:00:00');
+    ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', ['employee_id' => $this->staffEmployee->id, 'punch_type' => 'check_out', 'latitude' => 14.5547, 'longitude' => 121.0244, 'accomplishment' => 'Encoded lens orders'])
+        ->assertSessionHasNoErrors();
+
+    expect(DtrEntry::firstOrFail()->accomplishment)->toBe('Encoded lens orders');
+});
+
+test('the accomplishment keeps simple formatting and drops anything unsafe', function () {
+    $punch = fn (array $data) => ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', [
+        'employee_id' => $this->staffEmployee->id,
+        'latitude' => 14.5547,
+        'longitude' => 121.0244,
+        ...$data,
+    ]);
+
+    $punch(['punch_type' => 'check_in'])->assertSessionHasNoErrors();
+    Carbon::setTestNow('2026-10-14 18:00:00');
+
+    // An empty editor is not an accomplishment.
+    $punch(['punch_type' => 'check_out', 'notes' => 'No break', 'accomplishment' => '<p></p>'])->assertSessionHasErrors('accomplishment');
+
+    $punch([
+        'punch_type' => 'check_out',
+        'notes' => 'No break',
+        'accomplishment' => '<p onclick="steal()">Fitted <strong class="x">6</strong> patients<script>alert(1)</script></p><ul><li>Lens <a href="javascript:x">orders</a></li></ul><img src=x onerror=alert(1)>',
+    ])->assertSessionHasNoErrors();
+
+    expect(DtrEntry::firstOrFail()->accomplishment)->toBe('<p>Fitted <strong>6</strong> patients</p><ul><li>Lens orders</li></ul>');
+});
