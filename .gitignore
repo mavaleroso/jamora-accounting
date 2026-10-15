@@ -11,7 +11,7 @@
 /.vscode
 /.zed
 /bootstrap/ssr
-/node_modules
+# /node_modules
 # /public/build
 # /public/hot
 # /public/storage
@@ -20,7 +20,7 @@
 /resources/js/wayfinder
 /storage/*.key
 /storage/pail
-/vendor
+# /vendor
 auth.json
 Homestead.json
 Homestead.yaml
