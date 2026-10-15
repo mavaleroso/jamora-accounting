@@ -13,6 +13,7 @@ use App\Services\People\AttendanceRequestService;
 use App\Services\People\EmployeeResolver;
 use App\Services\People\TeamBoard;
 use App\Support\EntityContext;
+use App\Support\RichText;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\RedirectResponse;
@@ -241,6 +242,9 @@ class AttendanceController extends Controller
                 'longitude' => ['nullable', 'numeric'],
                 'punch_time' => ['nullable', 'string'],
                 'notes' => ['nullable', 'string', 'max:500'],
+                'accomplishment' => ['nullable', 'required_if:punch_type,check_out,out', 'string', 'max:20000'],
+            ], [
+                'accomplishment.required_if' => 'Write what you accomplished today before checking out.',
             ]);
 
             if (! $isManager) {
@@ -316,18 +320,32 @@ class AttendanceController extends Controller
                 'check_in' => $dtr->time_in ? 'You have already checked in today.' : null,
                 'break_out' => ! $dtr->time_in ? 'Check in before starting a break.' : ($dtr->break_out ? 'Break-out is already recorded.' : ($dtr->time_out ? 'You have already checked out.' : null)),
                 'break_in' => ! $dtr->break_out ? 'Record a break-out first.' : ($dtr->break_in ? 'Break-in is already recorded.' : ($dtr->time_out ? 'You have already checked out.' : null)),
-                'check_out' => ! $dtr->time_in ? 'Check in before checking out.' : ($dtr->time_out ? 'You have already checked out today.' : null),
+                // A forgotten check-in is fixed with a time correction request, not at check-out.
+                'check_out' => ! $dtr->time_in ? 'Check in before checking out. Forgot to check in? File a time correction.' : ($dtr->time_out ? 'You have already checked out today.' : null),
             };
             if ($sequenceError) {
                 return redirect()->back()->withErrors(['punch_type' => $sequenceError]);
             }
 
-            if ($punchType === 'check_out'
-                && (! $dtr->break_out || ! $dtr->break_in)
-                && blank(trim((string) ($validated['notes'] ?? '')))) {
-                return redirect()->back()->withErrors([
-                    'notes' => 'A remark is required when checking out with a missing break-out or break-in punch.',
-                ]);
+            if ($punchType === 'check_out') {
+                // Rich text from the editor: only simple formatting is kept.
+                $accomplishment = RichText::sanitize($validated['accomplishment'] ?? '');
+                if ($accomplishment === '') {
+                    return redirect()->back()->withErrors(['accomplishment' => 'Write what you accomplished today before checking out.']);
+                }
+                if (mb_strlen(RichText::plainText($accomplishment)) > 2000) {
+                    return redirect()->back()->withErrors(['accomplishment' => 'Keep the accomplishment under 2,000 characters.']);
+                }
+
+                $missing = array_keys(array_filter([
+                    'break-out' => ! $dtr->break_out,
+                    'break-in' => ! $dtr->break_in,
+                ]));
+                if ($missing && blank(trim((string) ($validated['notes'] ?? '')))) {
+                    return redirect()->back()->withErrors([
+                        'notes' => 'Add a remark: your '.implode(', ', $missing).' '.(count($missing) === 1 ? 'is' : 'are').' missing.',
+                    ]);
+                }
             }
 
             $display = $punchTime->format('g:i A');
@@ -359,6 +377,9 @@ class AttendanceController extends Controller
 
             if (! empty($validated['notes'])) {
                 $dtr->notes = trim(($dtr->notes ?? '').' '.$validated['notes']);
+            }
+            if ($punchType === 'check_out') {
+                $dtr->accomplishment = $accomplishment;
             }
 
             // Centralized calculation with shift roster schedules

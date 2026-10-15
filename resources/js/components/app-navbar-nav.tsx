@@ -95,9 +95,23 @@ export function AppNavbarNav({ className }: { className?: string }) {
                     {overviewNavItem.title}
                 </Link>
             )}
-            {groups.map((group) => (
-                <NavGroupDropdown key={group.title} group={group} activeUrl={activeUrl} />
-            ))}
+            {isEmployee
+                ? // Employees have only a handful of pages: show them as a flat row, no dropdowns.
+                  groups
+                      .flatMap((group) => group.items)
+                      .map((item) => (
+                          <Link
+                              key={item.title}
+                              href={item.href}
+                              prefetch
+                              className={cn(navbarLinkClass, hrefOf(item.href) === activeUrl && activeLinkClass)}
+                          >
+                              {item.icon && <item.icon className="h-4 w-4 opacity-80" />}
+                              {item.title}
+                              <NavBadge count={item.count} />
+                          </Link>
+                      ))
+                : groups.map((group) => <NavGroupDropdown key={group.title} group={group} activeUrl={activeUrl} />)}
         </nav>
     );
 }

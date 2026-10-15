@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import * as React from 'react';
 import { PersonAvatar } from '@/components/person-avatar';
+import { richTextClass } from '@/components/rich-text-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/lib/toast';
@@ -35,7 +36,7 @@ import {
     type MyDay,
 } from '../lib';
 import { useGeofence } from '../use-geofence';
-import { CheckoutRemarkDialog } from './dialogs';
+import { CheckoutDialog } from './dialogs';
 
 type PunchType = 'check_in' | 'break_out' | 'break_in' | 'check_out';
 
@@ -64,7 +65,7 @@ type Props = {
 export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenRequests }: Props) {
     const [now, setNow] = React.useState(() => new Date());
     const [submitting, setSubmitting] = React.useState<PunchType | null>(null);
-    const [remarkOpen, setRemarkOpen] = React.useState(false);
+    const [checkoutOpen, setCheckoutOpen] = React.useState(false);
     const geo = useGeofence(branch);
 
     React.useEffect(() => {
@@ -77,14 +78,14 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
     const onBreak = Boolean(entry?.break_out && !entry?.break_in);
     const working = Boolean(entry?.time_in) && !done && !onBreak;
     const notIn = !entry?.time_in;
-    const breakTaken = Boolean(entry?.break_out && entry?.break_in);
+    const missingAtCheckout = [!entry?.break_out && 'break-out', !entry?.break_in && 'break-in'].filter(Boolean) as string[];
 
     const shiftStart = schedule.start ? atToday(schedule.start, now) : null;
     const lateNow = notIn && shiftStart && now > new Date(shiftStart.getTime() + schedule.grace_minutes * 60000);
 
-    const punch = (type: PunchType, notes?: string) => {
-        if (type === 'check_out' && !breakTaken && notes === undefined) {
-            setRemarkOpen(true);
+    const punch = (type: PunchType, checkout?: { accomplishment: string; remark: string }) => {
+        if (type === 'check_out' && !checkout) {
+            setCheckoutOpen(true);
             return;
         }
         if (!geo.canPunch) {
@@ -101,12 +102,12 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
             {
                 employee_id: employee.id,
                 punch_type: type,
-                ...(notes ? { notes } : {}),
+                ...(checkout ? { accomplishment: checkout.accomplishment, ...(checkout.remark ? { notes: checkout.remark } : {}) } : {}),
                 ...(geo.coords ? { latitude: geo.coords.latitude, longitude: geo.coords.longitude } : {}),
             },
             {
                 preserveScroll: true,
-                onSuccess: () => setRemarkOpen(false),
+                onSuccess: () => setCheckoutOpen(false),
                 onError: (errors) => toast.error(firstError(errors)),
                 onFinish: () => setSubmitting(null),
             },
@@ -123,7 +124,8 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
             : working
               ? { type: 'check_out', label: 'Check out', icon: LogOut, className: 'bg-rose-600 hover:bg-rose-700 text-white' }
               : null;
-    const secondary = working && !entry?.break_out ? { type: 'check_out' as const, label: 'Check out', icon: LogOut } : null;
+    // Check out stays reachable without a break or while on one. A forgotten check-in is fixed with a time correction.
+    const secondary = (working && !entry?.break_out) || onBreak ? { type: 'check_out' as const, label: 'Check out', icon: LogOut } : null;
 
     const statusLine = (() => {
         if (done) {
@@ -234,6 +236,13 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                             </div>
                         </div>
                     )}
+                    {done && entry?.accomplishment && (
+                        <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                            <div className="mb-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Today’s accomplishment</div>
+                            {/* Sanitized to simple formatting by the server (App\Support\RichText). */}
+                            <div className={richTextClass} dangerouslySetInnerHTML={{ __html: entry.accomplishment }} />
+                        </div>
+                    )}
 
                     {/* Location */}
                     <LocationRow geo={geo} branch={branch} />
@@ -335,11 +344,12 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                 </p>
             </div>
 
-            <CheckoutRemarkDialog
-                open={remarkOpen}
-                onOpenChange={setRemarkOpen}
+            <CheckoutDialog
+                open={checkoutOpen}
+                onOpenChange={setCheckoutOpen}
                 processing={submitting === 'check_out'}
-                onConfirm={(remark) => punch('check_out', remark)}
+                missing={missingAtCheckout}
+                onConfirm={(data) => punch('check_out', data)}
             />
         </div>
     );

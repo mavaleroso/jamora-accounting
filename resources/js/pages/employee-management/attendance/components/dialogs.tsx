@@ -2,6 +2,7 @@ import { useForm } from '@inertiajs/react';
 import { CalendarCheck, Crosshair, Loader2, MapPin } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
+import { RichTextEditor } from '@/components/rich-text-editor';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -16,6 +17,7 @@ import {
     fmtHours,
     fmtTime,
     fullName,
+    htmlToText,
     toTimeInput,
     type AttendanceRequestRow,
     type BranchLocation,
@@ -49,36 +51,59 @@ function Shell({ open, onOpenChange, className, children }: Open & { className?:
  * Checkout remark (employee)
  * -------------------------------------------------------------------------------------------- */
 
-export function CheckoutRemarkDialog({ open, onOpenChange, onConfirm, processing }: Open & { onConfirm: (remark: string) => void; processing: boolean }) {
+/** Checking out always asks what was accomplished; a remark is required when a punch is missing. */
+export function CheckoutDialog({
+    open,
+    onOpenChange,
+    onConfirm,
+    processing,
+    missing,
+}: Open & { onConfirm: (data: { accomplishment: string; remark: string }) => void; processing: boolean; missing: string[] }) {
+    const [accomplishment, setAccomplishment] = React.useState('');
     const [remark, setRemark] = React.useState('');
+    const needsRemark = missing.length > 0;
+
     return (
-        <Shell open={open} onOpenChange={onOpenChange}>
+        <Shell open={open} onOpenChange={onOpenChange} className="sm:max-w-3xl">
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
-                    onConfirm(remark.trim());
+                    onConfirm({ accomplishment, remark: remark.trim() });
                 }}
                 className="space-y-4"
             >
                 <DialogHeader>
-                    <DialogTitle>Check out without a full break?</DialogTitle>
-                    <DialogDescription>
-                        Your break-out or break-in is missing. Add a short remark for HR — the standard unpaid break will still be deducted.
-                    </DialogDescription>
+                    <DialogTitle>Check out</DialogTitle>
+                    <DialogDescription>Before you go, note what you got done today.</DialogDescription>
                 </DialogHeader>
-                <Textarea
-                    value={remark}
-                    onChange={(e) => setRemark(e.target.value)}
-                    maxLength={500}
-                    rows={3}
-                    placeholder="e.g. Took a working lunch with a walk-in patient"
-                    autoFocus
-                />
+                <Field label="Today’s accomplishment">
+                    <RichTextEditor
+                        value={accomplishment}
+                        onChange={setAccomplishment}
+                        contentClassName="min-h-56 max-h-[50vh] overflow-y-auto"
+                        placeholder="e.g. Fitted 6 walk-in patients, encoded lens orders, reconciled the cash drawer"
+                        autoFocus
+                    />
+                </Field>
+                {needsRemark && (
+                    <Field label="Remarks" hint={missing.includes('break-out') || missing.includes('break-in') ? 'The standard unpaid break is still deducted.' : undefined}>
+                        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            Your {missing.join(', ')} {missing.length === 1 ? 'is' : 'are'} missing. Tell HR why.
+                        </div>
+                        <Textarea
+                            value={remark}
+                            onChange={(e) => setRemark(e.target.value)}
+                            maxLength={500}
+                            rows={2}
+                            placeholder="e.g. Worked through lunch with a walk-in patient"
+                        />
+                    </Field>
+                )}
                 <DialogFooter>
                     <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                         Cancel
                     </Button>
-                    <Button type="submit" disabled={!remark.trim() || processing}>
+                    <Button type="submit" disabled={!htmlToText(accomplishment) || (needsRemark && !remark.trim()) || processing}>
                         {processing && <Loader2 className="size-4 animate-spin" />}
                         Check out
                     </Button>

@@ -38,6 +38,8 @@ export type DtrRow = {
     approved_at?: string | null;
     approver?: { id: number; firstname: string; lastname: string } | null;
     notes?: string | null;
+    /** What the employee got done, entered at check-out. */
+    accomplishment?: string | null;
     employee?: Person;
     /** Employee-filed time correction waiting on this day; approving the day applies it. */
     pending_correction?: PendingCorrection | null;
@@ -304,6 +306,22 @@ export function periodOptions(periods: PayPeriodOption[], today: string) {
     });
 
     return halves.map((h) => ({ id: h.from, label: fmtRange(h.from, h.to), from: h.from, to: h.to, current: h.from <= today && h.to >= today }));
+}
+
+/** Visible text of saved rich text, for previews and tooltips. */
+export function htmlToText(html?: string | null): string {
+    if (!html) return '';
+    return html
+        .replace(/<(br|\/p|\/li)\b[^>]*>/gi, ' ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 export const firstError = (errors: Record<string, string>) => Object.values(errors)[0] ?? 'Something went wrong.';
