@@ -12,9 +12,9 @@
 /.zed
 /bootstrap/ssr
 /node_modules
-/public/build
-/public/hot
-/public/storage
+# /public/build
+# /public/hot
+# /public/storage
 /resources/js/actions
 /resources/js/routes
 /resources/js/wayfinder

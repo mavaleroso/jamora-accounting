@@ -1,0 +1,1 @@
+const t=new Intl.NumberFormat("en-PH",{style:"currency",currency:"PHP",minimumFractionDigits:2,maximumFractionDigits:2});function e(n){const r=Number(n??0);return Number.isNaN(r)?t.format(0):t.format(r)}export{e as f};
