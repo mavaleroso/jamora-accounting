@@ -12,7 +12,7 @@ class CustomerDeposit extends Model
 
     protected $fillable = [
         'entity_id', 'partner_id', 'invoice_id', 'deposit_date', 'amount', 'applied_amount',
-        'status', 'payment_method', 'reference', 'notes', 'journal_entry_id',
+        'status', 'payment_method', 'bank_account_id', 'reference', 'notes', 'journal_entry_id',
     ];
 
     protected function casts(): array
@@ -32,5 +32,15 @@ class CustomerDeposit extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(Invoice::class);
+    }
+
+    public function bankAccount(): BelongsTo
+    {
+        return $this->belongsTo(BankAccount::class);
+    }
+
+    public function remainingAmount(): float
+    {
+        return round((float) $this->amount - (float) $this->applied_amount, 2);
     }
 }

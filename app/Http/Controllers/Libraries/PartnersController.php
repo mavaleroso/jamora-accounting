@@ -15,27 +15,37 @@ class PartnersController extends Controller
 {
     public function index(Request $request): Response
     {
-        $pageSize = max(1, min(100, (int) $request->get('per_page', 10)));
-        $page = max(1, (int) $request->get('page', 1));
-        $search = trim((string) $request->get('search', ''));
+        $filters = [
+            'search' => trim((string) $request->get('search', '')),
+            'type' => $request->get('type'),
+            'status' => $request->get('status'),
+        ];
+        $open = fn ($q) => $q->whereIn('status', ['confirmed', 'partially_paid']);
 
-        $query = Partner::query()->with('balance')->orderBy('code');
-
-        if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('code', 'like', "%{$search}%")
-                    ->orWhere('name', 'like', "%{$search}%");
-            });
-        }
-
-        $paginator = $query->paginate($pageSize, ['*'], 'page', $page);
+        $partners = Partner::query()
+            // Receivable straight from open invoices, so it always agrees with AR aging.
+            ->withSum(['invoices as open_balance' => $open], 'balance_due')
+            ->withCount(['invoices as open_invoices' => $open])
+            ->when($filters['search'] !== '', fn ($q) => $q->where(fn ($q) => $q
+                ->where('code', 'like', "%{$filters['search']}%")
+                ->orWhere('name', 'like', "%{$filters['search']}%")
+                ->orWhere('tin', 'like', "%{$filters['search']}%")))
+            ->when(in_array($filters['type'], ['customer', 'patient', 'wholesale'], true), fn ($q) => $q->where('type', $filters['type']))
+            ->when($filters['status'] === 'active', fn ($q) => $q->where('is_active', true))
+            ->when($filters['status'] === 'inactive', fn ($q) => $q->where('is_active', false))
+            ->orderBy('name')
+            ->paginate(20)
+            ->withQueryString();
 
         return Inertia::render('libraries/partners/page', [
-            'partners' => $paginator->items(),
-            'totalPartners' => $paginator->total(),
-            'pageSize' => $pageSize,
-            'currentPage' => $paginator->currentPage(),
-            'search' => $search,
+            'parties' => $partners,
+            'filters' => $filters,
+            'summary' => [
+                'total' => Partner::query()->count(),
+                'active' => Partner::query()->where('is_active', true)->count(),
+                'withBalance' => Partner::query()->whereHas('invoices', $open)->count(),
+                'outstanding' => round((float) \App\Models\Invoice::query()->whereIn('status', ['confirmed', 'partially_paid'])->sum('balance_due'), 2),
+            ],
         ]);
     }
 

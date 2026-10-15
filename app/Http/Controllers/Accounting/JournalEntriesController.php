@@ -242,9 +242,11 @@ class JournalEntriesController extends Controller
     {
         return [
             'journals' => $this->journalOptions(),
+            // Non-cash journals only: cash and bank accounts are recorded through Cash & Bank Records.
             'accounts' => Account::query()
                 ->where('is_postable', true)
                 ->where('is_active', true)
+                ->whereNotIn('id', app(\App\Services\Accounting\CashMovementService::class)->cashAccountIds())
                 ->orderBy('code')
                 ->get(['id', 'code', 'name'])
                 ->map(fn (Account $account) => [

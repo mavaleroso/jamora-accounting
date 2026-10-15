@@ -19,6 +19,7 @@ class InventoryItem extends Model
         'brand',
         'unit_cost',
         'selling_price',
+        'wholesale_price',
         'qty_on_hand',
         'reorder_level',
         'gl_account_id',
@@ -30,6 +31,7 @@ class InventoryItem extends Model
         return [
             'unit_cost' => 'decimal:2',
             'selling_price' => 'decimal:2',
+            'wholesale_price' => 'decimal:2',
             'qty_on_hand' => 'integer',
             'reorder_level' => 'integer',
             'is_active' => 'boolean',

@@ -1,146 +1,209 @@
-import { Head, Link, router } from '@inertiajs/react';
-import { PlusIcon } from 'lucide-react';
-import * as React from 'react';
-import Heading from '@/components/heading';
+import { FilterBar } from '@/components/finance/filter-bar';
+import { daysPastDue, formatAmount, formatDate } from '@/components/finance/format';
+import { PageBody, PageHeader } from '@/components/finance/page-header';
+import { Paginator, type Paginated } from '@/components/finance/paginator';
+import { StatusBadge } from '@/components/finance/status-badge';
+import { StatCard, StatGrid } from '@/components/stat-card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TableShell } from '@/components/ui/table-shell';
 import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
-import type { BreadcrumbItem } from '@/types';
-import { TableShell } from '@/components/ui/table-shell';
+import { hasPermission } from '@/lib/permissions';
+import type { Auth, BreadcrumbItem } from '@/types';
+import { Head, Link, router, usePage } from '@inertiajs/react';
+import { AlarmClockIcon, FileTextIcon, HandCoinsIcon, PlusIcon, ReceiptIcon } from 'lucide-react';
 
-const breadcrumbs: BreadcrumbItem[] = [{ title: 'Invoices', href: '/billing/invoices' }];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'Invoices & Billing', href: '/billing/invoices' }];
 
-type Partner = { id: number; code: string; name: string };
-type InvoiceLine = { id: number; line_no: number; description: string; quantity: number; unit_price: number; amount: number };
-type Invoice = {
+type InvoiceRow = {
     id: number;
     invoice_no: string;
-    bir_si_or_no?: string | null;
+    bir_si_or_no: string | null;
     invoice_date: string;
-    due_date?: string | null;
+    due_date: string | null;
+    pricing_type: 'retail' | 'wholesale';
     status: string;
-    total_amount: number;
-    amount_paid: number;
-    balance_due: number;
-    partner?: Partner;
-    lines?: InvoiceLine[];
-    payments?: { id: number; paid_date: string; amount: number; payment_method: string }[];
+    is_senior_pwd: boolean;
+    total_amount: string;
+    amount_paid: string;
+    balance_due: string;
+    partner?: { id: number; code: string; name: string; type: string } | null;
 };
 
 type Props = {
-    invoices: Invoice[];
-    totalInvoices: number;
-    pageSize: number;
-    currentPage: number;
-    invoice?: Invoice;
-    viewMode?: string;
+    invoices: Paginated<InvoiceRow>;
+    filters: Record<string, string | boolean | null>;
+    summary: { outstanding: number; overdue: number; overdueCount: number; draftCount: number; billedMtd: number; collectedMtd: number };
 };
 
-export default function InvoicesPage({ invoices, totalInvoices, currentPage, invoice, viewMode }: Props) {
-    const [collectAmount, setCollectAmount] = React.useState('');
-    const [collectDate, setCollectDate] = React.useState(new Date().toISOString().slice(0, 10));
-
-    if (viewMode === 'show' && invoice) {
-        return (
-            <AppLayout breadcrumbs={[...breadcrumbs, { title: invoice.invoice_no, href: `/billing/invoices/${invoice.id}` }]}>
-                <Head title={`Invoice ${invoice.invoice_no}`} />
-                <div className="flex flex-col gap-4 p-4">
-                    <div className="flex items-center justify-between">
-                        <Heading title={invoice.invoice_no} description={`Partner: ${invoice.partner?.name ?? '—'}`} />
-                        <Link href="/billing/invoices"><Button variant="outline">Back to list</Button></Link>
-                    </div>
-                    <Card>
-                        <CardHeader><CardTitle className="flex items-center gap-2">Status <Badge>{invoice.status}</Badge></CardTitle></CardHeader>
-                        <CardContent className="grid gap-2 sm:grid-cols-3 text-sm">
-                            <div>Date: {invoice.invoice_date}</div>
-                            <div>Total: {formatPhpCurrency(Number(invoice.total_amount))}</div>
-                            <div>Balance: {formatPhpCurrency(Number(invoice.balance_due))}</div>
-                        </CardContent>
-                    </Card>
-                    <TableShell>
-                        <Table>
-                            <TableHeader><TableRow><TableHead>#</TableHead><TableHead>Description</TableHead><TableHead>Qty</TableHead><TableHead>Price</TableHead><TableHead>Amount</TableHead></TableRow></TableHeader>
-                            <TableBody>
-                                {(invoice.lines ?? []).map((l) => (
-                                    <TableRow key={l.id}><TableCell>{l.line_no}</TableCell><TableCell>{l.description}</TableCell><TableCell>{l.quantity}</TableCell><TableCell>{formatPhpCurrency(Number(l.unit_price))}</TableCell><TableCell>{formatPhpCurrency(Number(l.amount))}</TableCell></TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </TableShell>
-                    <div className="flex flex-wrap gap-2">
-                        {invoice.status === 'draft' && (
-                            <Button onClick={() => router.post(`/billing/invoices/${invoice.id}/confirm`)}>Confirm</Button>
-                        )}
-                        {Number(invoice.balance_due) > 0 && invoice.status !== 'draft' && (
-                            <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => {
-                                e.preventDefault();
-                                router.post(`/billing/invoices/${invoice.id}/collect`, {
-                                    paid_date: collectDate,
-                                    amount: collectAmount,
-                                    payment_method: 'cash',
-                                });
-                            }}>
-                                <div><Label>Paid date</Label><Input type="date" value={collectDate} onChange={(e) => setCollectDate(e.target.value)} /></div>
-                                <div><Label>Amount</Label><Input type="number" step="0.01" value={collectAmount} onChange={(e) => setCollectAmount(e.target.value)} placeholder={String(invoice.balance_due)} /></div>
-                                <Button type="submit">Collect payment</Button>
-                            </form>
-                        )}
-                    </div>
-                </div>
-            </AppLayout>
-        );
-    }
+export default function InvoicesPage({ invoices, filters, summary }: Props) {
+    const { auth } = usePage<{ auth: Auth }>().props;
+    const canManage = hasPermission(auth, 'billing.manage');
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Invoices" />
-            <div className="flex h-full flex-1 flex-col gap-4 rounded-xl p-4">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <Heading title="Invoices" description="Billing invoices" />
-                    <Link href="/billing/invoices/create"><Button><PlusIcon className="size-4" />Create invoice</Button></Link>
-                </div>
+            <Head title="Invoices & Billing" />
+            <PageBody>
+                <PageHeader
+                    title="Invoices & Billing"
+                    description="Product sales, patient billing and service jobs recorded against the BIR-accredited invoice series."
+                    actions={
+                        canManage && (
+                            <Button asChild>
+                                <Link href="/billing/invoices/create">
+                                    <PlusIcon className="size-4" />
+                                    New invoice
+                                </Link>
+                            </Button>
+                        )
+                    }
+                />
+
+                <StatGrid>
+                    <StatCard
+                        title="Outstanding receivables"
+                        value={formatPhpCurrency(summary.outstanding)}
+                        icon={ReceiptIcon}
+                        description="Open and partially paid invoices"
+                    />
+                    <StatCard
+                        title="Overdue"
+                        value={formatPhpCurrency(summary.overdue)}
+                        icon={AlarmClockIcon}
+                        tone={summary.overdueCount > 0 ? 'danger' : 'success'}
+                        emphasize={summary.overdueCount > 0}
+                        description={`${summary.overdueCount} invoice${summary.overdueCount === 1 ? '' : 's'} past due`}
+                        href={summary.overdueCount > 0 ? '/billing/invoices?overdue=1' : undefined}
+                    />
+                    <StatCard
+                        title="Billed this month"
+                        value={formatPhpCurrency(summary.billedMtd)}
+                        icon={FileTextIcon}
+                        tone="info"
+                        description={`${summary.draftCount} draft${summary.draftCount === 1 ? '' : 's'} awaiting confirmation`}
+                    />
+                    <StatCard
+                        title="Collected this month"
+                        value={formatPhpCurrency(summary.collectedMtd)}
+                        icon={HandCoinsIcon}
+                        tone="success"
+                        description="Cash, GCash, card, check and transfers"
+                    />
+                </StatGrid>
+
+                <FilterBar
+                    url="/billing/invoices"
+                    filters={{
+                        search: filters.search,
+                        status: filters.status,
+                        pricing_type: filters.pricing_type,
+                        date_from: filters.date_from,
+                        date_to: filters.date_to,
+                        overdue: filters.overdue,
+                    }}
+                    searchPlaceholder="Invoice no., BIR SI/OR no. or customer"
+                    selects={[
+                        {
+                            key: 'status',
+                            label: 'Statuses',
+                            options: [
+                                { value: 'draft', label: 'Draft' },
+                                { value: 'confirmed', label: 'Open' },
+                                { value: 'partially_paid', label: 'Partially paid' },
+                                { value: 'paid', label: 'Paid' },
+                            ],
+                        },
+                        {
+                            key: 'pricing_type',
+                            label: 'Pricing',
+                            options: [
+                                { value: 'retail', label: 'Retail' },
+                                { value: 'wholesale', label: 'Wholesale' },
+                            ],
+                        },
+                    ]}
+                    dateRange={{ from: 'date_from', to: 'date_to' }}
+                />
+
                 <TableShell>
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Invoice #</TableHead>
-                                <TableHead>Partner</TableHead>
+                                <TableHead>Invoice</TableHead>
+                                <TableHead>Customer</TableHead>
                                 <TableHead>Date</TableHead>
+                                <TableHead>Due</TableHead>
                                 <TableHead>Status</TableHead>
-                                <TableHead>Total</TableHead>
-                                <TableHead>Balance</TableHead>
-                                <TableHead></TableHead>
+                                <TableHead className="text-right">Total</TableHead>
+                                <TableHead className="text-right">Paid</TableHead>
+                                <TableHead className="text-right">Balance</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {invoices.map((inv) => (
-                                <TableRow key={inv.id}>
-                                    <TableCell className="font-mono">{inv.invoice_no}</TableCell>
-                                    <TableCell>{inv.partner?.name ?? '—'}</TableCell>
-                                    <TableCell>{inv.invoice_date}</TableCell>
-                                    <TableCell><Badge variant="outline">{inv.status}</Badge></TableCell>
-                                    <TableCell>{formatPhpCurrency(Number(inv.total_amount))}</TableCell>
-                                    <TableCell>{formatPhpCurrency(Number(inv.balance_due))}</TableCell>
-                                    <TableCell><Link href={`/billing/invoices/${inv.id}`}><Button variant="ghost" size="sm">View</Button></Link></TableCell>
+                            {invoices.data.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={8} className="text-muted-foreground h-32 text-center">
+                                        No invoices match these filters.
+                                    </TableCell>
                                 </TableRow>
-                            ))}
+                            ) : (
+                                invoices.data.map((inv) => {
+                                    const open = ['confirmed', 'partially_paid'].includes(inv.status);
+                                    const late = open ? daysPastDue(inv.due_date) : 0;
+
+                                    return (
+                                        <TableRow
+                                            key={inv.id}
+                                            className="hover:bg-muted/40 cursor-pointer"
+                                            onClick={() => router.visit(`/billing/invoices/${inv.id}`)}
+                                        >
+                                            <TableCell>
+                                                <div className="font-mono text-sm font-medium">{inv.invoice_no}</div>
+                                                <div className="text-muted-foreground text-xs">
+                                                    {inv.bir_si_or_no ? `BIR ${inv.bir_si_or_no}` : 'No BIR no. yet'}
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="font-medium">{inv.partner?.name ?? '—'}</div>
+                                                <div className="flex gap-1 pt-0.5">
+                                                    <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal capitalize">
+                                                        {inv.pricing_type}
+                                                    </Badge>
+                                                    {inv.is_senior_pwd && (
+                                                        <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+                                                            Senior/PWD
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="whitespace-nowrap">{formatDate(inv.invoice_date)}</TableCell>
+                                            <TableCell className="whitespace-nowrap">
+                                                {formatDate(inv.due_date)}
+                                                {late > 0 && (
+                                                    <div className="text-xs font-medium text-red-600 dark:text-red-400">{late} days overdue</div>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <StatusBadge status={late > 0 ? 'overdue' : inv.status} />
+                                            </TableCell>
+                                            <TableCell className="text-right font-mono tabular-nums">{formatAmount(inv.total_amount)}</TableCell>
+                                            <TableCell className="text-muted-foreground text-right font-mono tabular-nums">
+                                                {formatAmount(inv.amount_paid)}
+                                            </TableCell>
+                                            <TableCell className="text-right font-mono font-medium tabular-nums">
+                                                {formatAmount(inv.balance_due)}
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })
+                            )}
                         </TableBody>
                     </Table>
                 </TableShell>
-                <p className="text-muted-foreground text-sm">{invoices.length} of {totalInvoices} (page {currentPage})</p>
-            </div>
+                <Paginator page={invoices} noun="invoices" />
+            </PageBody>
         </AppLayout>
     );
 }

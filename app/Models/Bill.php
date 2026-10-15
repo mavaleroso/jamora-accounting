@@ -13,7 +13,7 @@ class Bill extends Model
     use SoftDeletes, BelongsToEntity;
 
     protected $fillable = [
-        'entity_id', 'vendor_id', 'bill_no', 'vendor_invoice_no', 'bill_date', 'due_date',
+        'entity_id', 'vendor_id', 'bill_no', 'vendor_invoice_no', 'bill_date', 'due_date', 'vat_treatment',
         'status', 'subtotal', 'vat_amount', 'total_amount', 'amount_paid', 'balance_due',
         'journal_entry_id', 'notes', 'created_by',
     ];
@@ -44,5 +44,10 @@ class Bill extends Model
     public function payments(): HasMany
     {
         return $this->hasMany(BillPayment::class);
+    }
+
+    public function journalEntry(): BelongsTo
+    {
+        return $this->belongsTo(JournalEntry::class);
     }
 }

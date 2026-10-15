@@ -3,35 +3,33 @@
 namespace App\Services\Ap;
 
 use App\Models\Account;
-use App\Models\BankAccount;
-use App\Models\BankTransaction;
 use App\Models\Bill;
 use App\Models\BillLine;
 use App\Models\BillPayment;
 use App\Models\Journal;
-use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\CashMovementService;
 use App\Support\EntityContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class BillService
 {
-    public function __construct(protected JournalPostingService $journalPostingService) {}
+    public const VAT_TREATMENTS = ['exclusive', 'inclusive', 'non_vat'];
+
+    public const PAYMENT_METHODS = ['check', 'bank_transfer', 'cash', 'gcash'];
+
+    public function __construct(protected CashMovementService $cash) {}
 
     public function create(array $data, array $lines, int $userId): Bill
     {
         return DB::transaction(function () use ($data, $lines, $userId) {
-            $subtotal = collect($lines)->sum(fn ($l) => (float) ($l['amount'] ?? 0));
-            $vat = round($subtotal * (float) config('accounting.vat_rate', 0.12), 2);
-            $total = $subtotal + $vat;
+            $totals = $this->computeTotals($lines, $data['vat_treatment'] ?? 'exclusive');
 
             $bill = Bill::query()->create([
                 ...$data,
-                'subtotal' => $subtotal,
-                'vat_amount' => $vat,
-                'total_amount' => $total,
+                ...$totals,
                 'amount_paid' => 0,
-                'balance_due' => $total,
+                'balance_due' => $totals['total_amount'],
                 'status' => 'draft',
                 'created_by' => $userId,
             ]);
@@ -42,7 +40,7 @@ class BillService
                     'line_no' => $i + 1,
                     'description' => $line['description'],
                     'account_id' => $line['account_id'] ?? null,
-                    'amount' => $line['amount'],
+                    'amount' => round((float) $line['amount'], 2),
                     'tax_code_id' => $line['tax_code_id'] ?? null,
                 ]);
             }
@@ -51,51 +49,69 @@ class BillService
         });
     }
 
+    /**
+     * @return array{subtotal: float, vat_amount: float, total_amount: float}
+     */
+    public function computeTotals(array $lines, string $vatTreatment): array
+    {
+        $sum = round(collect($lines)->sum(fn ($l) => (float) ($l['amount'] ?? 0)), 2);
+        $rate = (float) config('accounting.vat_rate', 0.12);
+
+        return match ($vatTreatment) {
+            'inclusive' => (function () use ($sum, $rate) {
+                $vat = round($sum * $rate / (1 + $rate), 2);
+
+                return ['subtotal' => round($sum - $vat, 2), 'vat_amount' => $vat, 'total_amount' => $sum];
+            })(),
+            'non_vat' => ['subtotal' => $sum, 'vat_amount' => 0.0, 'total_amount' => $sum],
+            default => (function () use ($sum, $rate) {
+                $vat = round($sum * $rate, 2);
+
+                return ['subtotal' => $sum, 'vat_amount' => $vat, 'total_amount' => round($sum + $vat, 2)];
+            })(),
+        };
+    }
+
+    /**
+     * Recognise the payable: Dr expense/asset lines (net of VAT) and Input VAT, Cr Accounts Payable.
+     */
     public function post(Bill $bill, int $userId): Bill
     {
         if ($bill->status !== 'draft') {
-            return $bill;
+            throw ValidationException::withMessages(['bill' => 'Only draft bills can be posted.']);
         }
 
         return DB::transaction(function () use ($bill, $userId) {
-            $ap = Account::query()->where('code', '2000')->first();
-            $inputVat = Account::query()->where('code', '1300')->first();
-            $expense = Account::query()->where('code', '6400')->first();
-            $journal = Journal::query()->where('code', 'PJ')->first();
+            $bill->loadMissing('lines');
+            $ap = $this->account('2000');
+            $fallbackExpense = $this->account('6400');
+            $journal = Journal::query()->where('code', 'PJ')->firstOrFail();
 
+            // Spread the net amount across lines in proportion so inclusive-VAT bills debit net expense.
+            $gross = (float) $bill->lines->sum('amount');
+            $net = (float) $bill->subtotal;
+            $remaining = $net;
             $lines = [];
-            foreach ($bill->lines as $line) {
-                $lines[] = [
-                    'account_id' => $line->account_id ?: $expense?->id,
-                    'debit' => (float) $line->amount,
-                    'credit' => 0,
-                    'memo' => $line->description,
-                ];
+            foreach ($bill->lines->values() as $i => $line) {
+                $isLast = $i === $bill->lines->count() - 1;
+                $amount = $isLast ? round($remaining, 2) : round($gross > 0 ? (float) $line->amount * $net / $gross : 0, 2);
+                $remaining -= $amount;
+                $lines[] = ['account_id' => $line->account_id ?: $fallbackExpense->id, 'debit' => $amount, 'credit' => 0, 'memo' => $line->description];
             }
             if ((float) $bill->vat_amount > 0) {
-                $lines[] = [
-                    'account_id' => $inputVat?->id,
-                    'debit' => (float) $bill->vat_amount,
-                    'credit' => 0,
-                    'memo' => 'Input VAT',
-                ];
+                $lines[] = ['account_id' => $this->account('1300')->id, 'debit' => (float) $bill->vat_amount, 'credit' => 0, 'memo' => 'Input VAT'];
             }
-            $lines[] = [
-                'account_id' => $ap?->id,
-                'debit' => 0,
-                'credit' => (float) $bill->total_amount,
-                'memo' => 'AP '.$bill->bill_no,
-            ];
+            $lines[] = ['account_id' => $ap->id, 'debit' => 0, 'credit' => (float) $bill->total_amount, 'memo' => 'AP '.$bill->bill_no];
 
-            $entry = $this->journalPostingService->create([
-                'journal_id' => $journal?->id,
+            $entry = $this->cash->journal([
+                'journal_id' => $journal->id,
                 'entry_date' => $bill->bill_date->toDateString(),
                 'reference' => $bill->vendor_invoice_no ?: $bill->bill_no,
                 'memo' => 'Bill '.$bill->bill_no,
                 'source_system' => 'ap',
                 'source_type' => 'bill',
                 'source_id' => $bill->id,
-            ], $lines, \App\Models\User::find($userId));
+            ], array_values(array_filter($lines, fn ($l) => $l['debit'] > 0 || $l['credit'] > 0)), $userId);
 
             $bill->update(['status' => 'posted', 'journal_entry_id' => $entry->id]);
 
@@ -103,66 +119,64 @@ class BillService
         });
     }
 
+    /**
+     * Pay a posted bill: Dr Accounts Payable, Cr the paying cash/bank account. Disbursements from a bank
+     * account are written to its register tagged with the current entity, so shared accounts keep each
+     * entity's expenses separate.
+     */
     public function pay(Bill $bill, array $payment, int $userId): BillPayment
     {
-        $entityId = app(EntityContext::class)->id();
-        $bankAccountId = $payment['bank_account_id'] ?? null;
+        $amount = round((float) $payment['amount'], 2);
+        $method = $payment['payment_method'] ?? 'check';
 
-        if ($bankAccountId) {
-            $bank = BankAccount::query()->findOrFail($bankAccountId);
-            if (! $bank->allowsEntity((int) $entityId)) {
-                throw ValidationException::withMessages([
-                    'bank_account_id' => 'Selected bank account is not allowed for the current entity.',
-                ]);
-            }
+        if (! in_array($bill->status, ['posted', 'partially_paid'], true)) {
+            throw ValidationException::withMessages(['amount' => 'Post the bill before recording payments.']);
+        }
+        if ($amount <= 0 || $amount > (float) $bill->balance_due + 0.001) {
+            throw ValidationException::withMessages([
+                'amount' => 'Amount must be between 0.01 and the balance due ('.number_format((float) $bill->balance_due, 2).').',
+            ]);
         }
 
-        return DB::transaction(function () use ($bill, $payment, $userId, $bankAccountId, $entityId) {
-            $amount = (float) $payment['amount'];
-            $ap = Account::query()->where('code', '2000')->first();
-            $cash = Account::query()->where('code', '1010')->first();
-            $journal = Journal::query()->where('code', 'CDJ')->first();
+        $bank = $this->cash->bankAccountFor(isset($payment['bank_account_id']) ? (int) $payment['bank_account_id'] : null);
+        if ($this->cash->requiresBank($method) && ! $bank) {
+            throw ValidationException::withMessages(['bank_account_id' => 'Select the bank account the payment is drawn from.']);
+        }
 
-            $entry = $this->journalPostingService->create([
-                'journal_id' => $journal?->id,
+        return DB::transaction(function () use ($bill, $payment, $userId, $amount, $method, $bank) {
+            $entityId = app(EntityContext::class)->id();
+            $journal = Journal::query()->where('code', 'CDJ')->firstOrFail();
+
+            $entry = $this->cash->journal([
+                'journal_id' => $journal->id,
                 'entry_date' => $payment['paid_date'],
                 'reference' => $payment['reference'] ?? $bill->bill_no,
-                'memo' => 'Bill payment '.$bill->bill_no,
+                'memo' => 'Payment of bill '.$bill->bill_no,
                 'source_system' => 'ap',
                 'source_type' => 'bill_payment',
                 'source_id' => $bill->id,
             ], [
-                [
-                    'account_id' => $ap?->id,
-                    'debit' => $amount,
-                    'credit' => 0,
-                    'memo' => 'AP clear',
-                ],
-                [
-                    'account_id' => $cash?->id,
-                    'debit' => 0,
-                    'credit' => $amount,
-                    'memo' => 'Bank disbursement',
-                ],
-            ], \App\Models\User::find($userId));
+                ['account_id' => $this->account('2000')->id, 'debit' => $amount, 'credit' => 0, 'memo' => 'AP '.$bill->bill_no],
+                ['account_id' => $this->cash->cashAccountFor($method, $bank)->id, 'debit' => 0, 'credit' => $amount, 'memo' => 'Disbursement'],
+            ], $userId);
 
             $record = BillPayment::query()->create([
                 'bill_id' => $bill->id,
-                'bank_account_id' => $bankAccountId,
+                'bank_account_id' => $bank?->id,
                 'paid_date' => $payment['paid_date'],
                 'amount' => $amount,
-                'payment_method' => $payment['payment_method'] ?? 'bank',
+                'payment_method' => $method,
                 'reference' => $payment['reference'] ?? null,
                 'journal_entry_id' => $entry->id,
                 'paid_by' => $userId,
             ]);
 
-            if ($bankAccountId) {
-                BankTransaction::query()->create([
-                    'bank_account_id' => $bankAccountId,
+            if ($bank) {
+                $bill->loadMissing('vendor');
+                $this->cash->recordBankLine($bank, [
                     'entity_id' => $entityId,
                     'txn_date' => $payment['paid_date'],
-                    'description' => 'Bill payment '.$bill->bill_no,
+                    'description' => 'Bill '.$bill->bill_no.' — '.($bill->vendor?->name ?? 'supplier'),
                     'amount' => $amount,
                     'direction' => 'out',
                     'reference' => $payment['reference'] ?? null,
@@ -172,8 +186,8 @@ class BillService
                 ]);
             }
 
-            $paid = (float) $bill->amount_paid + $amount;
-            $balance = max(0, (float) $bill->total_amount - $paid);
+            $paid = round((float) $bill->amount_paid + $amount, 2);
+            $balance = round(max(0, (float) $bill->total_amount - $paid), 2);
             $bill->update([
                 'amount_paid' => $paid,
                 'balance_due' => $balance,
@@ -182,5 +196,11 @@ class BillService
 
             return $record;
         });
+    }
+
+    protected function account(string $code): Account
+    {
+        return Account::query()->where('code', $code)->first()
+            ?? throw ValidationException::withMessages(['bill' => "Account {$code} is missing from this entity's chart of accounts."]);
     }
 }

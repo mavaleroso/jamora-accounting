@@ -1,685 +1,417 @@
-import { Head, router, Link } from '@inertiajs/react';
-import {
-    ArrowDownLeft,
-    ArrowUpRight,
-    Building2,
-    Calendar,
-    CheckCircle2,
-    Clock,
-    Filter,
-    Plus,
-    Receipt,
-    RefreshCw,
-    Scale,
-    Search,
-    Wallet,
-} from 'lucide-react';
-import * as React from 'react';
-import AppLayout from '@/layouts/app-layout';
-import Heading from '@/components/heading';
-import { Badge } from '@/components/ui/badge';
+import { FilterBar } from '@/components/finance/filter-bar';
+import { formatAmount, formatDate, paymentMethodLabels, todayIso } from '@/components/finance/format';
+import { PageBody, PageHeader } from '@/components/finance/page-header';
+import { Paginator, type Paginated } from '@/components/finance/paginator';
+import { StatusBadge } from '@/components/finance/status-badge';
+import InputError from '@/components/input-error';
+import { StatCard, StatGrid } from '@/components/stat-card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { Combobox } from '@/components/ui/combobox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TableShell } from '@/components/ui/table-shell';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
-import { toast } from '@/lib/toast';
-import type { BreadcrumbItem } from '@/types';
+import { hasAnyPermission } from '@/lib/permissions';
+import type { Auth, BreadcrumbItem } from '@/types';
+import { Head, Link, useForm, usePage } from '@inertiajs/react';
+import { ArrowDownLeftIcon, ArrowUpRightIcon, FileClockIcon, InfoIcon, MinusIcon, PlusIcon, ScaleIcon } from 'lucide-react';
+import { useState } from 'react';
 
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Accounting', href: '/accounting/dashboard' },
-    { title: 'Cash & Bank Records', href: '/accounting/cash-bank-records' },
-];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'Cash & Bank Records', href: '/accounting/cash-bank-records' }];
 
-type BankAccount = {
+type CashAccount = { id: number; code: string; name: string };
+type Row = {
     id: number;
-    code: string;
-    name: string;
-    bank_name: string;
-    account_number: string;
-    is_shared: boolean;
-};
-
-type BankTransactionItem = {
-    id: number;
-    entity_id: number;
-    bank_account_id: number;
-    txn_date: string;
-    description: string;
-    direction: 'in' | 'out';
-    amount: string | number;
+    journal_entry_id: number;
+    entry_no: string;
+    entry_date: string;
     reference: string | null;
-    source_type: string | null;
-    is_cleared: boolean;
-    bank_account?: {
-        id: number;
-        code: string;
-        name: string;
-        bank_name: string;
-    };
-    journal_entry?: {
-        id: number;
-        entry_no: string;
-    } | null;
+    memo: string | null;
+    status: string;
+    direction: 'in' | 'out';
+    amount: number;
+    account: CashAccount | null;
+    source_type: string;
+    source_url: string | null;
+    is_cleared: boolean | null | undefined;
 };
-
-type PaginatedTransactions = {
-    data: BankTransactionItem[];
-    current_page: number;
-    last_page: number;
-    total: number;
-    per_page: number;
-    prev_page_url: string | null;
-    next_page_url: string | null;
-};
+type BankAccount = { id: number; code: string; name: string; bank_name: string; is_shared: boolean };
+type CounterAccount = { id: number; code: string; name: string; classification: string | null };
 
 type Props = {
-    transactions: PaginatedTransactions;
+    transactions: Paginated<Row>;
+    filters: Record<string, string | number | null>;
+    summary: { inflows: number; outflows: number; net: number; draftCount: number };
+    cashAccounts: CashAccount[];
     bankAccounts: BankAccount[];
-    summary: {
-        totalInflows: number;
-        totalOutflows: number;
-        netCashFlow: number;
-        unclearedCount: number;
-    };
-    filters: {
-        bank_account_id: string | null;
-        direction: string | null;
-        status: string | null;
-        search: string;
-        start_date: string | null;
-        end_date: string | null;
-    };
+    counterAccounts: CounterAccount[];
+    paymentMethods: string[];
+    entityName: string | null;
 };
 
-export default function CashBankTransactionsPage({
+const sourceLabel: Record<string, string> = {
+    invoice_payment: 'Invoice collection',
+    customer_deposit: 'Customer deposit',
+    bill_payment: 'Bill payment',
+    payroll_payment: 'Payroll release',
+    cash_receipt: 'Direct receipt',
+    cash_payment: 'Direct payment',
+    manual: 'Manual journal',
+};
+
+export default function CashBankPage({
     transactions,
-    bankAccounts,
-    summary,
     filters,
+    summary,
+    cashAccounts,
+    bankAccounts,
+    counterAccounts,
+    paymentMethods,
+    entityName,
 }: Props) {
-    const [isCreateOpen, setIsCreateOpen] = React.useState(false);
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
-
-    // Filter states
-    const [search, setSearch] = React.useState(filters.search || '');
-    const [accountId, setAccountId] = React.useState(filters.bank_account_id || 'all');
-    const [direction, setDirection] = React.useState(filters.direction || 'all');
-    const [status, setStatus] = React.useState(filters.status || 'all');
-
-    // Create form states
-    const [formData, setFormData] = React.useState({
-        bank_account_id: bankAccounts[0]?.id ? String(bankAccounts[0].id) : '',
-        txn_date: new Date().toISOString().split('T')[0],
-        description: '',
-        direction: 'in' as 'in' | 'out',
-        amount: '',
-        reference: '',
-        source_type: 'direct_entry',
-    });
-
-    const handleFilterChange = (params: Record<string, string>) => {
-        router.get(
-            '/accounting/cash-bank-records',
-            {
-                search: search || undefined,
-                bank_account_id: accountId === 'all' ? undefined : accountId,
-                direction: direction === 'all' ? undefined : direction,
-                status: status === 'all' ? undefined : status,
-                ...params,
-            },
-            { preserveState: true, preserveScroll: true }
-        );
-    };
-
-    const handleResetFilters = () => {
-        setSearch('');
-        setAccountId('all');
-        setDirection('all');
-        setStatus('all');
-        router.get('/accounting/cash-bank-records', {}, { preserveState: true });
-    };
-
-    const handleCreateSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!formData.bank_account_id || !formData.amount || !formData.description) {
-            toast.error('Please fill in all required fields.');
-            return;
-        }
-
-        setIsSubmitting(true);
-        router.post('/accounting/cash-bank-records', formData, {
-            onSuccess: () => {
-                toast.success('Cash/Bank transaction successfully recorded.');
-                setIsCreateOpen(false);
-                setFormData({
-                    bank_account_id: bankAccounts[0]?.id ? String(bankAccounts[0].id) : '',
-                    txn_date: new Date().toISOString().split('T')[0],
-                    description: '',
-                    direction: 'in',
-                    amount: '',
-                    reference: '',
-                    source_type: 'direct_entry',
-                });
-            },
-            onError: (err) => {
-                const message = Object.values(err)[0] as string;
-                toast.error(message || 'Failed to record transaction.');
-            },
-            onFinish: () => setIsSubmitting(false),
-        });
-    };
+    const { auth } = usePage<{ auth: Auth }>().props;
+    const canRecord = hasAnyPermission(auth, ['banks.manage', 'journals.create']);
+    const [kind, setKind] = useState<'receipt' | 'payment' | null>(null);
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Cash & Bank Records - Accounting" />
+            <Head title="Cash & Bank Records" />
+            <PageBody>
+                <PageHeader
+                    title="Cash & Bank Records"
+                    description="Every receipt and disbursement through cash on hand, clearing accounts and banks. Entries post to the ledger automatically — no debit/credit form."
+                    actions={
+                        canRecord && (
+                            <>
+                                <Button variant="outline" onClick={() => setKind('payment')}>
+                                    <MinusIcon className="size-4" />
+                                    Record payment
+                                </Button>
+                                <Button onClick={() => setKind('receipt')}>
+                                    <PlusIcon className="size-4" />
+                                    Record receipt
+                                </Button>
+                            </>
+                        )
+                    }
+                />
 
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <Heading
-                            title="Cash & Bank Records"
-                            description="Slide 15-16 Unified Register: Track inflows, disbursements, customer collections, and bank positions."
-                        />
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Button
+                <StatGrid>
+                    <StatCard
+                        title="Receipts"
+                        value={formatPhpCurrency(summary.inflows)}
+                        icon={ArrowDownLeftIcon}
+                        tone="success"
+                        description={`${formatDate(String(filters.date_from))} – ${formatDate(String(filters.date_to))}`}
+                    />
+                    <StatCard title="Disbursements" value={formatPhpCurrency(summary.outflows)} icon={ArrowUpRightIcon} tone="warning" />
+                    <StatCard
+                        title="Net cash flow"
+                        value={formatPhpCurrency(summary.net)}
+                        icon={ScaleIcon}
+                        tone={summary.net < 0 ? 'danger' : 'info'}
+                        emphasize={summary.net < 0}
+                    />
+                    <StatCard
+                        title="Awaiting posting"
+                        value={summary.draftCount.toLocaleString()}
+                        icon={FileClockIcon}
+                        tone={summary.draftCount ? 'warning' : 'success'}
+                        description="Draft entries not yet in the ledger"
+                        href={summary.draftCount ? '/accounting/journal-entries' : undefined}
+                    />
+                </StatGrid>
+
+                <FilterBar
+                    url="/accounting/cash-bank-records"
+                    filters={filters}
+                    searchPlaceholder="Description, reference or entry no."
+                    selects={[
+                        {
+                            key: 'account_id',
+                            label: 'Accounts',
+                            options: cashAccounts.map((a) => ({ value: String(a.id), label: `${a.code} · ${a.name}` })),
+                        },
+                        {
+                            key: 'direction',
+                            label: 'Directions',
+                            options: [
+                                { value: 'in', label: 'Receipts' },
+                                { value: 'out', label: 'Payments' },
+                            ],
+                        },
+                        {
+                            key: 'status',
+                            label: 'Ledger',
+                            options: [
+                                { value: 'posted', label: 'Posted' },
+                                { value: 'draft', label: 'Draft' },
+                            ],
+                        },
+                    ]}
+                    dateRange={{ from: 'date_from', to: 'date_to' }}
+                />
+
+                <TableShell>
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Description</TableHead>
+                                <TableHead>Account</TableHead>
+                                <TableHead>Source</TableHead>
+                                <TableHead>Ledger</TableHead>
+                                <TableHead className="text-right">Receipt</TableHead>
+                                <TableHead className="text-right">Payment</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {transactions.data.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={7} className="text-muted-foreground h-32 text-center">
+                                        No cash movements in this period.
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                transactions.data.map((t) => (
+                                    <TableRow key={t.id}>
+                                        <TableCell className="whitespace-nowrap">{formatDate(t.entry_date)}</TableCell>
+                                        <TableCell>
+                                            <div className="max-w-80 truncate font-medium">{t.memo || '—'}</div>
+                                            <div className="text-muted-foreground font-mono text-xs">
+                                                {t.entry_no}
+                                                {t.reference && ` · ${t.reference}`}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="text-sm">{t.account ? `${t.account.code} · ${t.account.name}` : '—'}</TableCell>
+                                        <TableCell className="text-sm">
+                                            {t.source_url ? (
+                                                <Link href={t.source_url} className="text-primary hover:underline">
+                                                    {sourceLabel[t.source_type] ?? t.source_type}
+                                                </Link>
+                                            ) : (
+                                                <span className="text-muted-foreground">{sourceLabel[t.source_type] ?? t.source_type}</span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex flex-wrap gap-1">
+                                                <StatusBadge status={t.status} />
+                                                {t.is_cleared === true && <StatusBadge status="cleared" />}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="text-right font-mono text-emerald-600 tabular-nums dark:text-emerald-400">
+                                            {t.direction === 'in' ? formatAmount(t.amount) : ''}
+                                        </TableCell>
+                                        <TableCell className="text-right font-mono tabular-nums">
+                                            {t.direction === 'out' ? formatAmount(t.amount) : ''}
+                                        </TableCell>
+                                    </TableRow>
+                                ))
+                            )}
+                        </TableBody>
+                    </Table>
+                </TableShell>
+                <Paginator page={transactions} noun="movements" />
+            </PageBody>
+
+            {kind && (
+                <RecordDialog
+                    kind={kind}
+                    onClose={() => setKind(null)}
+                    bankAccounts={bankAccounts}
+                    counterAccounts={counterAccounts}
+                    methods={paymentMethods}
+                    entityName={entityName}
+                />
+            )}
+        </AppLayout>
+    );
+}
+
+function RecordDialog({
+    kind,
+    onClose,
+    bankAccounts,
+    counterAccounts,
+    methods,
+    entityName,
+}: {
+    kind: 'receipt' | 'payment';
+    onClose: () => void;
+    bankAccounts: BankAccount[];
+    counterAccounts: CounterAccount[];
+    methods: string[];
+    entityName: string | null;
+}) {
+    const receipt = kind === 'receipt';
+    const form = useForm({
+        kind,
+        txn_date: todayIso(),
+        amount: '',
+        payment_method: receipt ? 'cash' : 'check',
+        bank_account_id: bankAccounts[0] ? String(bankAccounts[0].id) : '',
+        counter_account_id: '' as number | '',
+        party: '',
+        reference: '',
+        description: '',
+    });
+    const { data, setData, errors, processing } = form;
+    const viaBank = ['check', 'bank_transfer'].includes(data.payment_method);
+
+    // Suggest the natural side first: income/liability/equity for receipts, expense/asset for payments.
+    const preferred = receipt ? ['revenue', 'liability', 'equity'] : ['expense', 'asset'];
+    const options = [...counterAccounts].sort(
+        (a, b) => Number(preferred.includes(b.classification ?? '')) - Number(preferred.includes(a.classification ?? '')),
+    );
+
+    return (
+        <Dialog open onOpenChange={(o) => !o && onClose()}>
+            <DialogContent className="sm:max-w-lg">
+                <form
+                    className="grid gap-4"
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        form.transform((d) => ({ ...d, bank_account_id: viaBank ? d.bank_account_id : null }));
+                        form.post('/accounting/cash-bank-records', { preserveScroll: true, onSuccess: onClose });
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>{receipt ? 'Record receipt' : 'Record payment'}</DialogTitle>
+                        <DialogDescription>
+                            {receipt
+                                ? 'Money received that is not a customer invoice collection — e.g. refunds, capital infusion, other income.'
+                                : 'Money paid out without a supplier bill — e.g. petty expenses, permits, advances.'}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <Alert>
+                        <InfoIcon className="size-4" />
+                        <AlertDescription className="text-xs">
+                            {receipt ? (
+                                <>
+                                    Collecting on an invoice? Use{' '}
+                                    <Link href="/billing/invoices" className="underline">
+                                        Invoices
+                                    </Link>{' '}
+                                    so the customer balance updates.
+                                </>
+                            ) : (
+                                <>
+                                    Paying a supplier bill? Use{' '}
+                                    <Link href="/ap/bills" className="underline">
+                                        Bills & Payables
+                                    </Link>{' '}
+                                    so the payable clears.
+                                </>
+                            )}
+                        </AlertDescription>
+                    </Alert>
+
+                    <div className="grid gap-1.5">
+                        <Label>{receipt ? 'Received via' : 'Paid via'}</Label>
+                        <ToggleGroup
+                            type="single"
                             variant="outline"
-                            onClick={() => router.visit('/banks/reconciliations')}
-                            className="gap-2"
+                            value={data.payment_method}
+                            onValueChange={(v) => v && setData('payment_method', v)}
+                            className="w-full"
                         >
-                            <Scale className="h-4 w-4 text-primary" />
-                            Bank Reconciliations
-                        </Button>
-                        <Button
-                            onClick={() => setIsCreateOpen(true)}
-                            className="gap-2 shadow-sm"
-                        >
-                            <Plus className="h-4 w-4" />
-                            Record Inflow / Outflow
-                        </Button>
+                            {methods.map((m) => (
+                                <ToggleGroupItem key={m} value={m} className="flex-1 text-xs">
+                                    {paymentMethodLabels[m] ?? m}
+                                </ToggleGroupItem>
+                            ))}
+                        </ToggleGroup>
                     </div>
-                </div>
-
-                {/* KPI Summary Cards */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Total Inflows
-                            </CardTitle>
-                            <div className="rounded-full bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
-                                <ArrowDownLeft className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-                                {formatPhpCurrency(summary.totalInflows)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Customer receipts, deposits & transfers in
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Total Outflows
-                            </CardTitle>
-                            <div className="rounded-full bg-rose-500/10 p-2 text-rose-600 dark:text-rose-400">
-                                <ArrowUpRight className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-rose-600 dark:text-rose-400">
-                                {formatPhpCurrency(summary.totalOutflows)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Supplier payments, payroll & disbursements
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Net Cash Flow
-                            </CardTitle>
-                            <div className="rounded-full bg-primary/10 p-2 text-primary">
-                                <Wallet className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div
-                                className={`text-2xl font-bold tracking-tight ${
-                                    summary.netCashFlow >= 0
-                                        ? 'text-primary'
-                                        : 'text-rose-600 dark:text-rose-400'
-                                }`}
-                            >
-                                {formatPhpCurrency(summary.netCashFlow)}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Current entity net liquidity movement
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 shadow-xs">
-                        <CardHeader className="flex flex-row items-center justify-between pb-2">
-                            <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                Uncleared Items
-                            </CardTitle>
-                            <div className="rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
-                                <Clock className="h-4 w-4" />
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold tracking-tight text-amber-600 dark:text-amber-400">
-                                {summary.unclearedCount}
-                            </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                                Awaiting monthly bank reconciliation
-                            </p>
-                        </CardContent>
-                    </Card>
-                </div>
-
-                {/* Filter Toolbar */}
-                <Card className="border-border/80 shadow-xs">
-                    <CardContent className="pt-4 pb-4">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-5">
-                            <div className="relative">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Search ref or description..."
-                                    value={search}
-                                    onChange={(e) => setSearch(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleFilterChange({ search })}
-                                    className="pl-9"
-                                />
-                            </div>
-
-                            <Select
-                                value={accountId}
-                                onValueChange={(val) => {
-                                    setAccountId(val);
-                                    handleFilterChange({ bank_account_id: val === 'all' ? '' : val });
-                                }}
-                            >
+                    {viaBank && (
+                        <div className="grid gap-1.5">
+                            <Label>Bank account *</Label>
+                            <Select value={data.bank_account_id} onValueChange={(v) => setData('bank_account_id', v)}>
                                 <SelectTrigger>
-                                    <SelectValue placeholder="All Bank Accounts" />
+                                    <SelectValue placeholder="Select bank account" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="all">All Bank Accounts</SelectItem>
-                                    {bankAccounts.map((acc) => (
-                                        <SelectItem key={acc.id} value={String(acc.id)}>
-                                            {acc.code} - {acc.bank_name}
+                                    {bankAccounts.map((b) => (
+                                        <SelectItem key={b.id} value={String(b.id)}>
+                                            {b.code} · {b.name} {b.is_shared ? '(shared)' : ''}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
-
-                            <Select
-                                value={direction}
-                                onValueChange={(val) => {
-                                    setDirection(val);
-                                    handleFilterChange({ direction: val === 'all' ? '' : val });
-                                }}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="All Directions" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Directions</SelectItem>
-                                    <SelectItem value="in">Inflow (Deposit / Receipt)</SelectItem>
-                                    <SelectItem value="out">Outflow (Payment / Disbursement)</SelectItem>
-                                </SelectContent>
-                            </Select>
-
-                            <Select
-                                value={status}
-                                onValueChange={(val) => {
-                                    setStatus(val);
-                                    handleFilterChange({ status: val === 'all' ? '' : val });
-                                }}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Recon Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Recon Status</SelectItem>
-                                    <SelectItem value="cleared">Cleared / Reconciled</SelectItem>
-                                    <SelectItem value="uncleared">Uncleared</SelectItem>
-                                </SelectContent>
-                            </Select>
-
-                            <div className="flex gap-2">
-                                <Button
-                                    variant="secondary"
-                                    onClick={() => handleFilterChange({ search })}
-                                    className="flex-1 gap-1.5"
-                                >
-                                    <Filter className="h-4 w-4" />
-                                    Filter
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    onClick={handleResetFilters}
-                                    title="Reset filters"
-                                >
-                                    <RefreshCw className="h-4 w-4" />
-                                </Button>
-                            </div>
+                            <InputError message={errors.bank_account_id} />
                         </div>
-                    </CardContent>
-                </Card>
-
-                {/* Transactions Table */}
-                <Card className="border-border/80 shadow-xs">
-                    <CardHeader className="flex flex-row items-center justify-between pb-3">
-                        <div>
-                            <CardTitle className="text-base font-semibold">Transactions Register</CardTitle>
-                            <CardDescription>
-                                Showing {transactions.data.length} of {transactions.total} records
-                            </CardDescription>
+                    )}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="grid gap-1.5">
+                            <Label>Date *</Label>
+                            <Input type="date" value={data.txn_date} onChange={(e) => setData('txn_date', e.target.value)} />
+                            <InputError message={errors.txn_date} />
                         </div>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                        <div className="overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow className="bg-muted/40 hover:bg-muted/40">
-                                        <TableHead className="w-[110px]">Date</TableHead>
-                                        <TableHead>Account</TableHead>
-                                        <TableHead className="w-[100px]">Type</TableHead>
-                                        <TableHead>Reference</TableHead>
-                                        <TableHead>Description</TableHead>
-                                        <TableHead className="text-right">Amount</TableHead>
-                                        <TableHead className="w-[120px]">Recon</TableHead>
-                                        <TableHead className="w-[110px]">Journal Entry</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {transactions.data.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                                                No cash/bank transactions found matching the selected filters.
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        transactions.data.map((txn) => {
-                                            const isInflow = txn.direction === 'in';
-                                            return (
-                                                <TableRow key={txn.id} className="hover:bg-muted/30">
-                                                    <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
-                                                        {txn.txn_date}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <div className="font-medium text-xs">
-                                                            {txn.bank_account?.code || 'BANK'}
-                                                        </div>
-                                                        <div className="text-[11px] text-muted-foreground">
-                                                            {txn.bank_account?.bank_name}
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <Badge
-                                                            variant="outline"
-                                                            className={
-                                                                isInflow
-                                                                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                                                                    : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400'
-                                                            }
-                                                        >
-                                                            {isInflow ? 'INFLOW' : 'OUTFLOW'}
-                                                        </Badge>
-                                                    </TableCell>
-                                                    <TableCell className="font-mono text-xs">
-                                                        {txn.reference || '—'}
-                                                    </TableCell>
-                                                    <TableCell className="max-w-[260px] truncate text-xs" title={txn.description}>
-                                                        {txn.description}
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-xs font-semibold">
-                                                        <span
-                                                            className={
-                                                                isInflow
-                                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                                    : 'text-rose-600 dark:text-rose-400'
-                                                            }
-                                                        >
-                                                            {isInflow ? '+' : '-'} {formatPhpCurrency(txn.amount)}
-                                                        </span>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {txn.is_cleared ? (
-                                                            <Badge
-                                                                variant="outline"
-                                                                className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 gap-1"
-                                                            >
-                                                                <CheckCircle2 className="h-3 w-3" />
-                                                                Cleared
-                                                            </Badge>
-                                                        ) : (
-                                                            <Badge
-                                                                variant="outline"
-                                                                className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 gap-1"
-                                                            >
-                                                                <Clock className="h-3 w-3" />
-                                                                Uncleared
-                                                            </Badge>
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {txn.journal_entry ? (
-                                                            <Link
-                                                                href={`/accounting/journal-entries?search=${txn.journal_entry.entry_no}`}
-                                                                className="inline-flex items-center gap-1 font-mono text-xs text-primary hover:underline"
-                                                            >
-                                                                <Receipt className="h-3 w-3" />
-                                                                {txn.journal_entry.entry_no}
-                                                            </Link>
-                                                        ) : (
-                                                            <span className="text-[11px] text-muted-foreground">—</span>
-                                                        )}
-                                                    </TableCell>
-                                                </TableRow>
-                                            );
-                                        })
-                                    )}
-                                </TableBody>
-                            </Table>
+                        <div className="grid gap-1.5">
+                            <Label>Amount *</Label>
+                            <Input
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={data.amount}
+                                onChange={(e) => setData('amount', e.target.value)}
+                                className="text-right font-mono"
+                            />
+                            <InputError message={errors.amount} />
                         </div>
-
-                        {/* Pagination Footer */}
-                        {transactions.last_page > 1 && (
-                            <div className="flex items-center justify-between border-t border-border px-4 py-3">
-                                <div className="text-xs text-muted-foreground">
-                                    Page {transactions.current_page} of {transactions.last_page}
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={!transactions.prev_page_url}
-                                        onClick={() => transactions.prev_page_url && router.visit(transactions.prev_page_url)}
-                                    >
-                                        Previous
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={!transactions.next_page_url}
-                                        onClick={() => transactions.next_page_url && router.visit(transactions.next_page_url)}
-                                    >
-                                        Next
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Modal: Record Inflow / Outflow */}
-            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-                <DialogContent className="sm:max-w-[500px]">
-                    <form onSubmit={handleCreateSubmit}>
-                        <DialogHeader>
-                            <DialogTitle>Record Cash / Bank Transaction</DialogTitle>
-                            <DialogDescription>
-                                Directly record an inflow (deposit/collection) or outflow (payment/disbursement).
-                            </DialogDescription>
-                        </DialogHeader>
-
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="bank_account_id">Bank Account *</Label>
-                                    <Select
-                                        value={formData.bank_account_id}
-                                        onValueChange={(val) => setFormData({ ...formData, bank_account_id: val })}
-                                    >
-                                        <SelectTrigger id="bank_account_id">
-                                            <SelectValue placeholder="Select account" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {bankAccounts.map((acc) => (
-                                                <SelectItem key={acc.id} value={String(acc.id)}>
-                                                    {acc.code} - {acc.bank_name}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="direction">Direction *</Label>
-                                    <Select
-                                        value={formData.direction}
-                                        onValueChange={(val: 'in' | 'out') => setFormData({ ...formData, direction: val })}
-                                    >
-                                        <SelectTrigger id="direction">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="in">Inflow (Deposit / Collection)</SelectItem>
-                                            <SelectItem value="out">Outflow (Disbursement / Payment)</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label htmlFor="txn_date">Transaction Date *</Label>
-                                    <Input
-                                        id="txn_date"
-                                        type="date"
-                                        value={formData.txn_date}
-                                        onChange={(e) => setFormData({ ...formData, txn_date: e.target.value })}
-                                        required
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label htmlFor="amount">Amount (PHP) *</Label>
-                                    <Input
-                                        id="amount"
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="0.00"
-                                        value={formData.amount}
-                                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                                        required
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="reference">Reference / Check No. / OR No.</Label>
-                                <Input
-                                    id="reference"
-                                    placeholder="e.g. OR-9921, CHK-10293, DEP-001"
-                                    value={formData.reference}
-                                    onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="description">Particulars / Description *</Label>
-                                <Input
-                                    id="description"
-                                    placeholder="e.g. Deposit for patient lenses, Petty cash replenishment"
-                                    value={formData.description}
-                                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                    required
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label htmlFor="source_type">Classification</Label>
-                                <Select
-                                    value={formData.source_type}
-                                    onValueChange={(val) => setFormData({ ...formData, source_type: val })}
-                                >
-                                    <SelectTrigger id="source_type">
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="direct_entry">Direct Bank Entry</SelectItem>
-                                        <SelectItem value="customer_deposit">Customer Deposit</SelectItem>
-                                        <SelectItem value="customer_collection">Customer Collection / Invoice</SelectItem>
-                                        <SelectItem value="supplier_payment">Supplier Payment</SelectItem>
-                                        <SelectItem value="payroll_disbursement">Payroll Disbursement</SelectItem>
-                                        <SelectItem value="tax_payment">Statutory / BIR Tax Payment</SelectItem>
-                                        <SelectItem value="inter_account_transfer">Inter-account Transfer</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                        <Label>{receipt ? 'Received for *' : 'Paid for *'}</Label>
+                        <Combobox
+                            options={options.map((a) => ({ id: a.id, name: `${a.code} · ${a.name}` }))}
+                            value={data.counter_account_id}
+                            onValueChange={(v) => setData('counter_account_id', v)}
+                            placeholder="Choose the account…"
+                        />
+                        <InputError message={errors.counter_account_id} />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="grid gap-1.5">
+                            <Label>{receipt ? 'Received from' : 'Payee'}</Label>
+                            <Input value={data.party} onChange={(e) => setData('party', e.target.value)} />
                         </div>
-
-                        <DialogFooter>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setIsCreateOpen(false)}
-                                disabled={isSubmitting}
-                            >
-                                Cancel
-                            </Button>
-                            <Button type="submit" disabled={isSubmitting}>
-                                {isSubmitting ? 'Saving...' : 'Record Transaction'}
-                            </Button>
-                        </DialogFooter>
-                    </form>
-                </DialogContent>
-            </Dialog>
-        </AppLayout>
+                        <div className="grid gap-1.5">
+                            <Label>Reference{data.payment_method !== 'cash' && ' *'}</Label>
+                            <Input
+                                value={data.reference}
+                                onChange={(e) => setData('reference', e.target.value)}
+                                className="font-mono"
+                                placeholder={data.payment_method === 'check' ? 'Check no.' : 'OR / ref no.'}
+                            />
+                            <InputError message={errors.reference} />
+                        </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                        <Label>Description *</Label>
+                        <Input
+                            value={data.description}
+                            onChange={(e) => setData('description', e.target.value)}
+                            placeholder={receipt ? 'e.g. Refund of security deposit' : 'e.g. Mayor’s permit renewal'}
+                        />
+                        <InputError message={errors.description} />
+                    </div>
+                    <p className="text-muted-foreground text-xs">Recorded under {entityName ?? 'the current entity'}.</p>
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={onClose}>
+                            Cancel
+                        </Button>
+                        <Button type="submit" disabled={processing}>
+                            {receipt ? 'Record receipt' : 'Record payment'}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     );
 }

@@ -6,10 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
+use App\Models\Journal;
+use App\Models\JournalEntry;
+use App\Services\Accounting\CashMovementService;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -95,55 +100,118 @@ class InventoryIntegrationController extends Controller
         ]);
     }
 
+    /**
+     * Movement type → GL posting. The link is derived, not chosen, so stock and the books cannot disagree:
+     *  receipt      Dr Inventory          Cr Goods received not billed (2200), cleared when the supplier bill is entered
+     *  return       Dr GRNI (2200)        Cr Inventory
+     *  sales_issue  Dr Cost of goods sold Cr Inventory
+     *  edging_loss  Dr Cost of goods sold Cr Inventory   (flagged for review)
+     *  adjustment   ± Inventory against COGS             (flagged for review)
+     */
+    public const MOVEMENTS = [
+        'receipt' => ['sign' => 1, 'link' => 'ap_receipt', 'review' => false],
+        'supplier_receipt' => ['sign' => 1, 'link' => 'ap_receipt', 'review' => false],
+        'return' => ['sign' => -1, 'link' => 'ap_receipt', 'review' => false],
+        'sales_issue' => ['sign' => -1, 'link' => 'cogs', 'review' => false],
+        'edging_loss' => ['sign' => -1, 'link' => 'inventory_loss', 'review' => true],
+        'adjustment' => ['sign' => 0, 'link' => 'adjustment', 'review' => true],
+        'transfer' => ['sign' => -1, 'link' => 'adjustment', 'review' => true],
+    ];
+
     public function recordMovement(Request $request, EntityContext $entityContext): RedirectResponse
     {
         $entityId = $entityContext->id();
 
         $validated = $request->validate([
             'inventory_item_id' => ['required', 'exists:inventory_items,id'],
-            'movement_type' => ['required', 'in:supplier_receipt,sales_issue,edging_loss,adjustment,transfer'],
+            'movement_type' => ['required', Rule::in(array_keys(self::MOVEMENTS))],
             'quantity' => ['required', 'integer', 'not_in:0'],
             'unit_cost' => ['required', 'numeric', 'min:0'],
-            'accounting_link_type' => ['required', 'in:cogs,ap_receipt,inventory_loss,adjustment'],
+            'movement_date' => ['nullable', 'date'],
             'notes' => ['nullable', 'string', 'max:500'],
         ]);
 
         $item = InventoryItem::findOrFail($validated['inventory_item_id']);
-        $totalCost = abs($validated['quantity']) * $validated['unit_cost'];
+        $rule = self::MOVEMENTS[$validated['movement_type']];
+        // Receipts/issues use the quantity's magnitude; adjustments keep the sign the user entered.
+        $qty = $rule['sign'] === 0 ? (int) $validated['quantity'] : $rule['sign'] * abs((int) $validated['quantity']);
 
-        DB::transaction(function () use ($validated, $item, $totalCost, $entityId) {
-            InventoryMovement::create([
+        if ($qty < 0 && $item->qty_on_hand + $qty < 0) {
+            throw ValidationException::withMessages(['quantity' => "Only {$item->qty_on_hand} on hand for {$item->name}."]);
+        }
+
+        $totalCost = round(abs($qty) * (float) $validated['unit_cost'], 2);
+        $date = $validated['movement_date'] ?? now('Asia/Manila')->toDateString();
+
+        DB::transaction(function () use ($validated, $item, $totalCost, $entityId, $rule, $qty, $date, $request) {
+            $movement = InventoryMovement::create([
                 'entity_id' => $entityId,
                 'inventory_item_id' => $item->id,
-                'movement_reference' => 'MOV-'.strtoupper(uniqid()),
+                'movement_reference' => 'MOV-'.now()->format('ymd').'-'.strtoupper(substr(uniqid(), -5)),
                 'movement_type' => $validated['movement_type'],
-                'quantity' => $validated['quantity'],
+                'quantity' => $qty,
                 'unit_cost' => $validated['unit_cost'],
                 'total_cost' => $totalCost,
-                'accounting_link_type' => $validated['accounting_link_type'],
-                'review_status' => $validated['movement_type'] === 'edging_loss' ? 'needs_review' : 'matched',
-                'notes' => $validated['notes'],
+                'accounting_link_type' => $rule['link'],
+                'review_status' => $rule['review'] ? 'needs_review' : 'matched',
+                'notes' => $validated['notes'] ?? null,
             ]);
 
-            // Adjust on-hand quantity
-            if (in_array($validated['movement_type'], ['supplier_receipt', 'adjustment'])) {
-                $item->increment('qty_on_hand', $validated['quantity']);
-            } else {
-                $item->decrement('qty_on_hand', abs($validated['quantity']));
+            $item->increment('qty_on_hand', $qty);
+
+            $entry = $totalCost > 0 ? $this->journalize($movement, $item, $qty, $totalCost, $date, (int) $request->user()->id) : null;
+
+            if ($entry) {
+                $movement->update(['journal_entry_id' => $entry->id]);
+            } elseif ($totalCost > 0) {
+                $movement->update([
+                    'review_status' => 'needs_review',
+                    'notes' => trim(($movement->notes ?? '').' [Account mapping missing — not posted to GL]'),
+                ]);
             }
         });
 
-        return redirect()->back()->with('status', 'Stock movement recorded successfully.');
+        return redirect()->back()->with('status', 'Stock movement recorded.');
     }
 
-    public function markReviewed(InventoryMovement $movement): RedirectResponse
+    /** Post the movement's accounting entry, or null when this entity lacks the mapped accounts/journal. */
+    protected function journalize(InventoryMovement $movement, InventoryItem $item, int $qty, float $amount, string $date, int $userId): ?JournalEntry
     {
+        $inventory = $item->gl_account_id ? Account::query()->find($item->gl_account_id) : null;
+        $inventory ??= Account::query()->where('code', '1200')->first();
+        $other = Account::query()->where('code', $movement->accounting_link_type === 'ap_receipt' ? '2200' : '5000')->first();
+        $journal = Journal::query()->where('code', 'GJ')->first();
+
+        if (! $inventory || ! $other || ! $journal) {
+            return null;
+        }
+
+        $memo = ucfirst(str_replace('_', ' ', $movement->movement_type)).' — '.$item->name.' ×'.abs($qty);
+        $increase = $qty > 0;
+
+        return app(CashMovementService::class)->journal([
+            'journal_id' => $journal->id,
+            'entry_date' => $date,
+            'reference' => $movement->movement_reference,
+            'memo' => $memo,
+            'source_system' => 'inventory',
+            'source_type' => 'inventory_movement',
+            'source_id' => $movement->id,
+        ], [
+            ['account_id' => $increase ? $inventory->id : $other->id, 'debit' => $amount, 'credit' => 0, 'memo' => $memo],
+            ['account_id' => $increase ? $other->id : $inventory->id, 'debit' => 0, 'credit' => $amount, 'memo' => $memo],
+        ], $userId);
+    }
+
+    public function markReviewed(Request $request, InventoryMovement $movement): RedirectResponse
+    {
+        $note = trim((string) $request->input('resolution', ''));
+
         $movement->update([
             'review_status' => 'matched',
-            'notes' => trim(($movement->notes ?? '').' [Verified & Matched to GL]'),
+            'notes' => trim(($movement->notes ?? '').' [Reviewed by '.$request->user()->name.($note !== '' ? ': '.$note : '').']'),
         ]);
 
-        return redirect()->back()->with('status', 'Movement verified and matched to GL.');
+        return redirect()->back()->with('status', 'Movement '.$movement->movement_reference.' reviewed.');
     }
 }
-

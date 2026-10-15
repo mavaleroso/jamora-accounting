@@ -17,6 +17,7 @@ use App\Http\Controllers\Billing\InvoicesController;
 use App\Http\Controllers\Banks\BankAccountsController;
 use App\Http\Controllers\Banks\ReconciliationsController;
 use App\Http\Controllers\EntitiesController;
+use App\Http\Controllers\OverviewController;
 use App\Http\Controllers\Libraries\AccountTypesController;
 use App\Http\Controllers\Libraries\CostCentersController;
 use App\Http\Controllers\Libraries\EmployeesController;
@@ -54,16 +55,8 @@ Route::get('/', function () {
         if ($user->hasRole(RoleEnum::Employee->value)) {
             return redirect()->route('employee-management.portal.index');
         }
-        if ($user->can('dashboard.view')) {
-            return redirect()->route('dashboard');
-        }
-        if ($user->can('portal.view')) {
-            return redirect()->route('employee-management.portal.index');
-        }
-        if ($user->can('attendance.view')) {
-            return redirect()->route('employee-management.attendance.index');
-        }
-        return redirect()->route('dashboard');
+        // Everyone else lands on the Overview, which lists the modules they can access.
+        return redirect()->route('overview');
     }
 
     return redirect()->route('login');
@@ -74,6 +67,8 @@ Route::get('/dashboard', function () {
 });
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('/overview', [OverviewController::class, 'index'])->name('overview');
+
     Route::post('/entities/switch', [EntitiesController::class, 'switch'])->name('entities.switch');
 
     Route::get('/accounting/dashboard', [DashboardController::class, 'index'])
@@ -99,6 +94,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(GeneralLedgerController::class)->prefix('general-ledger')->name('general-ledger.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:reports.general-ledger.view');
             Route::post('data', 'data')->name('data')->middleware('permission:reports.general-ledger.view');
+            Route::get('export', 'export')->name('export')->middleware('permission:reports.general-ledger.view');
         });
 
         Route::controller(AccountsController::class)->prefix('chart-of-accounts')->name('chart-of-accounts.')->group(function () {
@@ -155,11 +151,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(ArAgingController::class)->prefix('ar-aging')->name('ar-aging.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:reports.ar-aging.view');
             Route::post('data', 'data')->name('data')->middleware('permission:reports.ar-aging.view');
+            Route::get('export', 'export')->name('export')->middleware('permission:reports.ar-aging.view');
         });
 
         Route::controller(ApAgingController::class)->prefix('ap-aging')->name('ap-aging.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:reports.ap-aging.view');
             Route::post('data', 'data')->name('data')->middleware('permission:reports.ap-aging.view');
+            Route::get('export', 'export')->name('export')->middleware('permission:reports.ap-aging.view');
         });
     });
 
@@ -222,11 +220,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('{invoice}', 'show')->name('show')->middleware('permission:billing.view');
             Route::post('{invoice}/confirm', 'confirm')->name('confirm')->middleware('permission:billing.manage');
             Route::post('{invoice}/collect', 'collect')->name('collect')->middleware('permission:billing.collect');
+            Route::post('{invoice}/apply-deposit', 'applyDeposit')->name('apply-deposit')->middleware('permission:billing.collect');
+            Route::delete('{invoice}', 'destroy')->name('destroy')->middleware('permission:billing.manage');
         });
 
         Route::controller(DepositsController::class)->prefix('deposits')->name('deposits.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:billing.view');
-            Route::post('/', 'store')->name('store')->middleware('permission:billing.manage');
+            Route::post('/', 'store')->name('store')->middleware('permission:billing.manage|billing.collect');
         });
     });
 
@@ -266,6 +266,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:ap.view');
             Route::get('create', 'create')->name('create')->middleware('permission:ap.manage');
             Route::post('/', 'store')->name('store')->middleware('permission:ap.manage');
+            Route::get('{bill}', 'show')->name('show')->middleware('permission:ap.view');
+            Route::delete('{bill}', 'destroy')->name('destroy')->middleware('permission:ap.manage');
             Route::post('{bill}/post', 'post')->name('post')->middleware('permission:ap.manage');
             Route::post('{bill}/pay', 'pay')->name('pay')->middleware('permission:ap.pay');
         });
@@ -274,13 +276,18 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::prefix('banks')->name('banks.')->group(function () {
         Route::controller(BankAccountsController::class)->prefix('accounts')->name('accounts.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:banks.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:banks.manage');
+            Route::put('{bankAccount}', 'update')->name('update')->middleware('permission:banks.manage');
+            Route::get('{bankAccount}', 'show')->name('show')->middleware('permission:banks.view');
         });
 
         Route::controller(ReconciliationsController::class)->prefix('reconciliations')->name('reconciliations.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:banks.view');
             Route::post('/', 'store')->name('store')->middleware('permission:banks.reconcile');
-            Route::post('transactions/{bankTransaction}/clear', 'clearTransaction')->name('transactions.clear')->middleware('permission:banks.reconcile');
+            Route::get('{bankReconciliation}', 'show')->name('show')->middleware('permission:banks.view');
+            Route::post('{bankReconciliation}/items', 'toggleItems')->name('items')->middleware('permission:banks.reconcile');
             Route::post('{bankReconciliation}/complete', 'complete')->name('complete')->middleware('permission:banks.reconcile');
+            Route::delete('{bankReconciliation}', 'destroy')->name('destroy')->middleware('permission:banks.reconcile');
         });
     });
 
@@ -316,9 +323,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::prefix('integration/inventory')->name('integration.inventory.')->group(function () {
         Route::controller(InventoryIntegrationController::class)->group(function () {
-            Route::get('/', 'index')->name('index');
-            Route::post('movements', 'recordMovement')->name('movements.store');
-            Route::post('movements/{movement}/review', 'markReviewed')->name('movements.review');
+            // Same gates as the sidebar link: integration staff, or accounting/billing who reconcile stock to the books.
+            Route::get('/', 'index')->name('index')->middleware('permission:integration.optical.view|journals.view|billing.view');
+            Route::post('movements', 'recordMovement')->name('movements.store')->middleware('permission:integration.optical.sync|journals.create');
+            Route::post('movements/{movement}/review', 'markReviewed')->name('movements.review')->middleware('permission:integration.optical.sync|journals.post|journals.create');
         });
     });
 
