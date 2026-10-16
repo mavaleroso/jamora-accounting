@@ -122,38 +122,38 @@ test('leave and day-level requests share one feed and one approval flow', functi
 
 
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'undertime',
+        'kind' => 'official_business',
         'work_date' => '2026-10-16',
-        'requested_time_out' => '15:00',
-        'reason' => 'Medical check-up',
+        'destination' => 'Supplier warehouse',
+        'reason' => 'Frame stock count',
     ])->assertSessionHasNoErrors();
 
     ($this->as)($this->hrUser)->get('/employee-management/requests')
         ->assertInertia(fn (Assert $page) => $page
             ->where('badges.inbox', 2)
             ->where('badges.inboxByKind.leave', 1)
-            ->where('badges.inboxByKind.undertime', 1)
+            ->where('badges.inboxByKind.official_business', 1)
             ->has('feed.data', 2)
             ->where('feed.data.0.kind', 'leave')
             ->where('feed.data.0.details.days', 2)
-            ->where('feed.data.1.kind', 'undertime'));
+            ->where('feed.data.1.kind', 'official_business'));
 
     $leave = LeaveRequest::firstOrFail();
-    $undertime = AttendanceRequest::firstOrFail();
+    $business = AttendanceRequest::firstOrFail();
 
     // Employees cannot decide requests.
     ($this->as)($this->staffUser)->post("/employee-management/requests/leave/{$leave->id}/review", ['decision' => 'approved'])->assertForbidden();
 
     // Declining needs a reason.
-    ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$undertime->id}/review", ['decision' => 'declined'])
+    ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$business->id}/review", ['decision' => 'declined'])
         ->assertSessionHasErrors('remarks');
 
     ($this->as)($this->hrUser)->post("/employee-management/requests/leave/{$leave->id}/review", ['decision' => 'approved'])->assertSessionHasNoErrors();
-    ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$undertime->id}/review", ['decision' => 'declined', 'remarks' => 'Short-staffed that afternoon'])
+    ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$business->id}/review", ['decision' => 'declined', 'remarks' => 'Short-staffed that afternoon'])
         ->assertSessionHasNoErrors();
 
     expect($leave->fresh()->status)->toBe('approved')
-        ->and($undertime->fresh()->status)->toBe('rejected');
+        ->and($business->fresh()->status)->toBe('rejected');
 
     ($this->as)($this->staffUser)->get('/employee-management/requests?status=declined')
         ->assertInertia(fn (Assert $page) => $page
@@ -164,31 +164,15 @@ test('leave and day-level requests share one feed and one approval flow', functi
             ->has('self.upcoming', 1));
 });
 
-test('overtime and undertime are filed in advance, and payable OT is capped at what is rendered', function () {
+test('overtime is filed in advance without hours, and every OT hour the clock records is paid', function () {
     // After the fact is refused.
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'overtime',
         'work_date' => '2026-10-13',
-        'requested_ot_hours' => 2,
         'reason' => 'Rush lens order',
     ])->assertSessionHasErrors('work_date');
 
-    ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'undertime',
-        'work_date' => '2026-10-13',
-        'requested_time_out' => '15:00',
-        'reason' => 'Medical check-up',
-    ])->assertSessionHasErrors('work_date');
-
-    // Today, but the departure time has already passed (it is 9:00 AM).
-    ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'undertime',
-        'work_date' => '2026-10-14',
-        'requested_time_out' => '08:30',
-        'reason' => 'Medical check-up',
-    ])->assertSessionHasErrors('requested_time_out');
-
-    // Pre-approval for a later day, before any overtime exists.
+    // Pre-approval for a later day, before any overtime exists. Planned hours are not asked for (and ignored if sent).
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'overtime',
         'work_date' => '2026-10-16',
@@ -197,46 +181,75 @@ test('overtime and undertime are filed in advance, and payable OT is capped at w
     ])->assertSessionHasNoErrors();
 
     $ot = AttendanceRequest::firstOrFail();
+    expect($ot->requested_ot_hours)->toBeNull();
     ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$ot->id}/review", ['decision' => 'approved'])->assertSessionHasNoErrors();
     expect($ot->fresh()->status)->toBe('approved');
 
-    // On the day the employee works 1.5h past the 6:00 PM shift end: only that much is paid.
+    // On the day the employee works 2.5h past the 6:00 PM shift end: all of it is paid.
     $dtr = new DtrEntry([
         'entity_id' => $this->entity->id,
         'employee_id' => $this->staffEmployee->id,
         'work_date' => '2026-10-16',
         'time_in' => '09:00:00',
-        'time_out' => '19:30:00',
+        'time_out' => '20:30:00',
     ]);
     app(AttendanceCalculator::class)->compute($dtr, $this->staffEmployee)->save();
 
-    expect((float) $dtr->ot_hours)->toBe(1.5)
-        ->and((float) $dtr->ot_hours_approved)->toBe(1.5);
+    expect((float) $dtr->ot_hours)->toBe(2.5)
+        ->and((float) $dtr->ot_hours_approved)->toBe(2.5);
+
+    // Overtime on a day without an approved request is rendered but not paid.
+    $unapproved = new DtrEntry([
+        'entity_id' => $this->entity->id,
+        'employee_id' => $this->staffEmployee->id,
+        'work_date' => '2026-10-17',
+        'time_in' => '09:00:00',
+        'time_out' => '20:30:00',
+    ]);
+    app(AttendanceCalculator::class)->compute($unapproved, $this->staffEmployee)->save();
+
+    expect((float) $unapproved->ot_hours)->toBe(2.5)
+        ->and((float) $unapproved->ot_hours_approved)->toBe(0.0);
+
+    // The Overtime tab finds the day's record even though the request was filed before it existed.
+    ($this->as)($this->staffUser)->get('/employee-management/attendance?view=requests&request_status=approved')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('attendanceRequests.data.0.dtr_entry.ot_hours_approved', '2.50'));
 });
 
-test('undertime must end before the shift and schedule changes cannot be backdated', function () {
+test('undertime and changes of schedule are no longer filed', function () {
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'undertime',
         'work_date' => '2026-10-16',
-        'requested_time_out' => '19:00',
+        'requested_time_out' => '15:00',
         'reason' => 'Leaving early',
-    ])->assertSessionHasErrors('requested_time_out');
+    ])->assertSessionHasErrors(['kind' => 'Undertime no longer needs a request: leaving before your shift ends is deducted automatically.']);
+
+    ($this->as)($this->staffUser)->post('/employee-management/attendance/requests', [
+        'employee_id' => $this->staffEmployee->id,
+        'request_type' => 'undertime',
+        'work_date' => '2026-10-16',
+        'requested_time_out' => '15:00',
+        'reason' => 'Leaving early',
+    ])->assertSessionHasErrors('request_type');
+
+    expect(AttendanceRequest::count())->toBe(0);
 
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'schedule_change',
-        'work_date' => '2026-10-12',
+        'work_date' => '2026-10-17',
         'requested_rest_day' => true,
         'reason' => 'Swap with a colleague',
-    ])->assertSessionHasErrors('work_date');
+    ])->assertSessionHasErrors(['kind' => 'Schedule changes are no longer requested. Ask HR to update your shift or rest days.']);
+
+    expect(AttendanceRequest::count())->toBe(0);
 });
 
-test('approved official business fills the time record, now or at the daily close', function () {
-    // Past day, no punches at all.
+test('approved official business credits the whole scheduled day, with no times and no clock-in', function () {
+    // Past day, no punches at all. Only where is asked for.
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'official_business',
         'work_date' => '2026-10-13',
-        'requested_time_in' => '08:00',
-        'requested_time_out' => '17:00',
         'destination' => 'BIR RDO 47',
         'reason' => 'Filing quarterly returns',
     ])->assertSessionHasNoErrors();
@@ -245,41 +258,65 @@ test('approved official business fills the time record, now or at the daily clos
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'official_business',
         'work_date' => '2026-10-15',
-        'requested_time_in' => '09:00',
-        'requested_time_out' => '18:00',
         'destination' => 'Supplier warehouse',
         'reason' => 'Frame stock count',
     ])->assertSessionHasNoErrors();
 
+    // Rest days have no scheduled day to credit.
+    ($this->as)($this->staffUser)->post('/employee-management/requests', [
+        'kind' => 'official_business',
+        'work_date' => '2026-10-18',
+        'destination' => 'Trade fair',
+        'reason' => 'Booth duty',
+    ])->assertSessionHasErrors('work_date');
+
     foreach (AttendanceRequest::all() as $ob) {
+        expect($ob->requested_time_in)->toBeNull()->and($ob->requested_time_out)->toBeNull();
         ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$ob->id}/review", ['decision' => 'approved'])->assertSessionHasNoErrors();
     }
 
+    // The full 9:00 AM – 6:00 PM shift counts as worked: not late, no undertime.
     $past = DtrEntry::where('employee_id', $this->staffEmployee->id)->whereDate('work_date', '2026-10-13')->firstOrFail();
     expect($past->source)->toBe('official_business')
+        ->and($past->time_in)->toBe('09:00:00')
+        ->and($past->time_out)->toBe('18:00:00')
+        ->and($past->attendance_status)->toBe('present')
         ->and($past->is_absent)->toBeFalse()
-        ->and((float) $past->regular_hours)->toBeGreaterThan(0);
+        ->and((float) $past->regular_hours)->toBe(8.0)
+        ->and((int) $past->tardiness_minutes)->toBe(0)
+        ->and((int) $past->undertime_minutes)->toBe(0);
 
     expect(DtrEntry::whereDate('work_date', '2026-10-15')->exists())->toBeFalse();
+
+    // On the day, the clock screen says there is nothing to punch, and past shift start the team board
+    // shows official business rather than "late".
+    Carbon::setTestNow('2026-10-15 10:30:00');
+    ($this->as)($this->staffUser)->get('/employee-management/attendance?view=clock')
+        ->assertInertia(fn (Assert $page) => $page->where('myDay.officialBusiness.destination', 'Supplier warehouse'));
+    $board = app(\App\Services\People\TeamBoard::class)->build($this->entity->id);
+    $row = collect($board['rows'])->firstWhere('employee.id', $this->staffEmployee->id);
+    expect($row['status'])->toBe('official_business')
+        ->and($row['official_business'])->toBe('Supplier warehouse');
+
+    // A check-in made anyway before heading out doesn't stop the close from completing the day.
+    DtrEntry::create(['entity_id' => $this->entity->id, 'employee_id' => $this->staffEmployee->id, 'work_date' => '2026-10-15', 'time_in' => '08:50:00']);
 
     Carbon::setTestNow('2026-10-16 09:00:00');
     $summary = app(AttendanceCalculator::class)->closeDay($this->entity->id, '2026-10-15');
     expect($summary['official_business'])->toBe(1);
 
     $closed = DtrEntry::where('employee_id', $this->staffEmployee->id)->whereDate('work_date', '2026-10-15')->firstOrFail();
-    expect($closed->attendance_status)->toBe('present')
+    expect($closed->time_in)->toBe('08:50:00')
+        ->and($closed->time_out)->toBe('18:00:00')
+        ->and($closed->attendance_status)->toBe('present')
         ->and($closed->is_absent)->toBeFalse();
 });
 
-test('approved change of schedule publishes the roster for that day', function () {
-    ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'schedule_change',
-        'work_date' => '2026-10-17',
-        'requested_rest_day' => true,
-        'reason' => 'Swapping Saturday with Ana',
-    ])->assertSessionHasNoErrors();
-
-    $request = AttendanceRequest::firstOrFail();
+test('a change of schedule still pending from before can be approved and publishes the roster', function () {
+    $request = AttendanceRequest::create([
+        'entity_id' => $this->entity->id, 'employee_id' => $this->staffEmployee->id, 'request_type' => AttendanceRequest::TYPE_SCHEDULE_CHANGE,
+        'work_date' => '2026-10-17', 'requested_rest_day' => true, 'reason' => 'Swapping Saturday with Ana', 'status' => 'pending', 'filed_by' => $this->staffUser->id,
+    ]);
     ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$request->id}/review", ['decision' => 'approved'])->assertSessionHasNoErrors();
 
     $roster = ShiftRoster::where('employee_id', $this->staffEmployee->id)->whereDate('roster_date', '2026-10-17')->firstOrFail();
@@ -291,11 +328,10 @@ test('approved change of schedule publishes the roster for that day', function (
 
 test('approvers cannot decide their own requests and employees cannot withdraw others', function () {
     ($this->as)($this->hrUser)->post('/employee-management/requests', [
-        'kind' => 'schedule_change',
+        'kind' => 'official_business',
         'work_date' => '2026-10-17',
-        'requested_time_in' => '10:00',
-        'requested_time_out' => '19:00',
-        'reason' => 'Covering the late clinic',
+        'destination' => 'Head office',
+        'reason' => 'Quarterly HR meeting',
     ])->assertSessionHasNoErrors();
 
     $own = AttendanceRequest::firstOrFail();
@@ -328,11 +364,11 @@ test('hr can file on behalf of an employee', function () {
 
     // An employee's employee_id is ignored: they always file for themselves.
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'undertime',
+        'kind' => 'official_business',
         'employee_id' => $this->hrEmployee->id,
         'work_date' => '2026-10-16',
-        'requested_time_out' => '15:00',
-        'reason' => 'Medical check-up',
+        'destination' => 'Supplier warehouse',
+        'reason' => 'Frame stock count',
     ])->assertSessionHasNoErrors();
     expect(AttendanceRequest::firstOrFail()->employee_id)->toBe($this->staffEmployee->id);
 });
@@ -392,7 +428,7 @@ test('the portal summarises the employee day, requests, credits, posted payslips
     ])->assertSessionHasNoErrors();
     ($this->as)($this->hrUser)->post('/employee-management/requests/leave/'.LeaveRequest::firstOrFail()->id.'/review', ['decision' => 'approved']);
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => 'undertime', 'work_date' => '2026-10-15', 'requested_time_out' => '16:00', 'reason' => 'Dental appointment',
+        'kind' => 'official_business', 'work_date' => '2026-10-15', 'destination' => 'Supplier warehouse', 'reason' => 'Frame stock count',
     ])->assertSessionHasNoErrors();
 
     // One computed (not yet posted) and one posted run.
@@ -490,7 +526,7 @@ test('a rejected day needs a reason, is left out of the summary, and can be undo
 test('timesheets open on the current pay period and the overtime tab lists only overtime', function () {
     PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => 'PP-2026-10-1', 'frequency' => 'semi_monthly', 'start_date' => '2026-10-01', 'end_date' => '2026-10-15', 'status' => 'open']);
 
-    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'overtime', 'work_date' => '2026-10-16', 'requested_ot_hours' => 2, 'reason' => 'Inventory count'])->assertSessionHasNoErrors();
+    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'overtime', 'work_date' => '2026-10-16', 'reason' => 'Inventory count'])->assertSessionHasNoErrors();
     ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'correction', 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Biometric was down'])->assertSessionHasNoErrors();
 
     ($this->as)($this->hrUser)->get('/employee-management/attendance?view=requests')
@@ -573,4 +609,116 @@ test('the accomplishment keeps simple formatting and drops anything unsafe', fun
     ])->assertSessionHasNoErrors();
 
     expect(DtrEntry::firstOrFail()->accomplishment)->toBe('<p>Fitted <strong>6</strong> patients</p><ul><li>Lens orders</li></ul>');
+});
+
+test('request history can be searched, sorted and paged', function () {
+    ($this->as)($this->staffUser)->post('/employee-management/requests', [
+        'kind' => 'leave', 'leave_type_id' => $this->vl->id, 'start_date' => '2026-10-20', 'end_date' => '2026-10-20', 'reason' => 'Family trip',
+    ])->assertSessionHasNoErrors();
+    ($this->as)($this->staffUser)->post('/employee-management/requests', [
+        'kind' => 'official_business', 'work_date' => '2026-10-16', 'destination' => 'Supplier warehouse', 'reason' => 'Frame stock count',
+    ])->assertSessionHasNoErrors();
+
+    // Reason, destination and leave type are searchable.
+    ($this->as)($this->staffUser)->get('/employee-management/requests?view=mine&q=frame')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('filters.q', 'frame')
+            ->has('feed.data', 1)
+            ->where('feed.data.0.kind', 'official_business'));
+    ($this->as)($this->staffUser)->get('/employee-management/requests?view=mine&q=vacation')
+        ->assertInertia(fn (Assert $page) => $page->has('feed.data', 1)->where('feed.data.0.kind', 'leave'));
+
+    // Sorted by request date, oldest first; page size is honoured and echoed back.
+    ($this->as)($this->staffUser)->get('/employee-management/requests?view=mine&sort=date&dir=asc&per_page=10')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('filters.sort', 'date')
+            ->where('filters.dir', 'asc')
+            ->where('filters.per_page', 10)
+            ->where('feed.per_page', 10)
+            ->where('feed.data.0.date_from', '2026-10-16')
+            ->where('feed.data.1.date_from', '2026-10-20'));
+
+    // Team history also matches the employee's name; unknown sort values fall back to the default order.
+    ($this->as)($this->hrUser)->get('/employee-management/requests?view=all&q=Sam&sort=bogus&per_page=7')
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('feed.data', 2)
+            ->where('filters.sort', '')
+            ->where('filters.per_page', 15));
+});
+
+test('timesheets show every day by default, filter to unapproved, and approve a whole period at once', function () {
+    $day = fn (string $date, array $extra = []) => DtrEntry::create([
+        'entity_id' => $this->entity->id, 'employee_id' => $this->staffEmployee->id, 'work_date' => $date,
+        'time_in' => '09:00:00', 'time_out' => '18:00:00', 'attendance_status' => 'present', 'status' => DtrEntry::STATUS_OPEN, ...$extra,
+    ]);
+    $ready = [$day('2026-10-05'), $day('2026-10-06'), $day('2026-10-07')];
+    $missingPunch = $day('2026-10-08', ['time_out' => null, 'attendance_status' => 'incomplete']);
+    $alreadyApproved = $day('2026-10-09', ['status' => DtrEntry::STATUS_APPROVED]);
+    $otherPeriod = $day('2026-10-20');
+
+    // Every day by default; the status filter narrows to the days still waiting.
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('filters.status', 'all')
+            ->where('entries.total', 5)
+            ->where('approval.readyToApprove', 3));
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15&status=open')
+        ->assertInertia(fn (Assert $page) => $page->where('filters.status', 'open')->where('entries.total', 4));
+
+    // Employees still see every day of their own timesheet.
+    ($this->as)($this->staffUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15')
+        ->assertInertia(fn (Assert $page) => $page->where('filters.status', 'all'));
+
+    // Approve all (summary): every ready day in the period, across pages; missing punches are left for review.
+    ($this->as)($this->hrUser)->post('/employee-management/attendance/approve-bulk', ['date_from' => '2026-10-01', 'date_to' => '2026-10-15'])
+        ->assertSessionHasNoErrors();
+
+    foreach ($ready as $d) {
+        expect($d->fresh()->status)->toBe(DtrEntry::STATUS_APPROVED);
+    }
+    expect($missingPunch->fresh()->status)->toBe(DtrEntry::STATUS_OPEN)
+        ->and($alreadyApproved->fresh()->status)->toBe(DtrEntry::STATUS_APPROVED)
+        ->and($otherPeriod->fresh()->status)->toBe(DtrEntry::STATUS_OPEN);
+
+    // Employees cannot approve.
+    ($this->as)($this->staffUser)->post('/employee-management/attendance/approve-bulk', ['date_from' => '2026-10-16', 'date_to' => '2026-10-31'])->assertForbidden();
+    expect($otherPeriod->fresh()->status)->toBe(DtrEntry::STATUS_OPEN);
+});
+
+test('the approval sheet approves and unapproves per employee', function () {
+    $day = fn (Employee $employee, string $date, array $extra = []) => DtrEntry::create([
+        'entity_id' => $this->entity->id, 'employee_id' => $employee->id, 'work_date' => $date,
+        'time_in' => '09:00:00', 'time_out' => '18:00:00', 'attendance_status' => 'present', 'status' => DtrEntry::STATUS_OPEN, ...$extra,
+    ]);
+    $samDays = [$day($this->staffEmployee, '2026-10-05'), $day($this->staffEmployee, '2026-10-06')];
+    $samLeave = $day($this->staffEmployee, '2026-10-07', ['time_in' => null, 'time_out' => null, 'attendance_status' => 'on_leave', 'status' => DtrEntry::STATUS_APPROVED]);
+    $helenDay = $day($this->hrEmployee, '2026-10-05');
+    $locked = $day($this->hrEmployee, '2026-10-02', ['status' => DtrEntry::STATUS_LOCKED]);
+
+    ($this->as)($this->hrUser)->get('/employee-management/attendance?view=timesheets&date_from=2026-10-01&date_to=2026-10-15')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('summary', fn ($rows) => collect($rows)->firstWhere('employee.id', $this->staffEmployee->id)['ready'] === 2
+                && collect($rows)->firstWhere('employee.id', $this->staffEmployee->id)['approved'] === 1
+                && collect($rows)->firstWhere('employee.id', $this->staffEmployee->id)['leave_days'] === 1));
+
+    // Approve selected employees only.
+    ($this->as)($this->hrUser)->post('/employee-management/attendance/approve-bulk', [
+        'date_from' => '2026-10-01', 'date_to' => '2026-10-15', 'employee_ids' => [$this->staffEmployee->id],
+    ])->assertSessionHasNoErrors();
+    expect($samDays[0]->fresh()->status)->toBe(DtrEntry::STATUS_APPROVED)
+        ->and($samDays[1]->fresh()->status)->toBe(DtrEntry::STATUS_APPROVED)
+        ->and($helenDay->fresh()->status)->toBe(DtrEntry::STATUS_OPEN);
+
+    // Unapprove sends the employee's approved days back; locked days stay locked.
+    ($this->as)($this->hrUser)->post('/employee-management/attendance/reopen-bulk', [
+        'date_from' => '2026-10-01', 'date_to' => '2026-10-15', 'employee_ids' => [$this->staffEmployee->id, $this->hrEmployee->id],
+    ])->assertSessionHasNoErrors();
+    expect($samDays[0]->fresh()->status)->toBe(DtrEntry::STATUS_OPEN)
+        ->and($samDays[0]->fresh()->approved_by)->toBeNull()
+        ->and($samLeave->fresh()->status)->toBe(DtrEntry::STATUS_OPEN)
+        ->and($locked->fresh()->status)->toBe(DtrEntry::STATUS_LOCKED);
+
+    ($this->as)($this->staffUser)->post('/employee-management/attendance/reopen-bulk', [
+        'date_from' => '2026-10-01', 'date_to' => '2026-10-15', 'employee_ids' => [$this->staffEmployee->id],
+    ])->assertForbidden();
 });

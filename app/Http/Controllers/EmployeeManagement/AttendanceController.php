@@ -36,7 +36,7 @@ use Inertia\Response;
  */
 class AttendanceController extends Controller
 {
-    private const VIEWS = ['clock', 'today', 'timesheets', 'requests'];
+    private const VIEWS = ['clock', 'today', 'timesheets', 'requests', 'accomplishments'];
 
     private const EMPLOYEE_COLUMNS = 'employee:id,employee_code,firstname,middlename,lastname,avatar,position,department,biometric_id';
 
@@ -82,6 +82,9 @@ class AttendanceController extends Controller
         if ($view === 'today' && ! $canViewTeam) {
             $view = 'clock';
         }
+        if ($view === 'accomplishments' && ! $self) {
+            $view = $defaultView;
+        }
 
         $today = Carbon::today();
         $periods = PayrollPeriod::query()
@@ -97,6 +100,7 @@ class AttendanceController extends Controller
         }
 
         $employeeId = $canViewTeam ? ($request->integer('employee_id') ?: null) : $self?->id;
+        // Every day by default; the status filter narrows to unapproved, approved, declined or locked.
         $recordStatus = in_array($request->query('status'), [DtrEntry::STATUS_OPEN, DtrEntry::STATUS_APPROVED, DtrEntry::STATUS_REJECTED, DtrEntry::STATUS_LOCKED], true)
             ? $request->query('status') : '';
         $requestStatus = in_array($request->query('request_status'), ['pending', 'approved', 'rejected', 'cancelled', 'all'], true)
@@ -161,6 +165,7 @@ class AttendanceController extends Controller
             ->orderByDesc('created_at')
             ->paginate(15, ['*'], 'requests_page')
             ->withQueryString();
+        AttendanceRequest::loadDayRecords($attendanceRequests->getCollection());
 
         $requestCounts = (clone $requestsBase)
             ->selectRaw('status, count(*) as total')
@@ -186,7 +191,7 @@ class AttendanceController extends Controller
                 'employee_id' => $employeeId,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
-                'status' => $recordStatus,
+                'status' => $recordStatus === '' ? 'all' : $recordStatus,
                 'request_status' => $requestStatus,
             ],
             'entries' => $entries,
@@ -209,6 +214,9 @@ class AttendanceController extends Controller
             // Built only for the view that shows them; the board refreshes itself via a partial reload.
             'board' => $canViewTeam && $view === 'today' ? $this->todayBoard($entityId) : null,
             'myDay' => $self && $view === 'clock' ? $this->myDay($self) : null,
+            'accomplishments' => $self && $view === 'accomplishments'
+                ? $this->myAccomplishments($self, $dateFrom, $dateTo, $this->currentCutoff($periods, $today), $today)
+                : null,
             'branchLocation' => $this->branchLocation($entityContext->current()),
             'today' => $today->toDateString(),
         ]);
@@ -562,11 +570,24 @@ class AttendanceController extends Controller
     public function approveBulk(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'ids' => ['required', 'array', 'min:1', 'max:500'],
+            'ids' => ['required_without:date_from', 'array', 'min:1', 'max:500'],
             'ids.*' => ['integer'],
+            'date_from' => ['required_without:ids', 'date_format:Y-m-d'],
+            'date_to' => ['required_with:date_from', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'employee_id' => ['nullable', 'integer'],
+            'employee_ids' => ['nullable', 'array', 'max:500'],
+            'employee_ids.*' => ['integer'],
         ]);
 
-        $entries = DtrEntry::query()->whereIn('id', $validated['ids'])->get();
+        // A period (optionally limited to some employees) approves every open day in it, across all pages.
+        $entries = isset($validated['ids'])
+            ? DtrEntry::query()->whereIn('id', $validated['ids'])->get()
+            : DtrEntry::query()
+                ->where('status', DtrEntry::STATUS_OPEN)
+                ->whereBetween('work_date', [$validated['date_from'], $validated['date_to']])
+                ->when($validated['employee_id'] ?? null, fn ($q, $id) => $q->where('employee_id', $id))
+                ->when($validated['employee_ids'] ?? null, fn ($q, $ids) => $q->whereIn('employee_id', $ids))
+                ->get();
         $approved = 0;
         $skipped = 0;
 
@@ -605,6 +626,28 @@ class AttendanceController extends Controller
     }
 
     /**
+     * Send the approved days of some employees in a period back to pending. Days already locked by
+     * a payroll computation stay as they are.
+     */
+    public function reopenBulk(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'date_from' => ['required', 'date_format:Y-m-d'],
+            'date_to' => ['required', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'employee_ids' => ['required', 'array', 'min:1', 'max:500'],
+            'employee_ids.*' => ['integer'],
+        ]);
+
+        $reopened = DtrEntry::query()
+            ->where('status', DtrEntry::STATUS_APPROVED)
+            ->whereBetween('work_date', [$validated['date_from'], $validated['date_to']])
+            ->whereIn('employee_id', $validated['employee_ids'])
+            ->update(['status' => DtrEntry::STATUS_OPEN, 'approved_by' => null, 'approved_at' => null]);
+
+        return redirect()->back()->with('status', "Unapproved {$reopened} time ".str('record')->plural($reopened).'.');
+    }
+
+    /**
      * Send an approved or rejected (not yet locked) DTR back to pending.
      */
     public function reopenDtr(DtrEntry $dtr): RedirectResponse
@@ -621,7 +664,7 @@ class AttendanceController extends Controller
     }
 
     /**
-     * File a day-level request (correction, overtime, official business, undertime, change of schedule).
+     * File a day-level request (correction, overtime, official business).
      */
     public function storeRequest(Request $request, EntityContext $entityContext): RedirectResponse
     {
@@ -749,6 +792,7 @@ class AttendanceController extends Controller
             'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'avatar_url']) + ['name' => $employee->name],
             'schedule' => $schedule->toArray(),
             'holiday' => $holiday?->only(['name', 'type']),
+            'officialBusiness' => $this->attendanceCalculator->approvedOfficialBusiness($employee->id, $today)?->only(['destination']),
             'today' => $todayEntry,
             'week' => $week,
             'weekTotals' => [
@@ -781,6 +825,124 @@ class AttendanceController extends Controller
      *
      * @return array{0: string, 1: string}
      */
+    /**
+     * The employee's days in a period with what they wrote, and whether each can still be written.
+     * Editable: in the current pay period (the next to be paid), up to today, not yet approved.
+     * An approved official business day can be written before its time record exists.
+     *
+     * @param  array{0: string, 1: string}  $window
+     */
+    private function myAccomplishments(Employee $employee, string $from, string $to, array $window, Carbon $today): array
+    {
+        $records = DtrEntry::query()
+            ->where('employee_id', $employee->id)
+            ->whereBetween('work_date', [$from, $to])
+            ->get()
+            ->keyBy(fn (DtrEntry $d) => $d->work_date->toDateString());
+
+        $business = AttendanceRequest::query()
+            ->where('employee_id', $employee->id)
+            ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
+            ->where('status', 'approved')
+            ->whereBetween('work_date', [$from, min($to, $today->toDateString())])
+            ->get()
+            ->keyBy(fn (AttendanceRequest $a) => $a->work_date->toDateString());
+
+        $days = $records->keys()->merge($business->keys())->unique()->sortDesc()->values();
+
+        $rows = $days->map(function (string $date) use ($records, $business, $window, $today) {
+            $dtr = $records->get($date);
+            $ob = $business->get($date);
+
+            $lockedBy = match (true) {
+                $date < $window[0] => 'Past pay period',
+                $date > $window[1] || $date > $today->toDateString() => 'Not yet',
+                $dtr && $dtr->status !== DtrEntry::STATUS_OPEN => $dtr->status === DtrEntry::STATUS_REJECTED ? 'Day rejected' : 'Day approved',
+                default => null,
+            };
+
+            return [
+                'date' => $date,
+                'dtr_id' => $dtr?->id,
+                'time_in' => $dtr?->time_in,
+                'break_out' => $dtr?->break_out,
+                'break_in' => $dtr?->break_in,
+                'time_out' => $dtr?->time_out,
+                'regular_hours' => $dtr ? (float) $dtr->regular_hours : null,
+                'ot_hours_approved' => $dtr ? (float) $dtr->ot_hours_approved : null,
+                'tardiness_minutes' => (int) ($dtr?->tardiness_minutes ?? 0),
+                'undertime_minutes' => (int) ($dtr?->undertime_minutes ?? 0),
+                'status' => $dtr?->status,
+                'attendance_status' => $dtr?->attendance_status,
+                'accomplishment' => $dtr?->accomplishment,
+                'official_business' => $ob ? ($ob->destination ?? '') : null,
+                'editable' => $lockedBy === null,
+                'locked_reason' => $lockedBy,
+            ];
+        });
+
+        return [
+            'rows' => $rows->all(),
+            'window' => ['from' => $window[0], 'to' => min($window[1], $today->toDateString())],
+            'missing' => $rows->where('editable', true)->filter(fn ($r) => RichText::isBlank($r['accomplishment']))->count(),
+        ];
+    }
+
+    /**
+     * Write or update the signed-in employee's accomplishment for one day (see myAccomplishments for the rules).
+     */
+    public function updateAccomplishment(Request $request, EntityContext $entityContext): RedirectResponse
+    {
+        $entityId = $entityContext->id();
+        $employee = $this->employeeResolver->forUser($request->user(), $entityId);
+        abort_unless($employee, 403);
+
+        $validated = $request->validate([
+            'work_date' => ['required', 'date_format:Y-m-d'],
+            'accomplishment' => ['required', 'string', 'max:20000'],
+        ], [
+            'accomplishment.required' => 'Write what you accomplished that day.',
+        ]);
+
+        $today = Carbon::today();
+        $periods = PayrollPeriod::query()->where('entity_id', $entityId)->orderByDesc('start_date')->limit(24)->get(['id', 'code', 'start_date', 'end_date']);
+        [$windowStart, $windowEnd] = $this->currentCutoff($periods, $today);
+        $date = $validated['work_date'];
+
+        if ($date < $windowStart || $date > $windowEnd || $date > $today->toDateString()) {
+            throw ValidationException::withMessages(['work_date' => 'Only days in the current pay period, up to today, can be written or changed.']);
+        }
+
+        $accomplishment = RichText::sanitize($validated['accomplishment']);
+        if ($accomplishment === '') {
+            throw ValidationException::withMessages(['accomplishment' => 'Write what you accomplished that day.']);
+        }
+        if (mb_strlen(RichText::plainText($accomplishment)) > 2000) {
+            throw ValidationException::withMessages(['accomplishment' => 'Keep the accomplishment under 2,000 characters.']);
+        }
+
+        $dtr = DtrEntry::query()->where('employee_id', $employee->id)->whereDate('work_date', $date)->first();
+
+        if ($dtr && $dtr->status !== DtrEntry::STATUS_OPEN) {
+            throw ValidationException::withMessages(['work_date' => 'This day has already been decided by your timekeeper, so its accomplishment can no longer change.']);
+        }
+
+        if (! $dtr) {
+            // Only an approved official business day can be written without a check-in.
+            $ob = $this->attendanceCalculator->approvedOfficialBusiness($employee->id, $date);
+            if (! $ob) {
+                throw ValidationException::withMessages(['work_date' => 'There is no time record for this day.']);
+            }
+            $dtr = $this->attendanceCalculator->applyOfficialBusiness(null, $employee, $ob);
+            $dtr->save();
+            $ob->update(['dtr_entry_id' => $dtr->id]);
+        }
+
+        $dtr->update(['accomplishment' => $accomplishment]);
+
+        return redirect()->back()->with('status', 'Accomplishment saved.');
+    }
+
     private function currentCutoff(EloquentCollection $periods, Carbon $today): array
     {
         $current = $periods->first(fn (PayrollPeriod $p) => $p->start_date->lte($today) && $p->end_date->gte($today));
@@ -818,7 +980,12 @@ class AttendanceController extends Controller
                     'ot_hours' => $overtime,
                     'total_hours' => round($regular + $overtime, 2),
                     'pending' => $days->where('status', DtrEntry::STATUS_OPEN)->count(),
+                    // Open days that bulk approval can take (no missing punch); corrections are still checked on approval.
+                    'ready' => $days->where('status', DtrEntry::STATUS_OPEN)->where('attendance_status', '!=', 'incomplete')->count(),
+                    'approved' => $days->where('status', DtrEntry::STATUS_APPROVED)->count(),
+                    'locked' => $days->where('status', DtrEntry::STATUS_LOCKED)->count(),
                     'rejected' => $days->where('status', DtrEntry::STATUS_REJECTED)->count(),
+                    'leave_days' => $days->where('attendance_status', 'on_leave')->count(),
                 ];
             })
             ->sortBy(fn ($row) => $row['employee']?->lastname)

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { fmtDays, fmtHours, fullName, REQUESTS_URL, type RequestItem } from '../lib';
+import { fmtDays, fullName, REQUESTS_URL, type RequestItem } from '../lib';
 import { fmtRange } from './request-card';
 
 type Open = { open: boolean; onOpenChange: (open: boolean) => void };
@@ -17,11 +17,11 @@ function effect(item: RequestItem): string {
         case 'leave':
             return `${d.half_day ? 'Half a day' : fmtDays(d.days)} will be deducted from the balance and the dates marked as leave on the time record.`;
         case 'overtime':
-            return `Pre-approves ${fmtHours(d.ot_hours)} of overtime. It is paid only for hours actually worked past the shift.`;
+            return 'Approves overtime for this day. All overtime the time clock records past the shift is paid.';
         case 'correction':
             return 'The requested times replace the punches on record and hours are recomputed.';
         case 'official_business':
-            return 'The time away counts as work; missing punches are filled from the official business window.';
+            return 'The whole scheduled day counts as worked; the employee does not need to check in or out.';
         case 'undertime':
             return 'The early departure is authorised. The undertime is still deducted from pay.';
         case 'schedule_change':

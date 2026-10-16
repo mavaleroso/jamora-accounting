@@ -22,7 +22,8 @@ use Illuminate\Validation\ValidationException;
  *  - Undertime = minutes left before scheduled end.
  *  - Regular hours are capped at the scheduled net hours and 8 hours (Art. 83).
  *  - OT rendered = work after scheduled end (min threshold, floored to blocks). Payable OT
- *    (ot_hours_approved) = sum of approved overtime requests for the day, capped at OT rendered.
+ *    (ot_hours_approved) = all OT rendered on a day that has an approved overtime request.
+ *    The request authorises overtime; the time clock decides how many hours.
  *  - Night differential = hours worked between 22:00 and 06:00 (Art. 86).
  *  - Day type combines rest day and holiday for premium computation.
  */
@@ -249,12 +250,12 @@ class AttendanceCalculator
     }
 
     /**
-     * Payable OT comes only from approved overtime requests, capped at the OT actually rendered.
+     * Payable OT is the OT actually rendered, but only on a day with an approved overtime request.
      * Called on every recompute so no other path (manual edit, import, approval) can grant OT.
      */
     public function syncApprovedOt(DtrEntry $dtr): DtrEntry
     {
-        $dtr->ot_hours_approved = min((float) $dtr->ot_hours, $this->approvedOtHours($dtr->employee_id, $dtr->work_date));
+        $dtr->ot_hours_approved = $this->hasApprovedOt($dtr->employee_id, $dtr->work_date) ? (float) $dtr->ot_hours : 0;
 
         return $dtr;
     }
@@ -271,8 +272,11 @@ class AttendanceCalculator
             'work_date' => $ob->work_date->toDateString(),
         ]);
 
-        $obIn = $this->normalizeTime($ob->requested_time_in);
-        $obOut = $this->normalizeTime($ob->requested_time_out);
+        // Whole-day official business credits the scheduled shift. Requests filed before that change
+        // carry their own window, which still applies.
+        $schedule = $this->scheduleFor($employee, $ob->work_date);
+        $obIn = $this->normalizeTime($ob->requested_time_in) ?? $schedule->start;
+        $obOut = $this->normalizeTime($ob->requested_time_out) ?? $schedule->end;
         $in = $this->normalizeTime($dtr->time_in);
         $out = $this->normalizeTime($dtr->time_out);
 
@@ -302,17 +306,17 @@ class AttendanceCalculator
             ->first();
     }
 
-    public function approvedOtHours(int $employeeId, CarbonInterface|string $date): float
+    public function hasApprovedOt(int $employeeId, CarbonInterface|string $date): bool
     {
         $dateStr = $date instanceof CarbonInterface ? $date->toDateString() : Carbon::parse($date)->toDateString();
 
-        return (float) AttendanceRequest::query()
+        return AttendanceRequest::query()
             ->withoutEntityScope()
             ->where('employee_id', $employeeId)
             ->whereDate('work_date', $dateStr)
             ->where('request_type', AttendanceRequest::TYPE_OVERTIME)
             ->where('status', 'approved')
-            ->sum('requested_ot_hours');
+            ->exists();
     }
 
     /**
@@ -320,7 +324,7 @@ class AttendanceCalculator
      *  - working day, no punch, no approved leave  -> absent (no work, no pay)
      *  - regular holiday (unworked)                 -> holiday (paid per Art. 94)
      *  - approved leave                             -> on_leave
-     *  - approved official business (filed ahead)  -> punches filled from the OB window
+     *  - approved official business                -> credited the whole scheduled day, even if punched
      *  - rest day / special non-working day         -> no row (no work, no pay; not an absence)
      *
      * @return array{absent:int, holiday:int, on_leave:int, official_business:int, skipped:int}
@@ -349,16 +353,23 @@ class AttendanceCalculator
                 ->whereDate('work_date', $dateStr)
                 ->first();
 
-            if ($dtr && ($dtr->isLocked() || filled($dtr->time_in) || filled($dtr->time_out) || $dtr->leave_request_id)) {
+            if ($dtr && ($dtr->isLocked() || $dtr->leave_request_id)) {
                 $result['skipped']++;
 
                 continue;
             }
 
-            // Approved official business filed ahead of the day: the employee was working off-site.
+            // Approved official business: the employee worked off-site all day. Any punches made anyway
+            // (e.g. checking in before leaving) only widen the day, so an unfinished record is completed.
             if ($ob = $this->approvedOfficialBusiness($employee->id, $dateStr)) {
                 $this->applyOfficialBusiness($dtr, $employee, $ob)->save();
                 $result['official_business']++;
+
+                continue;
+            }
+
+            if ($dtr && (filled($dtr->time_in) || filled($dtr->time_out))) {
+                $result['skipped']++;
 
                 continue;
             }

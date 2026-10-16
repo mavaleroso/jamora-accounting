@@ -21,7 +21,17 @@ export type Perspective = {
     canFileOnBehalf: boolean;
 };
 
-export type Filters = { kind: Kind | ''; status: Status | 'all'; employee_id: number | null; year: number };
+export type Filters = {
+    kind: Kind | '';
+    status: Status | 'all';
+    employee_id: number | null;
+    year: number;
+    /** History table: search text, sort column ('' = pending first, newest filed), direction, page size. */
+    q: string;
+    sort: '' | 'date' | 'filed';
+    dir: 'asc' | 'desc';
+    per_page: number;
+};
 
 export type RequestItem = {
     key: string;
@@ -148,7 +158,7 @@ export const KINDS: Record<
         icon: Hourglass,
         tone: 'blue',
         source: 'attendance',
-        description: 'Get approval before working past your shift. Paid up to the hours you actually render.',
+        description: 'Get approval before working past your shift. You are paid for the overtime you actually render.',
         when: 'In advance — today or a later day',
     },
     correction: {
@@ -166,8 +176,8 @@ export const KINDS: Record<
         icon: Briefcase,
         tone: 'emerald',
         source: 'attendance',
-        description: 'Work done away from the branch — client visits, suppliers, bank or government errands.',
-        when: 'Before or after the trip',
+        description: 'A whole day working away from the branch — client visits, suppliers, bank or government errands. No clock-in needed.',
+        when: 'Before or after the day',
     },
     undertime: {
         label: 'Undertime',
@@ -191,6 +201,12 @@ export const KINDS: Record<
 
 export const KIND_ORDER: Kind[] = ['leave', 'overtime', 'correction', 'official_business', 'undertime', 'schedule_change'];
 
+/**
+ * Kinds kept only so past requests still display. Undertime is detected from the time record and
+ * deducted automatically; shifts and rest days are set by HR in the Employee Directory and roster.
+ */
+export const RETIRED_KINDS: Kind[] = ['undertime', 'schedule_change'];
+
 export const STATUS: Record<Status, { label: string; tone: Tone }> = {
     pending: { label: 'Pending', tone: 'amber' },
     approved: { label: 'Approved', tone: 'emerald' },
@@ -200,7 +216,7 @@ export const STATUS: Record<Status, { label: string; tone: Tone }> = {
 
 /** Kinds the viewer may file, given their permissions. */
 export function fileableKinds(p: Perspective): Kind[] {
-    return KIND_ORDER.filter((k) => (KINDS[k].source === 'leave' ? p.canFileLeave : p.canFileAttendance));
+    return KIND_ORDER.filter((k) => !RETIRED_KINDS.includes(k) && (KINDS[k].source === 'leave' ? p.canFileLeave : p.canFileAttendance));
 }
 
 /** Kinds the viewer may approve here. Time corrections are decided on the day in Time & Attendance › Timesheets. */

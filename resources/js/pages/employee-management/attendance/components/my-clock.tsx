@@ -1,6 +1,7 @@
 import { router } from '@inertiajs/react';
 import {
     AlertTriangle,
+    Briefcase,
     CalendarOff,
     Check,
     Coffee,
@@ -74,6 +75,7 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
     }, []);
 
     const { schedule, today: entry, employee } = myDay;
+    const ob = myDay.officialBusiness;
     const done = Boolean(entry?.time_out);
     const onBreak = Boolean(entry?.break_out && !entry?.break_in);
     const working = Boolean(entry?.time_in) && !done && !onBreak;
@@ -128,6 +130,12 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
     const secondary = (working && !entry?.break_out) || onBreak ? { type: 'check_out' as const, label: 'Check out', icon: LogOut } : null;
 
     const statusLine = (() => {
+        if (ob) {
+            return {
+                tone: 'text-emerald-700 dark:text-emerald-300',
+                text: `You’re on official business today${ob.destination ? ` — ${ob.destination}` : ''}. Your full shift is credited.`,
+            };
+        }
         if (done) {
             const unpaidOt = Number(entry!.ot_hours) - Number(entry!.ot_hours_approved);
             return {
@@ -200,7 +208,12 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                     <p className={cn('text-sm font-medium', statusLine.tone)}>{statusLine.text}</p>
 
                     {/* Action */}
-                    {primary ? (
+                    {ob ? (
+                        <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+                            <Briefcase className="size-5 shrink-0" />
+                            <div className="text-sm">No need to check in or out today. Your approved official business covers the whole day.</div>
+                        </div>
+                    ) : primary ? (
                         <div className="flex flex-col gap-2 sm:flex-row">
                             <Button
                                 size="lg"

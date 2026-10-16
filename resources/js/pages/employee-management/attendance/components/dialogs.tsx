@@ -445,7 +445,7 @@ function RejectDayForm({ entry, onDone }: { entry: DtrRow; onDone: () => void })
 const REVIEW_COPY: Record<AttendanceRequestRow['request_type'], { label: string; effect: string }> = {
     correction: { label: 'Time correction', effect: 'The requested times replace the punches on record and hours are recomputed.' },
     overtime: { label: 'Overtime', effect: '' },
-    official_business: { label: 'Official business', effect: 'The time away counts as work; missing punches are filled from the official business window.' },
+    official_business: { label: 'Official business', effect: 'The whole scheduled day counts as worked; the employee does not need to check in or out.' },
     undertime: { label: 'Undertime', effect: 'The early departure is authorised. The undertime is still deducted from pay.' },
     schedule_change: { label: 'Change of schedule', effect: 'The roster for this day is replaced and lateness is measured against the new schedule.' },
 };
@@ -480,7 +480,7 @@ function ReviewForm({ request, decision, onDone }: { request: AttendanceRequestR
             {!reject && (
                 <p className="text-sm text-muted-foreground">
                     {request.request_type === 'overtime'
-                        ? `Pre-approves ${fmtHours(request.requested_ot_hours)} of overtime. It is paid only for hours actually worked past the shift.`
+                        ? 'Approves overtime for this day. All overtime the time clock records past the shift is paid.'
                         : REVIEW_COPY[request.request_type].effect}
                 </p>
             )}

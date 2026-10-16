@@ -63,7 +63,13 @@ export type SummaryRow = {
     ot_hours: number;
     total_hours: number;
     pending: number;
+    /** Open days bulk approval can take (no missing punch). */
+    ready: number;
+    approved: number;
+    locked: number;
     rejected: number;
+    /** Approved leave days in the period (paid time off). */
+    leave_days: number;
 };
 
 export type PayPeriodOption = { id: number; code: string; from: string; to: string };
@@ -103,7 +109,7 @@ export type Paginated<T> = {
     next_page_url: string | null;
 };
 
-export type BoardStatus = 'late' | 'expected' | 'working' | 'on_break' | 'done' | 'absent' | 'on_leave' | 'holiday' | 'rest_day';
+export type BoardStatus = 'late' | 'expected' | 'working' | 'on_break' | 'official_business' | 'done' | 'absent' | 'on_leave' | 'holiday' | 'rest_day';
 
 export type BoardRow = {
     employee: Person;
@@ -112,6 +118,8 @@ export type BoardRow = {
     tardiness_minutes: number;
     schedule: { shift_name: string; start: string | null; end: string | null; source: string };
     leave: string | null;
+    /** Destination when on approved official business today. */
+    official_business?: string | null;
     dtr: Pick<DtrRow, 'id' | 'time_in' | 'break_out' | 'break_in' | 'time_out' | 'location_status' | 'distance_meters' | 'status'> | null;
 };
 
@@ -134,6 +142,7 @@ export type MyDay = {
         source: string;
     };
     holiday: { name: string; type: string } | null;
+    officialBusiness?: { destination: string | null } | null;
     today: DtrRow | null;
     week: {
         date: string;
@@ -142,6 +151,34 @@ export type MyDay = {
     }[];
     weekTotals: { regular_hours: number; ot_hours: number; tardiness_minutes: number };
     pendingRequests: number;
+};
+
+/** One day in the employee's accomplishment report. */
+export type AccomplishmentRow = {
+    date: string;
+    dtr_id: number | null;
+    time_in: string | null;
+    break_out: string | null;
+    break_in: string | null;
+    time_out: string | null;
+    regular_hours: number | null;
+    ot_hours_approved: number | null;
+    tardiness_minutes: number;
+    undertime_minutes: number;
+    status: DtrRow['status'] | null;
+    attendance_status: string | null;
+    accomplishment: string | null;
+    /** Destination ('' when none given) on an approved official business day, otherwise null. */
+    official_business: string | null;
+    editable: boolean;
+    locked_reason: string | null;
+};
+
+export type Accomplishments = {
+    rows: AccomplishmentRow[];
+    /** Days that can be written or changed: the current pay period, up to today. */
+    window: { from: string; to: string };
+    missing: number;
 };
 
 export type BranchLocation = {
@@ -237,6 +274,7 @@ export const BOARD_STATUS: Record<BoardStatus, { label: string; tone: Tone; hint
     expected: { label: 'Expected', tone: 'slate', hint: 'Shift has not started yet' },
     working: { label: 'Working', tone: 'emerald', hint: 'Checked in' },
     on_break: { label: 'On break', tone: 'amber', hint: 'Break started, not back yet' },
+    official_business: { label: 'Official business', tone: 'emerald', hint: 'Working off-site all day; no clock-in needed' },
     done: { label: 'Done', tone: 'blue', hint: 'Checked out' },
     absent: { label: 'Absent', tone: 'rose', hint: 'Marked absent by daily close' },
     on_leave: { label: 'On leave', tone: 'violet', hint: 'Approved leave today' },

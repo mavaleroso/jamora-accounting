@@ -2,6 +2,7 @@
 
 namespace App\Services\People;
 
+use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\LeaveRequest;
@@ -50,16 +51,29 @@ class TeamBoard
             ->get()
             ->keyBy('employee_id');
 
+        // Off-site all day on approved official business: not late, nothing to punch.
+        $business = AttendanceRequest::query()
+            ->withoutEntityScope()
+            ->whereIn('employee_id', $employees->pluck('id'))
+            ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
+            ->where('status', 'approved')
+            ->whereDate('work_date', $today)
+            ->get()
+            ->keyBy('employee_id');
+
         $holiday = $this->calculator->holidayFor($entityId, $today);
 
-        $rows = $employees->map(function (Employee $employee) use ($dtrs, $leaves, $holiday, $now, $today) {
+        $rows = $employees->map(function (Employee $employee) use ($dtrs, $leaves, $business, $holiday, $now, $today) {
             $schedule = $this->calculator->scheduleFor($employee, $today);
             $dtr = $dtrs->get($employee->id);
             $leave = $leaves->get($employee->id);
+            $ob = $business->get($employee->id);
             $start = $schedule->start ? Carbon::parse($today.' '.$schedule->start) : null;
             $lateBy = null;
 
-            if ($dtr?->time_out) {
+            if ($ob) {
+                $status = 'official_business';
+            } elseif ($dtr?->time_out) {
                 $status = 'done';
             } elseif ($dtr?->break_out && ! $dtr->break_in) {
                 $status = 'on_break';
@@ -92,11 +106,12 @@ class TeamBoard
                     'source' => $schedule->source,
                 ],
                 'leave' => $leave ? ($leave->type?->name ?? $leave->leave_type) : null,
+                'official_business' => $ob?->destination,
                 'dtr' => $dtr?->only(['id', 'time_in', 'break_out', 'break_in', 'time_out', 'location_status', 'distance_meters', 'status']),
             ];
         })->values();
 
-        $order = ['late' => 0, 'expected' => 1, 'working' => 2, 'on_break' => 3, 'done' => 4, 'absent' => 5, 'on_leave' => 6, 'holiday' => 7, 'rest_day' => 8];
+        $order = ['late' => 0, 'expected' => 1, 'working' => 2, 'on_break' => 3, 'official_business' => 4, 'done' => 5, 'absent' => 6, 'on_leave' => 7, 'holiday' => 8, 'rest_day' => 9];
 
         return [
             'rows' => $rows->sortBy(fn ($r) => $order[$r['status']] ?? 9)->values()->all(),

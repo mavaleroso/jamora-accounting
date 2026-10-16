@@ -165,3 +165,126 @@
         color: black !important;
     }
 }
+
+/*
+ * Sidebar scroll area: a slim scrollbar tinted from the sidebar palette that stays out of sight until the
+ * menu is hovered or focused, plus soft edge shadows that appear only when more items sit above or below.
+ */
+[data-sidebar='content'] {
+    --sidebar-scroll-thumb: color-mix(in oklch, var(--sidebar-foreground) 22%, transparent);
+    --sidebar-scroll-thumb-hover: color-mix(in oklch, var(--sidebar-foreground) 38%, transparent);
+    --sidebar-scroll-shadow: color-mix(in oklch, black 45%, transparent);
+
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+
+    /* Covers (local) scroll with the content and hide the shadows (scroll) once an edge is reached. */
+    background:
+        linear-gradient(var(--sidebar) 40%, transparent) top / 100% 24px no-repeat local,
+        linear-gradient(transparent, var(--sidebar) 60%) bottom / 100% 24px no-repeat local,
+        radial-gradient(farthest-side at 50% 0, var(--sidebar-scroll-shadow), transparent) top / 100% 10px no-repeat scroll,
+        radial-gradient(farthest-side at 50% 100%, var(--sidebar-scroll-shadow), transparent) bottom / 100% 10px no-repeat scroll;
+}
+
+[data-sidebar='content']:hover,
+[data-sidebar='content']:focus-within {
+    scrollbar-color: var(--sidebar-scroll-thumb) transparent;
+}
+
+/* WebKit browsers without scrollbar-color support (Safari). */
+[data-sidebar='content']::-webkit-scrollbar {
+    width: 6px;
+}
+
+[data-sidebar='content']::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+[data-sidebar='content']::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: transparent;
+}
+
+[data-sidebar='content']:hover::-webkit-scrollbar-thumb,
+[data-sidebar='content']:focus-within::-webkit-scrollbar-thumb {
+    background: var(--sidebar-scroll-thumb);
+}
+
+[data-sidebar='content']::-webkit-scrollbar-thumb:hover {
+    background: var(--sidebar-scroll-thumb-hover);
+}
+
+/* The collapsed icon rail never scrolls; reserving a gutter there would push the icons off-center. */
+[data-collapsible='icon'] [data-sidebar='content'] {
+    scrollbar-gutter: auto;
+}
+
+/*
+ * Sidebar groups open and close smoothly: the panel grows to its measured height (Radix exposes it as
+ * --radix-collapsible-content-height) while the child items ease in one after another. Only groups the
+ * user toggles carry data-animate, so moving between pages of an open group doesn't replay it.
+ */
+@keyframes sidebar-group-open {
+    from {
+        height: 0;
+        opacity: 0;
+    }
+    to {
+        height: var(--radix-collapsible-content-height);
+        opacity: 1;
+    }
+}
+
+@keyframes sidebar-group-close {
+    from {
+        height: var(--radix-collapsible-content-height);
+        opacity: 1;
+    }
+    to {
+        height: 0;
+        opacity: 0;
+    }
+}
+
+@keyframes sidebar-item-in {
+    from {
+        opacity: 0;
+        transform: translateX(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.sidebar-group-content {
+    overflow: hidden;
+}
+
+.sidebar-group-content[data-animate][data-state='open'] {
+    animation: sidebar-group-open 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sidebar-group-content[data-animate][data-state='closed'] {
+    animation: sidebar-group-close 200ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item'] {
+    animation: sidebar-item-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(2) { animation-delay: 25ms; }
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(3) { animation-delay: 50ms; }
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(4) { animation-delay: 75ms; }
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(5) { animation-delay: 100ms; }
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(6) { animation-delay: 125ms; }
+.sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item']:nth-child(n + 7) { animation-delay: 150ms; }
+
+@media (prefers-reduced-motion: reduce) {
+    .sidebar-group-content[data-animate][data-state],
+    .sidebar-group-content[data-animate][data-state='open'] [data-sidebar='menu-sub-item'] {
+        animation: none;
+    }
+}

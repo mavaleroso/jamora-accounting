@@ -130,7 +130,9 @@ export function OutPanel({ title, items, today, showEmployee, empty }: { title: 
                                     <p className="truncate text-xs text-muted-foreground">
                                         {showEmployee && `${i.title} · `}
                                         {i.kind === 'official_business'
-                                            ? `${fmtTime(i.time_from)} – ${fmtTime(i.time_to)}`
+                                            ? i.time_from
+                                                ? `${fmtTime(i.time_from)} – ${fmtTime(i.time_to)}`
+                                                : 'Whole day'
                                             : `${fmtRange(i.date_from, i.date_to)}${i.half_day ? ' · half day' : i.days ? ` · ${fmtDays(i.days)}` : ''}`}
                                     </p>
                                 </div>
