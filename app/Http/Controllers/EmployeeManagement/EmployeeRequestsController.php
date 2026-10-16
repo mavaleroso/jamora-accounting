@@ -25,8 +25,8 @@ use Inertia\Response;
 
 /**
  * Employee Requests — one place to file and decide every request an employee can make:
- * leave (any type in the leave catalogue), overtime, time correction, official business,
- * undertime and change of schedule.
+ * leave (any type in the leave catalogue), overtime, time correction and official business.
+ * (Undertime is deducted automatically and schedules are set by HR, so neither is filed any more.)
  *
  * Leave lives in leave_requests (credits, ledger, DTR sync via LeaveService); the day-level
  * requests live in attendance_requests (AttendanceRequestService). This controller merges both
@@ -72,6 +72,11 @@ class EmployeeRequestsController extends Controller
         $kind = in_array($request->query('kind'), self::KINDS, true) ? $request->query('kind') : '';
         $status = in_array($request->query('status'), [...self::STATUSES, 'all'], true) ? $request->query('status') : 'all';
         $employeeId = $view === 'all' ? ($request->integer('employee_id') ?: null) : null;
+        // History table: search, sort and page size (the approvals inbox keeps oldest-first).
+        $search = trim((string) $request->query('q', ''));
+        $sort = in_array($request->query('sort'), ['filed', 'date'], true) ? $request->query('sort') : '';
+        $dir = $request->query('dir') === 'asc' ? 'asc' : 'desc';
+        $perPage = in_array($request->integer('per_page'), [10, 15, 25, 50], true) ? $request->integer('per_page') : 15;
         // Time corrections are decided on the day itself in Time & Attendance › Timesheets, not here.
         $approvable = array_values(array_diff($this->approvableKinds($perspective), [AttendanceRequest::TYPE_CORRECTION]));
 
@@ -86,15 +91,29 @@ class EmployeeRequestsController extends Controller
                 'all' => $scope->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId)),
             };
             $scope->when($kind !== '', fn ($q) => $q->where('kind', $kind));
+            $scope->when($search !== '' && $view !== 'inbox', function ($q) use ($search, $view, $entityId) {
+                $like = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $search).'%';
+                $q->where(function ($w) use ($like, $view, $entityId) {
+                    $w->where('reason', 'like', $like)
+                        ->orWhere('destination', 'like', $like)
+                        ->orWhere('type_name', 'like', $like);
+                    if ($view === 'all') {
+                        $w->orWhereIn('employee_id', Employee::query()->where('entity_id', $entityId)
+                            ->where(fn ($e) => $e->where('firstname', 'like', $like)->orWhere('lastname', 'like', $like)->orWhere('employee_code', 'like', $like))
+                            ->select('id'));
+                    }
+                });
+            });
 
             $statusCounts = (clone $scope)->selectRaw('status, count(*) as total')->groupBy('status')->pluck('total', 'status');
 
             $rows = $scope
                 ->when($view === 'inbox', fn ($q) => $q->where('status', 'pending')->orderBy('created_at'))
                 ->when($view !== 'inbox' && $status !== 'all', fn ($q) => $q->where('status', $status))
-                ->when($view !== 'inbox', fn ($q) => $q->orderByRaw("case when status = 'pending' then 0 else 1 end")->orderByDesc('created_at'))
+                ->when($view !== 'inbox' && $sort === '', fn ($q) => $q->orderByRaw("case when status = 'pending' then 0 else 1 end")->orderByDesc('created_at'))
+                ->when($view !== 'inbox' && $sort !== '', fn ($q) => $q->orderBy($sort === 'date' ? 'date_from' : 'created_at', $dir))
                 ->orderByDesc('id')
-                ->paginate(15)
+                ->paginate($view === 'inbox' ? 15 : $perPage)
                 ->withQueryString();
 
             $feed = $rows->setCollection($this->requestFeed->present($rows->getCollection()));
@@ -124,6 +143,10 @@ class EmployeeRequestsController extends Controller
                 'status' => $view === 'inbox' ? 'pending' : $status,
                 'employee_id' => $employeeId,
                 'year' => $year,
+                'q' => $search,
+                'sort' => $sort,
+                'dir' => $dir,
+                'per_page' => $perPage,
             ],
             'feed' => $feed,
             'statusCounts' => $statusCounts ? collect(self::STATUSES)->mapWithKeys(fn ($s) => [$s => (int) ($statusCounts[$s] ?? 0)]) : null,
@@ -171,7 +194,14 @@ class EmployeeRequestsController extends Controller
         $self = $this->employeeResolver->forUser($user, $entityId);
         $perspective = $this->perspective($user, $self);
 
-        $kind = $request->validate(['kind' => ['required', Rule::in(self::KINDS)]])['kind'];
+        $kind = $request->validate(
+            ['kind' => ['required', Rule::in(['leave', ...AttendanceRequest::FILEABLE_TYPES])]],
+            ['kind.in' => match ($request->input('kind')) {
+                AttendanceRequest::TYPE_UNDERTIME => 'Undertime no longer needs a request: leaving before your shift ends is deducted automatically.',
+                AttendanceRequest::TYPE_SCHEDULE_CHANGE => 'Schedule changes are no longer requested. Ask HR to update your shift or rest days.',
+                default => 'Choose a valid request type.',
+            }],
+        )['kind'];
         $isLeave = $kind === 'leave';
 
         if (! ($isLeave ? $perspective['canFileLeave'] : $perspective['canFileAttendance'])) {

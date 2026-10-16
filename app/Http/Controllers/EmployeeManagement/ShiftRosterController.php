@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\EmployeeManagement;
 
 use App\Http\Controllers\Controller;
+use App\Models\AttendanceRequest;
 use App\Models\Employee;
 use App\Models\Holiday;
 use App\Models\LeaveRequest;
@@ -15,7 +16,6 @@ use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -36,6 +36,11 @@ class ShiftRosterController extends Controller
             : Carbon::now()->startOfWeek();
 
         $endOfWeek = (clone $startOfWeek)->endOfWeek();
+
+        // Staff who neither schedule nor pay the team only ever see their own week.
+        if (! $request->user()->canAny(['roster.manage', 'payroll.view', 'payroll.manage'])) {
+            return $this->mySchedule($request, $entityId, $startOfWeek, $endOfWeek);
+        }
 
         // 7 days of the week with holiday metadata
         $days = [];
@@ -181,6 +186,120 @@ class ShiftRosterController extends Controller
                 'publishedCount' => $publishedCount,
                 'draftCount' => $draftCount,
             ],
+        ]);
+    }
+
+    /**
+     * "My Schedule": one employee's week as the time clock will see it (published roster > shift
+     * template > company default) with their holidays, approved leave and official business. Draft
+     * shifts and colleagues' schedules or leave are never sent.
+     */
+    private function mySchedule(Request $request, int $entityId, Carbon $startOfWeek, Carbon $endOfWeek): Response
+    {
+        $user = $request->user();
+        $today = Carbon::today();
+        $employee = $this->employeeResolver->forUser($user, $entityId);
+
+        $shared = [
+            'weekStart' => $startOfWeek->toDateString(),
+            'weekEnd' => $endOfWeek->toDateString(),
+            'today' => $today->toDateString(),
+            'can' => [
+                'fileLeave' => $user->can('leave.file'),
+                'fileAttendance' => $user->canAny(['attendance.view', 'attendance.punch']),
+            ],
+        ];
+
+        if (! $employee) {
+            return Inertia::render('employee-management/roster/my-schedule', [...$shared, 'employee' => null]);
+        }
+
+        $from = $startOfWeek->toDateString();
+        $to = $endOfWeek->toDateString();
+
+        $rosters = ShiftRoster::query()
+            ->where('employee_id', $employee->id)
+            ->where('status', ShiftRoster::STATUS_PUBLISHED)
+            ->whereBetween('roster_date', [$from, $to])
+            ->get(['id', 'roster_date', 'notes', 'published_at'])
+            ->keyBy(fn (ShiftRoster $r) => $r->roster_date->toDateString());
+
+        $leaves = LeaveRequest::query()
+            ->with('type:id,code,name')
+            ->where('employee_id', $employee->id)
+            ->where('status', LeaveRequest::STATUS_APPROVED)
+            ->whereDate('start_date', '<=', $to)
+            ->whereDate('end_date', '>=', $from)
+            ->get();
+
+        $business = AttendanceRequest::query()
+            ->where('employee_id', $employee->id)
+            ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
+            ->where('status', 'approved')
+            ->whereBetween('work_date', [$from, $to])
+            ->get()
+            ->keyBy(fn (AttendanceRequest $a) => $a->work_date->toDateString());
+
+        // A shift counts as "updated" when it was (re)published within the last week.
+        $recentSince = $today->copy()->subDays(7);
+
+        $days = collect(CarbonPeriod::create($startOfWeek, $endOfWeek))->map(function (Carbon $date) use ($employee, $rosters, $leaves, $business, $recentSince, $today) {
+            $d = $date->toDateString();
+            $schedule = $this->attendanceCalculator->scheduleFor($employee, $date);
+            $holiday = $this->attendanceCalculator->holidayFor($employee->entity_id, $date);
+            $leave = $leaves->first(fn (LeaveRequest $l) => $l->start_date->toDateString() <= $d && $l->end_date->toDateString() >= $d);
+            $ob = $business->get($d);
+            $roster = $rosters->get($d);
+
+            $minutes = 0;
+            if (! $schedule->isRestDay && $schedule->start && $schedule->end) {
+                $start = Carbon::parse("{$d} {$schedule->start}");
+                $end = Carbon::parse("{$d} {$schedule->end}");
+                if ($end->lte($start)) {
+                    $end->addDay(); // overnight shift
+                }
+                $minutes = max(0, (int) $start->diffInMinutes($end) - $schedule->breakMinutes);
+            }
+            if ($leave) {
+                $minutes = $leave->half_day ? intdiv($minutes, 2) : 0;
+            }
+
+            return [
+                'date' => $d,
+                'is_today' => $date->isSameDay($today),
+                'is_past' => $date->lt($today),
+                'shift_name' => $schedule->shiftName,
+                'start' => $schedule->start,
+                'end' => $schedule->end,
+                'break_minutes' => $schedule->isRestDay ? 0 : $schedule->breakMinutes,
+                'grace_minutes' => $schedule->isRestDay ? 0 : $schedule->graceMinutes,
+                'is_rest_day' => $schedule->isRestDay,
+                'source' => $schedule->source,
+                'scheduled_minutes' => $minutes,
+                'notes' => $roster?->notes,
+                'updated_at' => $roster?->published_at?->toIso8601String(),
+                'recently_updated' => (bool) $roster?->published_at?->gte($recentSince),
+                'holiday' => $holiday ? ['name' => $holiday->name, 'type' => $holiday->type] : null,
+                'leave' => $leave ? ['title' => $leave->type?->name ?? 'Leave', 'half_day' => (bool) $leave->half_day] : null,
+                'official_business' => $ob ? ['destination' => $ob->destination, 'from' => $ob->requested_time_in, 'to' => $ob->requested_time_out] : null,
+            ];
+        })->values();
+
+        $workDays = $days->filter(fn (array $day) => $day['scheduled_minutes'] > 0)->count();
+
+        return Inertia::render('employee-management/roster/my-schedule', [
+            ...$shared,
+            'employee' => $employee->only(['id', 'employee_code', 'name', 'position', 'department']),
+            'days' => $days->all(),
+            'summary' => [
+                'scheduledMinutes' => $days->sum('scheduled_minutes'),
+                'workDays' => $workDays,
+                'restDays' => $days->where('is_rest_day', true)->whereNull('leave')->count(),
+                'leaveDays' => $days->sum(fn (array $day) => $day['leave'] ? ($day['leave']['half_day'] ? 0.5 : 1) : 0),
+                'holidays' => $days->whereNotNull('holiday')->count(),
+            ],
+            'lastUpdated' => $rosters->max('published_at')?->toIso8601String(),
+            'recentlyUpdated' => $days->contains('recently_updated', true),
         ]);
     }
 

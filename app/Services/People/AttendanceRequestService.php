@@ -28,14 +28,13 @@ class AttendanceRequestService
     public function rules(): array
     {
         return [
-            'request_type' => ['required', Rule::in(AttendanceRequest::TYPES)],
+            'request_type' => ['required', Rule::in(AttendanceRequest::FILEABLE_TYPES)],
             'work_date' => ['required', 'date'],
             'dtr_entry_id' => ['nullable', 'exists:dtr_entries,id'],
             'requested_time_in' => ['nullable', 'date_format:H:i'],
             'requested_break_out' => ['nullable', 'date_format:H:i'],
             'requested_break_in' => ['nullable', 'date_format:H:i'],
             'requested_time_out' => ['nullable', 'date_format:H:i'],
-            'requested_ot_hours' => ['nullable', 'required_if:request_type,overtime', 'numeric', 'min:0.5', 'max:12'],
             'destination' => ['nullable', 'required_if:request_type,official_business', 'string', 'max:255'],
             'requested_rest_day' => ['nullable', 'boolean'],
             'reason' => ['required', 'string', 'min:5', 'max:500'],
@@ -45,7 +44,6 @@ class AttendanceRequestService
     public function messages(): array
     {
         return [
-            'requested_ot_hours.required_if' => 'Enter how many overtime hours you plan to work.',
             'destination.required_if' => 'Where will you be? e.g. client site, supplier, government office.',
         ];
     }
@@ -80,14 +78,17 @@ class AttendanceRequestService
                 break;
 
             case AttendanceRequest::TYPE_OVERTIME:
-                // Pre-approval: filed before the work is rendered. Payable OT is still capped at
-                // the OT actually rendered when the day is computed (AttendanceCalculator::syncApprovedOt).
+                // Pre-approval: filed before the work is rendered, with no hours. Once approved, all OT the
+                // time clock records that day is payable (AttendanceCalculator::syncApprovedOt).
                 $this->assertNotPast($date, $today, 'Overtime must be filed in advance — for today or a later day.');
                 break;
 
             case AttendanceRequest::TYPE_OFFICIAL_BUSINESS:
-                $this->assertWindow($times['requested_time_in'], $times['requested_time_out'], 'Enter when you leave for and return from the official business.');
-                $times = $times->only(['requested_time_in', 'requested_time_out']);
+                // Covers the whole scheduled day, so there are no times to file and nothing to clock.
+                if ($this->attendanceCalculator->scheduleFor($employee, $date)->isRestDay) {
+                    throw ValidationException::withMessages(['work_date' => 'That is a rest day. Official business covers a scheduled work day.']);
+                }
+                $times = collect();
                 break;
 
             case AttendanceRequest::TYPE_UNDERTIME:
@@ -143,7 +144,7 @@ class AttendanceRequestService
             'work_date' => $dateStr,
             ...array_fill_keys(array_map(fn ($k) => "requested_{$k}", self::PUNCHES), null),
             ...$times->all(),
-            'requested_ot_hours' => $type === AttendanceRequest::TYPE_OVERTIME ? $data['requested_ot_hours'] : null,
+            'requested_ot_hours' => null,
             'destination' => $type === AttendanceRequest::TYPE_OFFICIAL_BUSINESS ? $data['destination'] : null,
             'requested_rest_day' => $restDay,
             'reason' => $data['reason'],
@@ -234,7 +235,7 @@ class AttendanceRequestService
                 // No record means no OT rendered, so there is nothing to pay — don't create an empty day.
                 if ($dtr) {
                     $this->attendanceCalculator->syncApprovedOt($dtr);
-                    $dtr->notes = trim(($dtr->notes ?? '')." [OT approved: {$request->requested_ot_hours} hrs]");
+                    $dtr->notes = trim(($dtr->notes ?? '')." [OT approved: {$dtr->ot_hours_approved} hrs rendered]");
                     $dtr->save();
                 }
                 break;

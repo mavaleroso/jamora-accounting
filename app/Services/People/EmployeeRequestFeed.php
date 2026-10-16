@@ -23,13 +23,14 @@ class EmployeeRequestFeed
      */
     public function query(?int $entityId): Builder
     {
+        // reason / destination / type_name are carried only so history can be searched.
         $leave = DB::table('leave_requests')
             ->where('entity_id', $entityId)
-            ->selectRaw("'leave' as kind, id, employee_id, status, created_at, start_date as date_from");
+            ->selectRaw("'leave' as kind, id, employee_id, status, created_at, start_date as date_from, reason, null as destination, (select name from leave_types where leave_types.id = leave_requests.leave_type_id) as type_name");
 
         $attendance = DB::table('attendance_requests')
             ->where('entity_id', $entityId)
-            ->selectRaw("request_type as kind, id, employee_id, case when status = 'rejected' then 'declined' else status end as status, created_at, work_date as date_from");
+            ->selectRaw("request_type as kind, id, employee_id, case when status = 'rejected' then 'declined' else status end as status, created_at, work_date as date_from, reason, destination, null as type_name");
 
         return DB::query()->fromSub($leave->unionAll($attendance), 'requests');
     }
@@ -53,6 +54,7 @@ class EmployeeRequestFeed
             ->whereIn('id', $attendanceIds)
             ->get()
             ->keyBy('id');
+        AttendanceRequest::loadDayRecords($attendance);
 
         return $rows
             ->map(fn ($row) => $row->kind === 'leave'

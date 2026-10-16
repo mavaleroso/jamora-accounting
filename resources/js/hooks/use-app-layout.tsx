@@ -1,3 +1,5 @@
+import type { SharedData } from '@/types';
+import { usePage } from '@inertiajs/react';
 import { useCallback, useSyncExternalStore } from 'react';
 
 export type AppLayoutMode = 'sidebar' | 'navbar';
@@ -5,6 +7,8 @@ export type ContentWidth = 'contained' | 'fluid';
 
 type PreferenceStore<T extends string> = {
     read: () => T;
+    /** The value this browser explicitly chose, or null when it never picked one. */
+    readSaved: () => T | null;
     write: (value: T) => void;
     subscribe: (notify: () => void) => () => void;
     initialize: () => void;
@@ -22,19 +26,22 @@ type PreferenceStore<T extends string> = {
 function createPreferenceStore<T extends string>(key: string, values: readonly T[], fallback: T, datasetKey: string): PreferenceStore<T> {
     const listeners = new Set<() => void>();
 
-    const read = (): T => {
-        if (typeof window === 'undefined') return fallback;
+    const readSaved = (): T | null => {
+        if (typeof window === 'undefined') return null;
         try {
             const saved = localStorage.getItem(key) as T | null;
-            return saved && values.includes(saved) ? saved : fallback;
+            return saved && values.includes(saved) ? saved : null;
         } catch {
-            return fallback;
+            return null;
         }
     };
+
+    const read = (): T => readSaved() ?? fallback;
 
     return {
         fallback,
         read,
+        readSaved,
         write(value: T) {
             try {
                 localStorage.setItem(key, value);
@@ -71,9 +78,15 @@ export function initializeAppLayout() {
     widthStore.initialize();
 }
 
-/** Sidebar vs top-navbar shell. */
+/** Sidebar vs top-navbar shell. Employees default to the top navbar until they pick a layout themselves. */
 export function useAppLayout() {
-    const layout = useSyncExternalStore(layoutStore.subscribe, layoutStore.read, () => layoutStore.fallback);
+    const isEmployee = usePage<SharedData>().props.auth?.user?.roles?.includes('Employee') ?? false;
+    const fallback: AppLayoutMode = isEmployee ? 'navbar' : layoutStore.fallback;
+    const layout = useSyncExternalStore(
+        layoutStore.subscribe,
+        () => layoutStore.readSaved() ?? fallback,
+        () => fallback,
+    );
     const updateLayout = useCallback((mode: AppLayoutMode) => layoutStore.write(mode), []);
 
     return { layout, updateLayout };

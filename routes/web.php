@@ -348,12 +348,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(AttendanceController::class)->prefix('attendance')->name('attendance.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:attendance.view|payroll.view');
             Route::post('punch', 'recordPunch')->name('punch')->middleware('permission:attendance.punch|payroll.manage');
+            Route::post('accomplishments', 'updateAccomplishment')->name('accomplishments.update')->middleware('permission:attendance.view|attendance.punch');
             Route::post('geofence', 'updateGeofence')->name('geofence')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('requests', 'storeRequest')->name('requests.store')->middleware('permission:attendance.view|attendance.punch|payroll.view');
             Route::post('requests/{attendanceRequest}/review', 'reviewRequest')->name('requests.review')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('requests/{attendanceRequest}/cancel', 'cancelRequest')->name('requests.cancel')->middleware('permission:attendance.view|attendance.punch|payroll.view');
             Route::post('daily-close', 'runDailyClose')->name('daily-close')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('approve-bulk', 'approveBulk')->name('approve-bulk')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('reopen-bulk', 'reopenBulk')->name('reopen-bulk')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/verify', 'verifyPunch')->name('verify')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/approve', 'approveDtr')->name('approve')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('{dtr}/reject', 'rejectDtr')->name('reject')->middleware('permission:attendance.manage|payroll.manage');

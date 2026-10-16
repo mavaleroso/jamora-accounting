@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { BOARD_STATUS, DOT, fmtMinutes, fmtTime, fullName, TONE, type Board, type BoardRow, type BoardStatus } from '../lib';
 
-const CHIP_ORDER: BoardStatus[] = ['late', 'expected', 'working', 'on_break', 'done', 'on_leave', 'absent', 'holiday', 'rest_day'];
+const CHIP_ORDER: BoardStatus[] = ['late', 'expected', 'working', 'on_break', 'official_business', 'done', 'on_leave', 'absent', 'holiday', 'rest_day'];
 
 type Props = {
     board: Board;
@@ -131,6 +131,7 @@ export function TodayBoard({ board, canManage, onEdit, onViewTimesheet }: Props)
                                             {r.status === 'late' && r.late_by != null && `${fmtMinutes(r.late_by)} past start`}
                                             {['working', 'on_break', 'done'].includes(r.status) && r.tardiness_minutes > 0 && `Late ${fmtMinutes(r.tardiness_minutes)}`}
                                             {r.status === 'on_leave' && r.leave}
+                                            {r.status === 'official_business' && r.official_business}
                                         </div>
                                     </div>
 

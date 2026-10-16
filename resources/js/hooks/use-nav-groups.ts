@@ -265,6 +265,11 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
             }
         })
         .map((item) => {
+            // Same rule as the server: without scheduling or payroll access the roster is the user's own week.
+            if (item.href === '/employee-management/roster' && !canAny(['roster.manage', 'payroll.view', 'payroll.manage'])) {
+                return { ...item, title: 'My Schedule' };
+            }
+
             if (!isEmployee) return item;
 
             if (item.href === '/employee-management/portal') {

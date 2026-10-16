@@ -34,7 +34,7 @@ const PUNCHES = [
 ] as const;
 
 /** One line saying exactly what the request asks for. */
-function What({ item }: { item: RequestItem }) {
+export function What({ item }: { item: RequestItem }) {
     const d = item.details;
     switch (item.kind) {
         case 'leave':
@@ -47,12 +47,14 @@ function What({ item }: { item: RequestItem }) {
         case 'overtime':
             return (
                 <span>
-                    <span className="font-semibold">{fmtHours(d.ot_hours)}</span> overtime planned
-                    {d.dtr && Number(d.dtr.ot_hours) > 0 && (
-                        <span className="text-muted-foreground">
-                            {' '}
-                            · {fmtHours(d.dtr.ot_hours)} rendered, out {fmtTime(d.dtr.time_out as string)}
-                        </span>
+                    {d.dtr?.time_out ? (
+                        <>
+                            <span className="font-semibold">{fmtHours(item.status === 'approved' ? d.dtr.ot_hours_approved : d.dtr.ot_hours)}</span> overtime{' '}
+                            {item.status === 'approved' ? 'paid' : 'rendered'}
+                            <span className="text-muted-foreground"> · out {fmtTime(d.dtr.time_out as string)}</span>
+                        </>
+                    ) : (
+                        <span className="text-muted-foreground">Hours counted from the time clock once the day is worked</span>
                     )}
                 </span>
             );
@@ -72,9 +74,7 @@ function What({ item }: { item: RequestItem }) {
         case 'official_business':
             return (
                 <span>
-                    <span className="font-semibold">
-                        {fmtTime(d.time_in)} – {fmtTime(d.time_out)}
-                    </span>
+                    <span className="font-semibold">{d.time_in ? `${fmtTime(d.time_in)} – ${fmtTime(d.time_out)}` : 'Whole day'}</span>
                     {d.destination && <span className="text-muted-foreground"> · {d.destination}</span>}
                 </span>
             );
@@ -91,9 +91,7 @@ function What({ item }: { item: RequestItem }) {
             ) : (
                 <span>
                     New shift{' '}
-                    <span className="font-semibold">
-                        {fmtTime(d.time_in)} – {fmtTime(d.time_out)}
-                    </span>
+                    <span className="font-semibold">{d.time_in ? `${fmtTime(d.time_in)} – ${fmtTime(d.time_out)}` : 'Whole day'}</span>
                 </span>
             );
     }

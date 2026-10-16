@@ -8,8 +8,20 @@ type Props = {
     variant?: 'header' | 'sidebar';
 };
 
+/**
+ * The sidebar remounts on every visit, so its starting state must be current. The server's `sidebarOpen`
+ * prop can be stale when the page came from Inertia's prefetch cache (fetched while the sidebar was in its
+ * other state), so in the browser the cookie the sidebar writes is the source of truth.
+ */
+function readSidebarCookie(): boolean | undefined {
+    if (typeof document === 'undefined') return undefined;
+    const match = document.cookie.match(/(?:^|;\s*)sidebar_state=(true|false)/);
+    return match ? match[1] === 'true' : undefined;
+}
+
 export function AppShell({ children, variant = 'header' }: Props) {
-    const isOpen = usePage<SharedData>().props.sidebarOpen;
+    const serverOpen = usePage<SharedData>().props.sidebarOpen;
+    const isOpen = readSidebarCookie() ?? serverOpen;
 
     if (variant === 'header') {
         return (

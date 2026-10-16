@@ -1,5 +1,5 @@
 import { Head, router } from '@inertiajs/react';
-import { CalendarCheck, Clock, Eye, Hourglass, ListChecks, MapPin, Plus, ShieldCheck, Users } from 'lucide-react';
+import { CalendarCheck, Clock, Eye, Hourglass, ListChecks, MapPin, NotebookPen, Plus, ShieldCheck, Users } from 'lucide-react';
 import * as React from 'react';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
@@ -17,12 +17,14 @@ import {
     type ManualEntryTarget,
     type RequestTarget,
 } from './components/dialogs';
+import { AccomplishmentReport } from './components/accomplishments';
 import { MyClock } from './components/my-clock';
 import { RequestsPanel } from './components/requests-panel';
 import { Timesheets } from './components/timesheets';
 import { TodayBoard } from './components/today-board';
 import {
     ATTENDANCE_URL,
+    type Accomplishments,
     type Approval,
     type AttendanceRequestRow,
     type Board,
@@ -42,7 +44,7 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Time & Attendance', href: ATTENDANCE_URL },
 ];
 
-type View = 'clock' | 'today' | 'timesheets' | 'requests';
+type View = 'clock' | 'today' | 'timesheets' | 'requests' | 'accomplishments';
 
 type Props = {
     perspective: Perspective;
@@ -57,12 +59,29 @@ type Props = {
     employees: Person[];
     board: Board | null;
     myDay: MyDay | null;
+    accomplishments: Accomplishments | null;
     branchLocation: BranchLocation;
     today: string;
 };
 
 export default function AttendancePage(props: Props) {
-    const { perspective, view, filters, entries, approval, summary, periods, attendanceRequests, requestCounts, employees, board, myDay, branchLocation, today } = props;
+    const {
+        perspective,
+        view,
+        filters,
+        entries,
+        approval,
+        summary,
+        periods,
+        attendanceRequests,
+        requestCounts,
+        employees,
+        board,
+        myDay,
+        accomplishments,
+        branchLocation,
+        today,
+    } = props;
     const { canManage, canViewTeam, hasSelf } = perspective;
 
     const [manualTarget, setManualTarget] = React.useState<ManualEntryTarget>(null);
@@ -88,6 +107,7 @@ export default function AttendancePage(props: Props) {
         { id: 'today', label: 'Today', icon: Users, show: canViewTeam },
         { id: 'timesheets', label: canViewTeam ? 'Timesheets' : 'My timesheet', icon: ListChecks, badge: canManage ? approval.open : undefined, show: true },
         { id: 'requests', label: 'Overtime', icon: Hourglass, badge: requestCounts.pending, show: true },
+        { id: 'accomplishments', label: 'Accomplishments', icon: NotebookPen, show: hasSelf },
     ];
     // Timekeepers start from the team; employees from their own clock.
     const orderedTabs = canManage ? [...tabs.filter((t) => t.id !== 'clock'), ...tabs.filter((t) => t.id === 'clock')] : tabs;
@@ -187,6 +207,10 @@ export default function AttendancePage(props: Props) {
                         onReject={setRejectEntry}
                         onRequest={(entry, type) => setRequestTarget({ entry, type, employeeId: entry.employee_id })}
                     />
+                )}
+
+                {view === 'accomplishments' && accomplishments && (
+                    <AccomplishmentReport data={accomplishments} periods={periods} filters={filters} today={today} onFilter={navigate} />
                 )}
 
                 {view === 'requests' && (
