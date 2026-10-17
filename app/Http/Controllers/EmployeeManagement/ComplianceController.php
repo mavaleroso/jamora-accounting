@@ -6,14 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\ComplianceItem;
 use App\Services\People\ComplianceCalendar;
 use App\Support\EntityContext;
+use App\Support\PrivateFiles;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Statutory compliance calendar. Each filing moves pending -> prepared -> submitted -> verified one step
@@ -57,7 +58,7 @@ class ComplianceController extends Controller
                 ...$item->only(['id', 'title', 'form_code', 'agency', 'category', 'frequency', 'period', 'owner_role', 'status', 'reference_no', 'notes']),
                 'due_date' => $item->due_date?->toDateString(),
                 'amount' => $item->amount !== null ? (float) $item->amount : null,
-                'evidence_url' => $item->evidence_file ? Storage::disk('public')->url($item->evidence_file) : null,
+                'evidence_url' => $item->evidence_file ? route('employee-management.compliance.evidence', $item->id) : null,
                 'is_overdue' => $item->isOverdue(),
                 'is_late' => $item->isLate(),
                 'days_late' => $item->daysLate(),
@@ -118,7 +119,7 @@ class ComplianceController extends Controller
             'notes' => $validated['notes'] ?? $complianceItem->notes,
         ];
         if ($request->hasFile('evidence')) {
-            $update['evidence_file'] = $request->file('evidence')->store('compliance-evidence', 'public');
+            $update['evidence_file'] = $request->file('evidence')->store('compliance-evidence', PrivateFiles::DISK);
         }
 
         if ($target === 'prepared') {
@@ -134,6 +135,17 @@ class ComplianceController extends Controller
         $message = $target === 'prepared' ? 'marked prepared' : 'recorded as filed'.($complianceItem->fresh()->isLate() ? ' — after the due date' : '');
 
         return redirect()->back()->with('status', "{$complianceItem->title} {$message}.");
+    }
+
+    /**
+     * The proof of filing / working file of an item, for people with compliance access to the branch.
+     */
+    public function evidence(ComplianceItem $complianceItem, EntityContext $entityContext): StreamedResponse
+    {
+        $this->assertEntity($complianceItem, $entityContext);
+        abort_unless($complianceItem->evidence_file, 404);
+
+        return PrivateFiles::response($complianceItem->evidence_file);
     }
 
     /**

@@ -18,10 +18,17 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                {!isEmployee && <NavMain items={[overviewNavItem]} />}
-                {groups.map((group) => (
-                    <NavMain key={group.title} items={group.items} title={group.title} icon={group.icon} />
-                ))}
+                {isEmployee ? (
+                    // Employees only have their own self-service pages: list them flat, without a parent group.
+                    <NavMain items={groups.flatMap((group) => group.items)} />
+                ) : (
+                    <>
+                        <NavMain items={[overviewNavItem]} />
+                        {groups.map((group) => (
+                            <NavMain key={group.title} items={group.items} title={group.title} icon={group.icon} />
+                        ))}
+                    </>
+                )}
             </SidebarContent>
 
             <SidebarFooter>

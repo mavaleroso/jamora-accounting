@@ -17,6 +17,8 @@ class EmployeeBenefit extends Model
         'effective_date',
         'end_date',
         'notes',
+        'review_flagged_at',
+        'review_note',
     ];
 
     protected function casts(): array
@@ -26,6 +28,7 @@ class EmployeeBenefit extends Model
             'employer_share' => 'decimal:2',
             'effective_date' => 'date',
             'end_date' => 'date',
+            'review_flagged_at' => 'datetime',
         ];
     }
 

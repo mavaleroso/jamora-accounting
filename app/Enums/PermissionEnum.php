@@ -45,6 +45,7 @@ enum PermissionEnum: string
     case PayrollView = 'payroll.view';
     case PayrollManage = 'payroll.manage';
     case PayrollRun = 'payroll.run';
+    case PayrollSharedProgramsManage = 'payroll.shared-programs.manage';
     case ApView = 'ap.view';
     case ApManage = 'ap.manage';
     case ApPay = 'ap.pay';

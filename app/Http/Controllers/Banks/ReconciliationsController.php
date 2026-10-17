@@ -37,7 +37,7 @@ class ReconciliationsController extends Controller
             ->whereIn('bank_account_id', $accountFilter ? [$accountFilter] : $accountIds)
             ->orderByRaw("case when status = 'open' then 0 else 1 end")
             ->orderByDesc('statement_date')
-            ->paginate(15)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         // Status board: where each account stands today.

@@ -84,6 +84,14 @@ class PayrollService
             throw ValidationException::withMessages(['status' => 'There are no payslips to approve.']);
         }
 
+        // Every working day of the cut-off must be recorded, complete and approved in Time & Attendance.
+        $blockers = collect($this->timekeepingBlockers($run))->filter(fn ($b) => $b['count'] > 0);
+        if ($blockers->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'status' => $blockers->map(fn ($b) => "{$b['count']} {$b['message']}")->implode(' '),
+            ]);
+        }
+
         return DB::transaction(function () use ($run, $user) {
             $period = $run->period;
 
@@ -225,6 +233,40 @@ class PayrollService
     }
 
     /**
+     * Time & Attendance issues that block approval: the cut-off is paid only from recorded, complete,
+     * approved days, on payslips computed after the last change to those days.
+     *
+     * @return array<string, array{count: int, message: string}>
+     */
+    public function timekeepingBlockers(PayrollRun $run): array
+    {
+        $period = $run->period;
+        $range = [$period->start_date->toDateString(), $period->end_date->toDateString()];
+        $employeeIds = $run->payslips()->pluck('employee_id');
+        $records = fn () => DtrEntry::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)->whereBetween('work_date', $range);
+        $computedAt = $run->payslips()->min('created_at');
+
+        return [
+            'open_records' => [
+                'count' => $records()->where('status', DtrEntry::STATUS_OPEN)->count(),
+                'message' => 'time records in this cut-off are not yet approved — approve or decline them in Time & Attendance.',
+            ],
+            'incomplete' => [
+                'count' => $records()->where('attendance_status', 'incomplete')->where('status', '!=', DtrEntry::STATUS_REJECTED)->count(),
+                'message' => 'time records have a missing punch — fix the times or decline the day in Time & Attendance.',
+            ],
+            'no_record_days' => [
+                'count' => $run->payslips()->get(['meta'])->filter(fn (Payslip $p) => ($p->meta['days']['no_record'] ?? 0) > 0)->count(),
+                'message' => 'employees have working days without a time record — close those days in Time & Attendance, then recompute.',
+            ],
+            'changed_since_compute' => [
+                'count' => $computedAt ? $records()->where('updated_at', '>', $computedAt)->count() : 0,
+                'message' => 'time records changed after this payroll was computed — recompute so the payslips use them.',
+            ],
+        ];
+    }
+
+    /**
      * Run-level checks shown before approval. Each item: [level, message, count].
      *
      * @return array<int, array{level: string, message: string, count: int, key: string}>
@@ -241,13 +283,9 @@ class PayrollService
             }
         };
 
-        $add('open_records', 'warning', DtrEntry::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)
-            ->whereBetween('work_date', $range)->where('status', DtrEntry::STATUS_OPEN)->count(),
-            'time records in this cut-off are not yet approved in Time & Attendance.');
-
-        $add('incomplete', 'warning', DtrEntry::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)
-            ->whereBetween('work_date', $range)->where('attendance_status', 'incomplete')->count(),
-            'time records have a missing punch and are not paid.');
+        foreach ($this->timekeepingBlockers($run) as $key => $blocker) {
+            $add($key, 'error', $blocker['count'], $blocker['message']);
+        }
 
         $add('pending_requests', 'warning',
             AttendanceRequest::query()->withoutEntityScope()->whereIn('employee_id', $employeeIds)->where('status', 'pending')->whereBetween('work_date', $range)->count()
@@ -255,10 +293,11 @@ class PayrollService
                 ->whereDate('start_date', '<=', $range[1])->whereDate('end_date', '>=', $range[0])->count(),
             'requests (leave, overtime, corrections…) in this cut-off are still pending — decide them, then recompute.');
 
+        $add('benefit_review', 'warning', EmployeeBenefit::query()->whereIn('employee_id', $employeeIds)->whereNotNull('review_flagged_at')->distinct()->count('employee_id'),
+            'employees have benefit shares to review after a salary change — update them in Benefits Administration, then recompute.');
+
         $payslips = $run->payslips()->with('employee:id,bank_name,bank_account_no')->get();
         $add('negative_net', 'error', $payslips->where('net_pay', '<', 0)->count(), 'payslips have negative net pay — approval is blocked.');
-        $add('no_record_days', 'info', $payslips->filter(fn (Payslip $p) => ($p->meta['days']['no_record'] ?? 0) > 0)->count(),
-            'employees have working days without a time record — close those days in Time & Attendance.');
         $add('no_bank', 'info', $payslips->filter(fn (Payslip $p) => blank($p->employee?->bank_account_no))->count(),
             'employees have no payroll bank account and must be paid by cash or cheque.');
         $add('missing_ids', 'info', $payslips->filter(fn (Payslip $p) => collect($p->meta['warnings'] ?? [])->contains(fn ($w) => str_contains($w, 'number on file')))->count(),

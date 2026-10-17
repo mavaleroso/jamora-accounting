@@ -89,7 +89,7 @@ class CashBankTransactionsController extends Controller
                 'journal_entries.source_type',
                 'journal_entries.source_id',
             ])
-            ->paginate(20)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         $accountNames = $cashAccounts->keyBy('id');

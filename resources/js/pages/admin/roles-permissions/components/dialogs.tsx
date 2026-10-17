@@ -2,6 +2,7 @@ import { useForm } from '@inertiajs/react';
 import { Info, Loader2, Search } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -37,9 +38,19 @@ function RoleForm({ mode, roles, onDone }: { mode: RoleDialogMode; roles: Role[]
         permissions: editing?.permissions ?? [],
     });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
-    const submit = (e: React.FormEvent) => {
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!editing) {
+            const source = roles.find((r) => String(r.id) === data.copy_from);
+            const ok = await confirm({
+                title: `Create the ${data.name.trim() || 'new'} role?`,
+                description: source ? `It starts with the same permissions as ${source.name}.` : 'It starts with no permissions; grant them in the editor afterwards.',
+                confirmLabel: 'Create role',
+            });
+            if (!ok) return;
+        }
         if (editing) {
             form.transform((d) => ({ name: d.name.trim(), description: d.description.trim() || null, permissions: d.permissions }));
             form.put(`${ROLES_URL}/${editing.id}`, { preserveScroll: true, onSuccess: onDone });

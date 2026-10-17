@@ -1,6 +1,7 @@
 import { formatAmount, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
 import InputError from '@/components/input-error';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Combobox } from '@/components/ui/combobox';
@@ -50,6 +51,7 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
     });
     const { data, setData, errors, processing } = form;
     const err = errors as Record<string, string>;
+    const confirm = useConfirm();
 
     const totals = useMemo(() => {
         const sum = data.lines.reduce((s, l) => s + Number(l.amount || 0), 0);
@@ -73,8 +75,14 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Enter bill" />
             <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                     e.preventDefault();
+                    const ok = await confirm({
+                        title: `Create bill ${data.bill_no}?`,
+                        description: `The ${formatAmount(totals.total, { currency: true })} bill is saved as a draft. Nothing is posted until you post it.`,
+                        confirmLabel: 'Create bill',
+                    });
+                    if (!ok) return;
                     form.post('/ap/bills');
                 }}
             >

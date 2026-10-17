@@ -32,6 +32,8 @@ return [
     'timekeeping' => [
         // Art. 83 - normal hours of work shall not exceed eight (8) hours a day.
         'regular_hours_per_day' => 8,
+        // Company policy: after midnight, punches go to yesterday's open shift if it began within this many hours.
+        'max_shift_hours' => 18,
         // Company policy: OT below this threshold is not counted.
         'ot_minimum_minutes' => 30,
         // Company policy: rendered OT is floored to blocks of N minutes.
@@ -183,4 +185,3 @@ return [
         ['form_code' => 'DOLE-AEDR', 'agency' => 'DOLE', 'title' => 'DOLE Annual Work Accident / Illness Exposure Data Report (AEDR)', 'category' => 'regulatory', 'frequency' => 'annual', 'when' => 'year_end', 'due' => [1, 30], 'owner_role' => 'HR'],
     ],
 ];
-

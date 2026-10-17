@@ -110,11 +110,10 @@ class LeaveService
 
         $period = CarbonPeriod::create($start, $end);
         $days = 0.0;
-        $restDays = $employee->restDayNumbers();
 
         foreach ($period as $date) {
-            // Check rest day
-            if (in_array($date->dayOfWeek, $restDays, true)) {
+            // Rest days follow the published roster, then the employee's shift template / rest days.
+            if ($this->attendanceCalculator->scheduleFor($employee, $date)->isRestDay) {
                 continue;
             }
 
@@ -143,6 +142,7 @@ class LeaveService
 
         if (! $balance) {
             $initialEntitled = $this->openingEntitlement($employee, $leaveType, $year);
+            $carried = $this->carryOver($employee, $leaveType, $year);
 
             $balance = LeaveBalance::create([
                 'entity_id' => $employee->entity_id,
@@ -150,7 +150,7 @@ class LeaveService
                 'leave_type_id' => $leaveType->id,
                 'year' => $year,
                 'entitled' => $initialEntitled,
-                'carried_over' => 0,
+                'carried_over' => $carried,
                 'adjusted' => 0,
                 'used' => 0,
                 'reserved' => 0,
@@ -168,17 +168,38 @@ class LeaveService
                     'remarks' => 'Initial annual entitlement',
                 ]);
             }
+
+            if ($carried > 0) {
+                LeaveLedgerEntry::create([
+                    'entity_id' => $employee->entity_id,
+                    'employee_id' => $employee->id,
+                    'leave_type_id' => $leaveType->id,
+                    'year' => $year,
+                    'action' => 'carry_over',
+                    'days' => $carried,
+                    'available_after' => $initialEntitled + $carried,
+                    'remarks' => 'Unused credits carried over from '.($year - 1),
+                ]);
+            }
         }
 
         return $balance;
     }
 
     /**
-     * Entitlement a balance opens with. The legacy employee VL / SL columns win for the current year.
+     * Entitlement a balance opens with. The legacy employee VL / SL columns hold the credits brought in
+     * at go-live, so they are used only for the employee's very first balance of that type; every
+     * later year opens with the full annual entitlement (those columns shrink as leave is used).
      */
     public function openingEntitlement(Employee $employee, LeaveType $leaveType, int $year): float
     {
-        if ($year === (int) date('Y')) {
+        $hasHistory = LeaveBalance::withoutEntityScope()
+            ->where('employee_id', $employee->id)
+            ->where('leave_type_id', $leaveType->id)
+            ->where('year', '!=', $year)
+            ->exists();
+
+        if (! $hasHistory && $year === (int) date('Y')) {
             if ($leaveType->code === 'VL' && $employee->vacation_leave_credits > 0) {
                 return (float) $employee->vacation_leave_credits;
             }
@@ -187,7 +208,43 @@ class LeaveService
             }
         }
 
-        return (float) $leaveType->annual_entitlement;
+        return $this->prorated($employee, $leaveType, $year);
+    }
+
+    /**
+     * The annual entitlement, pro-rated in the year the employee was hired when the leave type says so:
+     * the months left after the hire date (the hire month counts when hired by the 15th), to the nearest half day.
+     */
+    public function prorated(Employee $employee, LeaveType $leaveType, int $year): float
+    {
+        $entitlement = (float) $leaveType->annual_entitlement;
+        $hired = $employee->hire_date;
+
+        if (! $leaveType->prorate_first_year || ! $hired || $hired->year !== $year) {
+            return $entitlement;
+        }
+
+        $months = 12 - $hired->month + ($hired->day <= 15 ? 1 : 0);
+
+        return round($entitlement * $months / 12 * 2) / 2;
+    }
+
+    /**
+     * Unused credits brought into a year from the year before, up to the leave type's max_carry_over.
+     */
+    public function carryOver(Employee $employee, LeaveType $leaveType, int $year): float
+    {
+        if ((float) $leaveType->max_carry_over <= 0) {
+            return 0.0;
+        }
+
+        $previous = LeaveBalance::withoutEntityScope()
+            ->where('employee_id', $employee->id)
+            ->where('leave_type_id', $leaveType->id)
+            ->where('year', $year - 1)
+            ->first();
+
+        return $previous ? round(min((float) $leaveType->max_carry_over, max(0, (float) $previous->available)), 2) : 0.0;
     }
 
     /**
@@ -221,7 +278,7 @@ class LeaveService
             ->map(function (LeaveType $type) use ($employee, $year, $existing) {
                 $row = $existing->get($type->id);
                 $entitled = $row ? (float) $row->entitled : $this->openingEntitlement($employee, $type, $year);
-                $carried = (float) ($row->carried_over ?? 0);
+                $carried = $row ? (float) $row->carried_over : ($type->balance_tracked ? $this->carryOver($employee, $type, $year) : 0.0);
                 $adjusted = (float) ($row->adjusted ?? 0);
                 $used = (float) ($row->used ?? 0);
                 $reserved = (float) ($row->reserved ?? 0);
@@ -510,6 +567,14 @@ class LeaveService
             ]);
         }
 
+        // Credits cannot come back for days payroll has already paid as leave.
+        if ($request->status === LeaveRequest::STATUS_APPROVED
+            && DtrEntry::withoutEntityScope()->where('leave_request_id', $request->id)->where('status', DtrEntry::STATUS_LOCKED)->exists()) {
+            throw ValidationException::withMessages([
+                'status' => 'Payroll has already been approved for some of these days, so this leave can no longer be cancelled.',
+            ]);
+        }
+
         $employee = $request->employee;
         $leaveType = $request->type ?? $this->resolveLeaveType($request->leave_type_id, $request->leave_type);
         $year = (int) Carbon::parse($request->start_date)->year;
@@ -586,13 +651,11 @@ class LeaveService
         $end = Carbon::parse($request->end_date)->startOfDay();
         $period = CarbonPeriod::create($start, $end);
 
-        $restDays = $employee->restDayNumbers();
-
         foreach ($period as $date) {
             $dateStr = $date->toDateString();
 
-            // Skip rest days
-            if (in_array($date->dayOfWeek, $restDays, true)) {
+            // Skip rest days (published roster first, as for attendance and payroll)
+            if ($this->attendanceCalculator->scheduleFor($employee, $date)->isRestDay) {
                 continue;
             }
 
@@ -626,4 +689,3 @@ class LeaveService
         }
     }
 }
-

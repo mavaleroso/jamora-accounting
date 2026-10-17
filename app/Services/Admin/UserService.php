@@ -23,18 +23,18 @@ class UserService
     }
 
     /**
-     * Get paginated users with optional search.
+     * Get paginated users with optional search, role / status filters and sort.
+     *
+     * @param  array{role?: ?string, status?: ?string, sort?: ?string}  $filters
      */
-    public function getUsersPaginated(int $page, int $perPage, ?string $search = null): LengthAwarePaginator
+    public function getUsersPaginated(int $page, int $perPage, ?string $search = null, array $filters = []): LengthAwarePaginator
     {
-        $query = User::query()
-            ->with('roles')
-            ->orderBy('created_at', 'desc');
+        $query = User::query()->with(['roles:id,name', 'permissions:id,name']);
 
         $term = trim((string) $search);
         if ($term !== '') {
             $query->where(function ($q) use ($term) {
-                $like = '%' . $term . '%';
+                $like = '%'.$term.'%';
                 $q->where('username', 'like', $like)
                     ->orWhere('email', 'like', $like)
                     ->orWhere('firstname', 'like', $like)
@@ -46,7 +46,26 @@ class UserService
             });
         }
 
-        return $query->paginate($perPage, ['*'], 'page', $page);
+        $role = $filters['role'] ?? null;
+        if ($role === 'none') {
+            $query->doesntHave('roles');
+        } elseif ($role) {
+            $query->role($role);
+        }
+
+        match ($filters['status'] ?? null) {
+            'active' => $query->where('status', true),
+            'disabled' => $query->where('status', false),
+            default => null,
+        };
+
+        match ($filters['sort'] ?? 'newest') {
+            'name' => $query->orderBy('firstname')->orderBy('lastname'),
+            'oldest' => $query->orderBy('created_at'),
+            default => $query->orderByDesc('created_at'),
+        };
+
+        return $query->orderBy('id')->paginate($perPage, ['*'], 'page', $page);
     }
 
     /**
@@ -114,7 +133,7 @@ class UserService
     /**
      * Update only role and permissions for a user.
      *
-     * @param array<int, string>|null $permissions
+     * @param  array<int, string>|null  $permissions
      */
     public function updateRbac(User $user, string $role, ?array $permissions, bool $permissionsPresent): User
     {

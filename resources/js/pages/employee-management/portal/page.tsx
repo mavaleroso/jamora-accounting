@@ -397,7 +397,7 @@ const periodLabel = (p: Payslip['period']) => (p.start && p.end ? fmtRange(p.sta
 
 function PayslipsCard({ payslips, onOpen }: { payslips: Payslip[]; onOpen: (p: Payslip) => void }) {
     return (
-        <Card title="Payslips" icon={Banknote}>
+        <Card title="Payslips" icon={Banknote} href="/employee-management/my-pay" linkLabel="All pay & contributions">
             {payslips.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">No payslips yet. They appear here once payroll is posted.</p>
             ) : (

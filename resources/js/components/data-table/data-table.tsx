@@ -1,33 +1,12 @@
-import type {
-    ColumnDef,
-    ColumnFiltersState,
-    SortingState,
-    VisibilityState,
-} from '@tanstack/react-table';
-import {
-    flexRender,
-    getCoreRowModel,
-    getFilteredRowModel,
-    getPaginationRowModel,
-    getSortedRowModel,
-    useReactTable,
-} from '@tanstack/react-table';
+import type { ColumnDef, ColumnFiltersState, SortingState, VisibilityState } from '@tanstack/react-table';
+import { flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable } from '@tanstack/react-table';
 import * as React from 'react';
 
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from '@/components/ui/table';
-import { DataTableFilter } from '@/components/data-table/data-table-filter';
-import { DataTablePagination } from '@/components/data-table/data-table-pagination';
 import { DataTableViewOptions } from '@/components/data-table/data-table-view-options';
-import { Input } from '@/components/ui/input';
+import { ServerPagination } from '@/components/data-table/server-pagination';
+import { TableCard, TableEmpty, TableSearch, TableToolbar, tableStyles as s } from '@/components/data-table/table-card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { FilterIcon } from 'lucide-react';
 
 export interface DataTableServerSidePaginationProps {
     /** Total number of rows on the server (for "Showing X–Y of Z" and page count) */
@@ -39,21 +18,22 @@ export interface DataTableServerSidePaginationProps {
     /** Current applied search/filter (controlled by parent); used when changing page/size and for filter input display */
     search?: string;
     /** Called when user changes page, page size, or filter; parent should fetch and update data */
-    onPaginationChange: (params: {
-        pageIndex: number;
-        pageSize: number;
-        search?: string;
-    }) => void;
+    onPaginationChange: (params: { pageIndex: number; pageSize: number; search?: string }) => void;
+    /** True while the parent is fetching; dims the rows and shows a spinner. */
+    loading?: boolean;
 }
 
 export interface DataTableProps<TData, TValue> {
     columns: ColumnDef<TData, TValue>[];
     data: TData[];
+    /** Card heading and sub-heading. */
+    title?: React.ReactNode;
+    description?: React.ReactNode;
     /** Column id to filter by (legacy single-column filter) */
     filterColumn?: string;
-    /** Filterable columns: column id -> display label. When set, shows input + column dropdown + search button. */
+    /** Filterable columns: column id -> display label. Shows the search box (and, client-side, a "search in" picker). */
     filterableColumns?: Record<string, string>;
-    /** Placeholder for the filter input */
+    /** Placeholder for the search input */
     filterPlaceholder?: string;
     /** Custom column labels for visibility toggle (e.g. { email: "Email" }) */
     columnLabels?: Record<string, string>;
@@ -67,22 +47,57 @@ export interface DataTableProps<TData, TValue> {
     onRowSelectionChange?: (selectedRows: TData[]) => void;
     /** Enable server-side pagination; requires serverSidePagination props */
     serverSidePagination?: DataTableServerSidePaginationProps;
-    /** Optional content rendered in the toolbar beside the column visibility toggle (e.g. Export button) */
+    /** Rendered at the right of the toolbar, beside the Columns toggle (e.g. Export button) */
     toolbarExtra?: React.ReactNode;
-    /** Optional content rendered below the search row, still inside the Search & filter card */
+    /** Extra filters rendered in the toolbar after the search box */
     toolbarFilterExtra?: React.ReactNode;
     /** Initial column sorting (e.g. newest first on created_at) */
     initialSorting?: SortingState;
     /** Optional class names for each body row */
     getRowClassName?: (row: TData) => string | undefined;
+    /** Open a row (e.g. a details dialog) when it is clicked. */
+    onRowClick?: (row: TData) => void;
+    /** Adds a # column when the columns do not define `row_number`. Default true. */
+    rowNumbers?: boolean;
+    /** Text for the empty state. */
+    emptyTitle?: string;
+    emptyDescription?: React.ReactNode;
+}
+
+const ACTIONS = 'actions';
+const ROW_NUMBER = 'row_number';
+
+/** Running row number across pages. */
+function rowNumberColumn<TData, TValue>(): ColumnDef<TData, TValue> {
+    return {
+        id: ROW_NUMBER,
+        header: '#',
+        cell: ({ row, table }) => {
+            const { pageIndex, pageSize } = table.getState().pagination;
+            const position = table.getRowModel().rows.findIndex((r) => r.id === row.id);
+            return pageIndex * pageSize + (position >= 0 ? position : row.index) + 1;
+        },
+        enableSorting: false,
+        enableHiding: false,
+    };
+}
+
+/** Same order everywhere: actions, #, then the data columns. */
+function normalizeColumns<TData, TValue>(columns: ColumnDef<TData, TValue>[], rowNumbers: boolean): ColumnDef<TData, TValue>[] {
+    const actions = columns.filter((c) => c.id === ACTIONS);
+    const numbers = columns.filter((c) => c.id === ROW_NUMBER);
+    const rest = columns.filter((c) => c.id !== ACTIONS && c.id !== ROW_NUMBER);
+    return [...actions, ...(numbers.length ? numbers : rowNumbers ? [rowNumberColumn<TData, TValue>()] : []), ...rest];
 }
 
 export function DataTable<TData, TValue>({
-    columns,
+    columns: columnsProp,
     data,
+    title,
+    description,
     filterColumn,
     filterableColumns,
-    filterPlaceholder = 'Filter...',
+    filterPlaceholder = 'Search',
     columnLabels = {},
     filterColumnId,
     onFilterColumnChange,
@@ -93,300 +108,168 @@ export function DataTable<TData, TValue>({
     toolbarFilterExtra,
     initialSorting = [],
     getRowClassName,
+    onRowClick,
+    rowNumbers = true,
+    emptyTitle = 'No records found',
+    emptyDescription,
 }: DataTableProps<TData, TValue>) {
-    const hasFilterableColumns =
-        filterableColumns && Object.keys(filterableColumns).length > 0;
-    const hasLegacyFilter = filterColumn && !hasFilterableColumns;
     const isServerSide = Boolean(serverSidePagination);
-    const [sorting, setSorting] = React.useState<SortingState>(initialSorting);
-    const [columnFilters, setColumnFilters] =
-        React.useState<ColumnFiltersState>([]);
-    const [columnVisibility, setColumnVisibility] =
-        React.useState<VisibilityState>({});
-    const [rowSelection, setRowSelection] = React.useState({});
-    /** When server-side, use parent's search for onPaginationChange; local serverSearch only for apply flow */
-    const currentServerSearch =
-        isServerSide && serverSidePagination?.search !== undefined
-            ? serverSidePagination.search
-            : undefined;
+    const server = serverSidePagination;
+    const columns = React.useMemo(() => normalizeColumns(columnsProp, rowNumbers), [columnsProp, rowNumbers]);
 
-    const paginationState = isServerSide
-        ? {
-              pageIndex: serverSidePagination!.pageIndex,
-              pageSize: serverSidePagination!.pageSize,
-          }
-        : undefined;
-    const pageCount = isServerSide
-        ? Math.max(
-              1,
-              Math.ceil(
-                  serverSidePagination!.totalRowCount /
-                      serverSidePagination!.pageSize,
-              ),
-          )
-        : undefined;
+    const [sorting, setSorting] = React.useState<SortingState>(initialSorting);
+    const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+    const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+    const [rowSelection, setRowSelection] = React.useState({});
+
+    const searchColumns = filterableColumns ? Object.keys(filterableColumns) : filterColumn ? [filterColumn] : [];
+    const [internalColumn, setInternalColumn] = React.useState(searchColumns[0] ?? '');
+    const searchColumn = filterColumnId ?? internalColumn;
+    const setSearchColumn = onFilterColumnChange ?? setInternalColumn;
+    const showSearch = searchColumns.length > 0;
 
     const table = useReactTable({
         data,
         columns,
-        getRowId: (row, index) => (row as { id?: number }).id != null ? String((row as { id: number }).id) : String(index),
+        getRowId: (row, index) => ((row as { id?: number }).id != null ? String((row as { id: number }).id) : String(index)),
         enableRowSelection,
         onSortingChange: setSorting,
         onColumnFiltersChange: setColumnFilters,
         getCoreRowModel: getCoreRowModel(),
-        getPaginationRowModel: isServerSide
-            ? undefined
-            : getPaginationRowModel(),
+        getPaginationRowModel: isServerSide ? undefined : getPaginationRowModel(),
         getSortedRowModel: isServerSide ? undefined : getSortedRowModel(),
         getFilteredRowModel: isServerSide ? undefined : getFilteredRowModel(),
         manualSorting: isServerSide,
         onColumnVisibilityChange: setColumnVisibility,
         onRowSelectionChange: setRowSelection,
         manualPagination: isServerSide,
-        pageCount: pageCount,
-        onPaginationChange: isServerSide
-            ? (updater) => {
-                  const next =
-                      typeof updater === 'function'
-                          ? updater({
-                                pageIndex: serverSidePagination!.pageIndex,
-                                pageSize: serverSidePagination!.pageSize,
-                            })
-                          : updater;
-                  serverSidePagination!.onPaginationChange({
-                      pageIndex: next.pageIndex,
-                      pageSize: next.pageSize,
-                      search: currentServerSearch ?? undefined,
-                  });
-              }
-            : undefined,
+        pageCount: server ? Math.max(1, Math.ceil(server.totalRowCount / server.pageSize)) : undefined,
         state: {
             sorting,
             columnFilters,
             columnVisibility,
             rowSelection,
-            ...(paginationState && { pagination: paginationState }),
+            ...(server && { pagination: { pageIndex: server.pageIndex, pageSize: server.pageSize } }),
         },
     });
 
     React.useEffect(() => {
-        if (onRowSelectionChangeProp) {
-            const selected = table.getFilteredSelectedRowModel().rows.map((r) => r.original);
-            onRowSelectionChangeProp(selected);
-        }
+        if (onRowSelectionChangeProp) onRowSelectionChangeProp(table.getFilteredSelectedRowModel().rows.map((r) => r.original));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rowSelection, data, onRowSelectionChangeProp]);
 
-    const showFilters = hasFilterableColumns || Boolean(hasLegacyFilter);
+    // --- search -------------------------------------------------------------------------------
+    const appliedSearch = server ? (server.search ?? '') : String((searchColumn && columnFilters.find((f) => f.id === searchColumn)?.value) ?? '');
+    const onSearch = (value: string) => {
+        if (server) return server.onPaginationChange({ pageIndex: 0, pageSize: server.pageSize, search: value });
+        table.setColumnFilters((prev) => [...prev.filter((f) => !searchColumns.includes(f.id)), ...(value ? [{ id: searchColumn, value }] : [])]);
+        table.setPageIndex(0);
+    };
+    const changeSearchColumn = (next: string) => {
+        setSearchColumn(next);
+        if (!server && appliedSearch) table.setColumnFilters((prev) => [...prev.filter((f) => !searchColumns.includes(f.id)), { id: next, value: appliedSearch }]);
+    };
+
+    // --- pagination ---------------------------------------------------------------------------
+    const { pageIndex, pageSize } = table.getState().pagination;
+    const total = server ? server.totalRowCount : table.getFilteredRowModel().rows.length;
+    const from = total === 0 ? null : pageIndex * pageSize + 1;
+    const to = total === 0 ? null : Math.min((pageIndex + 1) * pageSize, total);
+    const loading = server?.loading ?? false;
+
+    const rows = table.getRowModel().rows;
+    const headerCellClass = (id: string, i: number, count: number) =>
+        id === ACTIONS ? s.actionsTh : id === ROW_NUMBER ? cn(s.seqTh, i === 0 && 'pl-5') : cn(s.th, i === 0 && s.first, i === count - 1 && s.last);
+    const bodyCellClass = (id: string, i: number, count: number) =>
+        id === ACTIONS ? s.actionsTd : id === ROW_NUMBER ? cn(s.seqTd, i === 0 && 'pl-5') : cn(s.td, i === 0 && s.first, i === count - 1 && s.last);
+    const sizeStyle = (meta: unknown) => {
+        const m = meta as { width?: number; minWidth?: number } | undefined;
+        return m?.width || m?.minWidth ? { width: m.width, minWidth: m.minWidth ?? m.width } : undefined;
+    };
 
     return (
-        <div className="space-y-4">
-            <div className="rounded-xl border-2 border-border bg-muted/50 p-3 shadow-sm sm:p-4">
-                {showFilters ? (
-                    <div className="mb-3 flex items-center gap-2 border-b border-border/80 pb-2">
-                        <span className="inline-flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-                            <FilterIcon className="size-3.5" aria-hidden />
-                        </span>
-                        <div>
-                            <p className="text-sm font-semibold text-foreground">Search &amp; filter</p>
-                            <p className="text-xs text-muted-foreground">
-                                Find records, then refine columns or clear to reset.
-                            </p>
-                        </div>
-                    </div>
-                ) : null}
-                <div className="flex flex-wrap items-end justify-between gap-4">
-                    <div className="flex min-w-0 flex-1 flex-wrap items-end gap-4">
-                        {hasFilterableColumns ? (
-                            <DataTableFilter
-                                table={table}
-                                filterableColumns={filterableColumns}
-                                placeholder={filterPlaceholder}
-                                hasActiveFilters={
-                                    isServerSide
-                                        ? (currentServerSearch?.length ?? 0) > 0
-                                        : columnFilters.length > 0
-                                }
-                                appliedSearchValue={
-                                    isServerSide ? currentServerSearch : undefined
-                                }
-                                selectedColumnId={filterColumnId}
-                                onSelectedColumnIdChange={onFilterColumnChange}
-                                onSearchApplied={
-                                    isServerSide
-                                        ? (_columnId, value) => {
-                                              serverSidePagination!.onPaginationChange(
-                                                  {
-                                                      pageIndex: 0,
-                                                      pageSize:
-                                                          serverSidePagination!
-                                                              .pageSize,
-                                                      search: value || undefined,
-                                                  },
-                                              );
-                                          }
-                                        : undefined
-                                }
-                                onReset={
-                                    isServerSide
-                                        ? () => {
-                                              serverSidePagination!.onPaginationChange(
-                                                  {
-                                                      pageIndex: 0,
-                                                      pageSize:
-                                                          serverSidePagination!
-                                                              .pageSize,
-                                                      search: '',
-                                                  },
-                                              );
-                                          }
-                                        : undefined
-                                }
-                            />
-                        ) : hasLegacyFilter ? (
-                            <div className="space-y-1">
-                                <label
-                                    htmlFor="data-table-legacy-filter"
-                                    className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-                                >
-                                    Search
-                                </label>
-                                <Input
-                                    id="data-table-legacy-filter"
-                                    placeholder={filterPlaceholder}
-                                    value={
-                                        (table
-                                            .getColumn(filterColumn)
-                                            ?.getFilterValue() as string) ?? ''
-                                    }
-                                    onChange={(event) =>
-                                        table
-                                            .getColumn(filterColumn)
-                                            ?.setFilterValue(event.target.value)
-                                    }
-                                    className="h-10 max-w-sm border-border bg-background shadow-sm"
-                                />
-                            </div>
-                        ) : null}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 pb-0.5">
-                        {toolbarExtra}
-                        <DataTableViewOptions
-                            table={table}
-                            columnLabels={columnLabels}
-                        />
-                    </div>
+        <TableCard title={title} description={description}>
+            <TableToolbar loading={loading}>
+                {showSearch && <TableSearch value={appliedSearch} onSearch={onSearch} placeholder={filterPlaceholder} debounce={server ? 350 : 0} />}
+                {/* Server-side search covers all fields, so the column picker only applies client-side */}
+                {showSearch && !server && searchColumns.length > 1 && (
+                    <Select value={searchColumn} onValueChange={changeSearchColumn}>
+                        <SelectTrigger className="h-9 w-full lg:w-44" aria-label="Search in">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {searchColumns.map((id) => (
+                                <SelectItem key={id} value={id}>
+                                    In {filterableColumns?.[id] ?? id}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                )}
+                {toolbarFilterExtra}
+                <div className="flex flex-wrap items-center gap-2 lg:ml-auto">
+                    {toolbarExtra}
+                    <DataTableViewOptions table={table} columnLabels={columnLabels} />
                 </div>
-                {toolbarFilterExtra ? (
-                    <div className="mt-3 border-t border-border/80 pt-3">
-                        {toolbarFilterExtra}
-                    </div>
-                ) : null}
-            </div>
-            <div className="overflow-hidden rounded-xl border-2 border-border bg-card shadow-sm">
-                <Table>
-                    <TableHeader>
-                        {table.getHeaderGroups().map((headerGroup) => (
-                            <TableRow key={headerGroup.id}>
-                                {headerGroup.headers.map((header) => {
-                                    const meta = header.column.columnDef.meta as
-                                        | { width?: number; minWidth?: number }
-                                        | undefined;
-                                    return (
-                                        <TableHead
-                                            key={header.id}
-                                            style={
-                                                meta?.width || meta?.minWidth
-                                                    ? {
-                                                          width: meta.width,
-                                                          minWidth:
-                                                              meta.minWidth ??
-                                                              meta.width,
-                                                      }
-                                                    : undefined
-                                            }
-                                        >
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                      header.column.columnDef
-                                                          .header,
-                                                      header.getContext(),
-                                                  )}
-                                        </TableHead>
-                                    );
-                                })}
-                            </TableRow>
-                        ))}
-                    </TableHeader>
-                    <TableBody>
-                        {table.getRowModel().rows?.length ? (
-                            table.getRowModel().rows.map((row) => (
-                                <TableRow
-                                    key={row.id}
-                                    data-state={
-                                        row.getIsSelected() && 'selected'
-                                    }
-                                    className={cn(getRowClassName?.(row.original))}
-                                >
-                                    {row.getVisibleCells().map((cell) => {
-                                        const meta = cell.column.columnDef
-                                            .meta as
-                                            | {
-                                                  width?: number;
-                                                  minWidth?: number;
-                                              }
-                                            | undefined;
-                                        return (
-                                            <TableCell
+            </TableToolbar>
+
+            {rows.length === 0 ? (
+                <TableEmpty title={emptyTitle} description={emptyDescription ?? (appliedSearch ? `Nothing matches “${appliedSearch}”. Try a different search.` : undefined)} />
+            ) : (
+                <div className={cn('overflow-x-auto transition-opacity', loading && 'pointer-events-none opacity-60')}>
+                    <table className={s.table}>
+                        <thead className={s.thead}>
+                            {table.getHeaderGroups().map((group) => (
+                                <tr key={group.id}>
+                                    {group.headers.map((header, i) => (
+                                        <th key={header.id} className={headerCellClass(header.column.id, i, group.headers.length)} style={sizeStyle(header.column.columnDef.meta)}>
+                                            {header.isPlaceholder ? null : header.column.id === ACTIONS ? <span className="sr-only">Actions</span> : flexRender(header.column.columnDef.header, header.getContext())}
+                                        </th>
+                                    ))}
+                                </tr>
+                            ))}
+                        </thead>
+                        <tbody>
+                            {rows.map((row) => {
+                                const cells = row.getVisibleCells();
+                                return (
+                                    <tr
+                                        key={row.id}
+                                        data-state={row.getIsSelected() ? 'selected' : undefined}
+                                        className={cn(s.tr, onRowClick && s.trClickable, row.getIsSelected() && s.trSelected, getRowClassName?.(row.original))}
+                                        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                                        onKeyDown={onRowClick ? (e) => e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onRowClick(row.original)) : undefined}
+                                        tabIndex={onRowClick ? 0 : undefined}
+                                    >
+                                        {cells.map((cell, i) => (
+                                            <td
                                                 key={cell.id}
-                                                style={
-                                                    meta?.width ||
-                                                    meta?.minWidth
-                                                        ? {
-                                                              width: meta.width,
-                                                              minWidth:
-                                                                  meta.minWidth ??
-                                                                  meta.width,
-                                                          }
-                                                        : undefined
-                                                }
+                                                className={bodyCellClass(cell.column.id, i, cells.length)}
+                                                style={sizeStyle(cell.column.columnDef.meta)}
+                                                onClick={cell.column.id === ACTIONS ? (e) => e.stopPropagation() : undefined}
                                             >
-                                                {flexRender(
-                                                    cell.column.columnDef.cell,
-                                                    cell.getContext(),
-                                                )}
-                                            </TableCell>
-                                        );
-                                    })}
-                                </TableRow>
-                            ))
-                        ) : (
-                            <TableRow>
-                                <TableCell
-                                    colSpan={columns.length}
-                                    className="h-24 text-center"
-                                >
-                                    No results.
-                                </TableCell>
-                            </TableRow>
-                        )}
-                    </TableBody>
-                </Table>
-            </div>
-            <DataTablePagination
-                table={table}
-                totalRowCount={
-                    isServerSide
-                        ? serverSidePagination!.totalRowCount
-                        : undefined
-                }
-                pageIndex={
-                    isServerSide ? serverSidePagination!.pageIndex : undefined
-                }
-                pageSize={
-                    isServerSide ? serverSidePagination!.pageSize : undefined
-                }
+                                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <ServerPagination
+                page={pageIndex + 1}
+                lastPage={Math.max(1, table.getPageCount())}
+                perPage={pageSize}
+                total={total}
+                from={from}
+                to={to}
+                disabled={loading}
+                onPage={(page) => (server ? server.onPaginationChange({ pageIndex: page - 1, pageSize, search: server.search }) : table.setPageIndex(page - 1))}
+                onPerPage={(size) => (server ? server.onPaginationChange({ pageIndex: 0, pageSize: size, search: server.search }) : table.setPageSize(size))}
             />
-        </div>
+        </TableCard>
     );
 }

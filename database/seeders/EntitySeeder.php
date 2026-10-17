@@ -2,10 +2,12 @@
 
 namespace Database\Seeders;
 
-use App\Models\Entity;
 use App\Models\Employee;
+use App\Models\Entity;
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class EntitySeeder extends Seeder
 {
@@ -43,13 +45,8 @@ class EntitySeeder extends Seeder
         $demoUsers = User::query()
             ->whereIn('username', [
                 'admin',
-                'finance-manager',
-                'senior-accountant',
-                'accounting-staff',
-                'front-desk',
-                'payroll',
-                'auditor',
-                'management',
+                'accountant',
+                'retainer',
                 'employee',
             ])
             ->get();
@@ -101,9 +98,9 @@ class EntitySeeder extends Seeder
                 'sync_documents',
                 'sync_runs',
             ] as $table) {
-                if (\Illuminate\Support\Facades\Schema::hasTable($table)
-                    && \Illuminate\Support\Facades\Schema::hasColumn($table, 'entity_id')) {
-                    \Illuminate\Support\Facades\DB::table($table)
+                if (Schema::hasTable($table)
+                    && Schema::hasColumn($table, 'entity_id')) {
+                    DB::table($table)
                         ->whereNull('entity_id')
                         ->update(['entity_id' => $defaultEntityId]);
                 }

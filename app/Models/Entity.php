@@ -30,6 +30,15 @@ class Entity extends Model
         ];
     }
 
+    /**
+     * Whether clocking in is limited to the branch geofence. ATTENDANCE_GEOFENCE_ENABLED is the
+     * system-wide master switch: when it is off, no branch enforces, whatever its own setting.
+     */
+    public function geofenceEnforced(): bool
+    {
+        return (bool) config('attendance.geofence_enabled', true) && ($this->geofence_enforced ?? true);
+    }
+
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)

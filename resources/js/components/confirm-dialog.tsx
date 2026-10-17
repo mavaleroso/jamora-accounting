@@ -74,3 +74,57 @@ export function ConfirmDialog({
         </AlertDialog>
     );
 }
+
+export type ConfirmOptions = {
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'destructive';
+};
+
+type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
+
+// Without a provider (e.g. an isolated render) fall back to the browser prompt.
+const ConfirmContext = React.createContext<ConfirmFn>((o) => Promise.resolve(window.confirm(`${o.title}\n\n${o.description}`)));
+
+/**
+ * One shared confirmation dialog for the app. Pages ask with `await confirm({...})` before an
+ * important action and continue only when it resolves true.
+ */
+export function ConfirmProvider({ children }: { children: React.ReactNode }) {
+    const [options, setOptions] = React.useState<ConfirmOptions | null>(null);
+    const resolver = React.useRef<((ok: boolean) => void) | null>(null);
+
+    const settle = React.useCallback((ok: boolean) => {
+        resolver.current?.(ok);
+        resolver.current = null;
+        setOptions(null);
+    }, []);
+
+    const confirm = React.useCallback<ConfirmFn>((next) => {
+        resolver.current?.(false);
+        setOptions(next);
+        return new Promise<boolean>((resolve) => {
+            resolver.current = resolve;
+        });
+    }, []);
+
+    return (
+        <ConfirmContext.Provider value={confirm}>
+            {children}
+            <ConfirmDialog
+                open={options !== null}
+                onOpenChange={(open) => !open && settle(false)}
+                title={options?.title ?? ''}
+                description={options?.description ?? ''}
+                confirmLabel={options?.confirmLabel}
+                variant={options?.variant}
+                onConfirm={() => settle(true)}
+            />
+        </ConfirmContext.Provider>
+    );
+}
+
+export function useConfirm(): ConfirmFn {
+    return React.useContext(ConfirmContext);
+}

@@ -78,6 +78,7 @@ const employeeMgmtNavItems: NavItem[] = [
     { title: 'Payroll', href: '/payroll/runs', icon: Banknote },
     { title: 'Benefits Admin', href: '/employee-management/benefits', icon: HeartHandshake },
     { title: 'Employee Portal', href: '/employee-management/portal', icon: UserCheck },
+    { title: 'My Pay', href: '/employee-management/my-pay', icon: Wallet },
     { title: 'People Reports', href: '/employee-management/reports', icon: BarChart3 },
     { title: 'Compliance Mgmt', href: '/employee-management/compliance', icon: BadgeCheck },
 ];
@@ -256,6 +257,9 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                 case '/employee-management/portal':
                     // A personal page: only useful to someone with an employee record in this branch.
                     return !!auth?.user?.employee_id && canAny(['portal.view', 'payroll.view', 'payroll.manage']);
+                case '/employee-management/my-pay':
+                    // The signed-in employee's own pay history.
+                    return !!auth?.user?.employee_id && can('portal.view');
                 case '/employee-management/reports':
                     return canAny(['payroll.view', 'dashboard.view']);
                 case '/employee-management/compliance':

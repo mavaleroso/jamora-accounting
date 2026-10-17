@@ -1,18 +1,13 @@
 <?php
 
-use App\Models\AttendanceRequest;
-use App\Models\BenefitProgram;
 use App\Models\ComplianceItem;
 use App\Models\DtrEntry;
 use App\Models\Employee;
-use App\Models\EmployeeBenefit;
 use App\Models\Entity;
-use App\Models\Holiday;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
 use App\Models\PayrollPeriod;
-use App\Models\PayrollRun;
 use App\Models\Payslip;
 use App\Models\ShiftRoster;
 use App\Models\ShiftTemplate;
@@ -20,10 +15,11 @@ use App\Models\User;
 use App\Services\Payroll\PayrollService;
 use App\Services\People\AttendanceCalculator;
 use App\Services\People\BenefitCalculator;
-use App\Services\People\ComplianceCalendar;
 use App\Services\People\LeaveService;
 use Carbon\Carbon;
+use Carbon\CarbonPeriod;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -248,11 +244,14 @@ test('attendance calculator accurately computes tardiness, undertime, night diff
 
 test('leave workflow enforces anti-self-approval and executes single-level HR approval with balance ledger', function () {
     $leaveService = app(LeaveService::class);
+    // The leave below starts in the future, so the employee may still withdraw it.
+    $this->travelTo(Carbon::parse('2026-10-16 09:00'));
 
     // 1. Staff requests leave for Monday 2026-10-19 to Tuesday 2026-10-20 (2 working days)
     $this->actingAs($this->staffUser);
     $fileResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post('/employee-management/leave/requests', [
+        ->post('/employee-management/requests', [
+            'kind' => 'leave',
             'leave_type_id' => $this->leaveTypeVl->id,
             'start_date' => '2026-10-19',
             'end_date' => '2026-10-20',
@@ -273,7 +272,7 @@ test('leave workflow enforces anti-self-approval and executes single-level HR ap
     expect((float) $balance->used)->toBe(0.0);
 
     // 2. Staff cannot approve own leave
-    $unauthApprove = $this->post("/employee-management/leave/{$request->id}/approve");
+    $unauthApprove = $this->post("/employee-management/requests/leave/{$request->id}/review", ['decision' => 'approved']);
     $unauthApprove->assertForbidden();
 
     // 3. HR cannot approve their OWN leave (Anti-Self-Approval rule)
@@ -291,14 +290,12 @@ test('leave workflow enforces anti-self-approval and executes single-level HR ap
     expect($hrOwnRequest->status)->toBe('pending');
 
     $selfApproveResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post("/employee-management/leave/{$hrOwnRequest->id}/approve");
+        ->post("/employee-management/requests/leave/{$hrOwnRequest->id}/review", ['decision' => 'approved']);
     $selfApproveResponse->assertSessionHasErrors(['approver']);
 
     // 4. HR approves Staff leave request (HR single-level approval)
     $approveResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post("/employee-management/leave/{$request->id}/approve", [
-            'approval_notes' => 'Approved per schedule availability',
-        ]);
+        ->post("/employee-management/requests/leave/{$request->id}/review", ['decision' => 'approved']);
     $approveResponse->assertSessionHas('status');
 
     $request->refresh();
@@ -316,10 +313,29 @@ test('leave workflow enforces anti-self-approval and executes single-level HR ap
         ->count();
     expect($dtrCount)->toBe(2);
 
-    // 5. Staff cancels approved leave: balance is restored and DTR is unlinked
+    // 5. A colleague cannot cancel someone else's leave
+    $colleague = User::factory()->create();
+    $colleague->assignRole('Staff');
+    $colleague->entities()->attach($this->entity->id, ['is_default' => true]);
+    Employee::create([
+        'entity_id' => $this->entity->id,
+        'user_id' => $colleague->id,
+        'employee_code' => 'EMP-STF-002',
+        'firstname' => 'Cora',
+        'lastname' => 'Lim',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 30000.00,
+    ]);
+    $this->actingAs($colleague)->withSession(['current_entity_id' => $this->entity->id])
+        ->post("/employee-management/requests/leave/{$request->id}/cancel", ['reason' => 'Not mine'])
+        ->assertForbidden();
+    expect($request->fresh()->status)->toBe('approved');
+
+    // 6. Staff cancels their own approved leave before it starts: balance is restored and DTR is unlinked
     $this->actingAs($this->staffUser);
     $cancelResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post("/employee-management/leave/{$request->id}/cancel", [
+        ->post("/employee-management/requests/leave/{$request->id}/cancel", [
             'reason' => 'Trip cancelled due to weather',
         ]);
     $cancelResponse->assertSessionHas('status');
@@ -423,6 +439,16 @@ test('payroll computation locks DTR cut-off entries and compensates approved ove
         'day_type' => 'regular',
     ]);
 
+    // Approval needs every working day recorded and approved.
+    $dtr->update(['status' => DtrEntry::STATUS_APPROVED]);
+    foreach ([$this->staffEmployee, $this->hrEmployee] as $employee) {
+        foreach (CarbonPeriod::create('2026-10-01', '2026-10-15') as $day) {
+            if (! $day->isSunday() && ! DtrEntry::where('employee_id', $employee->id)->whereDate('work_date', $day)->exists()) {
+                DtrEntry::create(['entity_id' => $this->entity->id, 'employee_id' => $employee->id, 'work_date' => $day->toDateString(), 'time_in' => '09:00:00', 'time_out' => '18:00:00', 'regular_hours' => 8, 'attendance_status' => 'present', 'day_type' => 'regular', 'status' => DtrEntry::STATUS_APPROVED]);
+            }
+        }
+    }
+
     // 2. Create and compute payroll period
     $period = PayrollPeriod::create([
         'entity_id' => $this->entity->id,
@@ -458,6 +484,6 @@ test('payroll computation locks DTR cut-off entries and compensates approved ove
 
     // 4. Attempting to tamper with locked DTR throws ValidationException
     $calculator = app(AttendanceCalculator::class);
-    $this->expectException(\Illuminate\Validation\ValidationException::class);
+    $this->expectException(ValidationException::class);
     $calculator->assertEditable($dtr);
 });

@@ -3,6 +3,7 @@ import { UploadIcon } from 'lucide-react';
 import * as React from 'react';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -55,6 +56,7 @@ export default function DtrPage({ entries, totalEntries, currentPage, payrollPer
     const [importOpen, setImportOpen] = React.useState(false);
     const [employeeId, setEmployeeId] = React.useState('');
     const [periodId, setPeriodId] = React.useState(payrollPeriodId ? String(payrollPeriodId) : '');
+    const confirm = useConfirm();
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -98,9 +100,16 @@ export default function DtrPage({ entries, totalEntries, currentPage, payrollPer
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Add DTR entry</DialogTitle></DialogHeader>
-                    <form className="grid gap-4" onSubmit={(e) => {
+                    <form className="grid gap-4" onSubmit={async (e) => {
                         e.preventDefault();
                         const fd = new FormData(e.currentTarget);
+                        const emp = employees.find((x) => String(x.id) === employeeId);
+                        const ok = await confirm({
+                            title: 'Add this DTR entry?',
+                            description: `A time record for ${emp ? `${emp.firstname} ${emp.lastname}` : 'the employee'} on ${fd.get('work_date') || 'the selected date'} is added and counted for payroll.`,
+                            confirmLabel: 'Add entry',
+                        });
+                        if (!ok) return;
                         fd.set('employee_id', employeeId);
                         if (periodId) fd.set('payroll_period_id', periodId);
                         router.post('/payroll/dtr', fd, { preserveScroll: true, onSuccess: () => setCreateOpen(false) });
@@ -131,9 +140,17 @@ export default function DtrPage({ entries, totalEntries, currentPage, payrollPer
             <Dialog open={importOpen} onOpenChange={setImportOpen}>
                 <DialogContent>
                     <DialogHeader><DialogTitle>Import CSV</DialogTitle></DialogHeader>
-                    <form className="grid gap-4" onSubmit={(e) => {
+                    <form className="grid gap-4" onSubmit={async (e) => {
                         e.preventDefault();
-                        router.post('/payroll/dtr/import', new FormData(e.currentTarget), { preserveScroll: true, onSuccess: () => setImportOpen(false) });
+                        const fd = new FormData(e.currentTarget);
+                        const file = fd.get('file') as File | null;
+                        const ok = await confirm({
+                            title: 'Import this CSV?',
+                            description: `Time records in ${file?.name || 'the file'} are added to the DTR and counted for payroll.`,
+                            confirmLabel: 'Import',
+                        });
+                        if (!ok) return;
+                        router.post('/payroll/dtr/import', fd, { preserveScroll: true, onSuccess: () => setImportOpen(false) });
                     }}>
                         <div><Label>CSV file *</Label><Input name="file" type="file" accept=".csv,.txt" required /></div>
                         <div><Label>Payroll period</Label>

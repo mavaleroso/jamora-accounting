@@ -113,6 +113,18 @@ class JournalPostingService
         });
     }
 
+    /**
+     * The owner's review of a manual entry: approving it posts it, recording who approved.
+     */
+    public function approveAndPost(JournalEntry $entry, User $user): JournalEntry
+    {
+        return DB::transaction(function () use ($entry, $user) {
+            $entry->update(['approved_by' => $user->id]);
+
+            return $this->post($entry, $user);
+        });
+    }
+
     public function void(JournalEntry $entry, User $user, ?string $memo = null): JournalEntry
     {
         if ($entry->status !== 'posted') {

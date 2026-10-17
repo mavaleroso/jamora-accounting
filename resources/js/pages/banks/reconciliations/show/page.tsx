@@ -50,6 +50,7 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
     const [tab, setTab] = useState<'all' | 'in' | 'out'>('all');
     const [busy, setBusy] = useState(false);
     const [discardOpen, setDiscardOpen] = useState(false);
+    const [completeOpen, setCompleteOpen] = useState(false);
 
     const cleared = (i: Item) => i.is_cleared && i.bank_reconciliation_id === rec.id;
     const visible = useMemo(() => items.filter((i) => tab === 'all' || i.direction === tab), [items, tab]);
@@ -102,7 +103,7 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                                     <Trash2Icon className="size-4" />
                                     Discard
                                 </Button>
-                                <Button disabled={!balanced || busy} onClick={() => router.post(`/banks/reconciliations/${rec.id}/complete`)}>
+                                <Button disabled={!balanced || busy} onClick={() => setCompleteOpen(true)}>
                                     <CheckCircle2Icon className="size-4" />
                                     Complete reconciliation
                                 </Button>
@@ -235,6 +236,14 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                 confirmLabel="Discard"
                 variant="destructive"
                 onConfirm={() => router.delete(`/banks/reconciliations/${rec.id}`)}
+            />
+            <ConfirmDialog
+                open={completeOpen}
+                onOpenChange={setCompleteOpen}
+                title="Complete this reconciliation?"
+                description={`The ticked items are marked cleared against the statement ending ${formatDate(rec.statement_date)} and the reconciliation is locked.`}
+                confirmLabel="Complete reconciliation"
+                onConfirm={() => router.post(`/banks/reconciliations/${rec.id}/complete`)}
             />
         </AppLayout>
     );

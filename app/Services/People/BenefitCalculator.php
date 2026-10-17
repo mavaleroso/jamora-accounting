@@ -32,6 +32,44 @@ class BenefitCalculator
     }
 
     /**
+     * The employee's monthly SSS, PhilHealth and Pag-IBIG, computed from the contribution tables on the
+     * salary — or nothing for a contribution set to "not deducted" on their record. SSS employer share
+     * excludes EC.
+     *
+     * @return array{
+     *     sss: array{employee: float, employer: float, ec: float, msc: ?float, mode: string},
+     *     philhealth: array{employee: float, employer: float, mode: string},
+     *     pagibig: array{employee: float, employer: float, mode: string}
+     * }
+     */
+    public function statutoryFor(Employee $employee, float $monthlyBase): array
+    {
+        $table = [
+            'sss' => $this->computeSss($monthlyBase),
+            'philhealth' => $this->computePhilHealth($monthlyBase),
+            'pagibig' => $this->computePagIbig($monthlyBase),
+        ];
+
+        $out = [];
+        foreach ($table as $agency => $row) {
+            $deducted = $employee->contributionMode($agency) === 'auto';
+            $ec = $agency === 'sss' && $deducted ? (float) ($row['ec'] ?? 0) : 0.0;
+
+            $out[$agency] = [
+                'employee' => $deducted ? round((float) $row['employee_share'], 2) : 0.0,
+                'employer' => $deducted ? round((float) $row['employer_share'] - $ec, 2) : 0.0,
+                'mode' => $deducted ? 'auto' : 'none',
+            ];
+            if ($agency === 'sss') {
+                $out[$agency]['ec'] = $ec;
+                $out[$agency]['msc'] = $deducted ? ($row['msc'] ?? null) : null;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * SSS 2025 Schedule (RA 11199): 15% (EE 5%, ER 10% + EC).
      * Monthly Salary Credit (MSC) clamped between 5,000 and 35,000 in 500 brackets.
      */
@@ -127,4 +165,3 @@ class BenefitCalculator
         ];
     }
 }
-

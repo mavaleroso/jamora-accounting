@@ -1,6 +1,7 @@
 import { useForm } from '@inertiajs/react';
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, Loader2, Undo2 } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -174,7 +175,8 @@ function VerifyForm({ item, currentUserId, onDone }: { item: Item; currentUserId
     const verifyForm = useForm({ notes: '' });
     const returnForm = useForm({ reason: '' });
     const [returning, setReturning] = React.useState(false);
-    const own = [item.prepared?.by_id, item.submitted?.by_id].includes(currentUserId);
+    const confirm = useConfirm();
+    const own =[item.prepared?.by_id, item.submitted?.by_id].includes(currentUserId);
     const busy = verifyForm.processing || returnForm.processing;
 
     return (
@@ -246,7 +248,18 @@ function VerifyForm({ item, currentUserId, onDone }: { item: Item; currentUserId
                                 {returnForm.processing && <Loader2 className="size-4 animate-spin" />} Return
                             </Button>
                         ) : (
-                            <Button type="button" disabled={busy} onClick={() => verifyForm.post(`${COMPLIANCE_URL}/${item.id}/verify`, { preserveScroll: true, onSuccess: onDone })}>
+                            <Button
+                                type="button"
+                                disabled={busy}
+                                onClick={async () => {
+                                    const ok = await confirm({
+                                        title: 'Verify this filing?',
+                                        description: `You are signing off "${item.title}" as correctly filed. Verified filings are closed.`,
+                                        confirmLabel: 'Verify',
+                                    });
+                                    if (ok) verifyForm.post(`${COMPLIANCE_URL}/${item.id}/verify`, { preserveScroll: true, onSuccess: onDone });
+                                }}
+                            >
                                 {verifyForm.processing ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} Verify
                             </Button>
                         ))}
@@ -350,8 +363,15 @@ export function AddItemDialog({ open, today, categories, onClose }: { open: bool
     });
     const { data, setData, errors, processing } = form;
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const ok = await confirm({
+            title: 'Add this filing to the calendar?',
+            description: `${data.title || 'The filing'} is added for ${monthName(data.month)} and tracked through prepare, file and verify.`,
+            confirmLabel: 'Add filing',
+        });
+        if (!ok) return;
         form.transform(({ month, ...d }) => ({ ...d, period: monthName(month), amount: d.amount === '' ? null : Number(d.amount) }));
         form.post(COMPLIANCE_URL, {
             preserveScroll: true,
@@ -439,12 +459,19 @@ export function AddItemDialog({ open, today, categories, onClose }: { open: bool
 
 export function AddMonthDialog({ open, today, onClose }: { open: boolean; today: string; onClose: () => void }) {
     const form = useForm({ month: today.slice(0, 7) });
+    const confirm = useConfirm();
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
             <DialogContent className="sm:max-w-sm">
                 <form
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: `Add ${monthName(form.data.month)} to the calendar?`,
+                            description: 'The month’s statutory filings (BIR, SSS, PhilHealth, Pag-IBIG and others) are generated. Filings that already exist are kept.',
+                            confirmLabel: 'Add month',
+                        });
+                        if (!ok) return;
                         form.post(`${COMPLIANCE_URL}/generate-calendar`, { preserveScroll: true, onSuccess: onClose });
                     }}
                     className="space-y-4"

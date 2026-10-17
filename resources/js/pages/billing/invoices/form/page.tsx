@@ -2,6 +2,7 @@ import { formatAmount, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
 import InputError from '@/components/input-error';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Combobox } from '@/components/ui/combobox';
@@ -148,8 +149,15 @@ export default function InvoiceFormPage({ partners, items, vatRate, seniorDiscou
         return { gross, lineDiscounts, vatRemoved: 0, senior: 0, vat, vatable: data.is_vat_exempt ? 0 : round2(net - vat), total: round2(net) };
     }, [data.lines, data.is_senior_pwd, data.is_vat_exempt, vatRate, seniorDiscountRate]);
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const ok = await confirm({
+            title: 'Create this invoice?',
+            description: `The ${formatAmount(totals.total, { currency: true })} invoice is saved as a draft. Nothing is posted until you confirm it.`,
+            confirmLabel: 'Create invoice',
+        });
+        if (!ok) return;
         form.transform((d) => ({
             ...d,
             lines: d.lines.map((l) => ({

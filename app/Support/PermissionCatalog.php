@@ -37,8 +37,8 @@ class PermissionCatalog
         'journals.create' => ['Create journal entries', 'Draft manual journal entries.'],
         'journals.update' => ['Edit journal entries', 'Change draft or pending entries.'],
         'journals.delete' => ['Delete journal entries', 'Remove draft entries.'],
-        'journals.approve' => ['Approve journal entries', 'Approve entries submitted for review.'],
-        'journals.post' => ['Post journal entries', 'Post approved entries to the ledger.'],
+        'journals.approve' => ['Approve journal entries', 'Review manual entries and approve them onto the ledger.'],
+        'journals.post' => ['Post journal entries', 'Post system-generated drafts (e.g. optical sync) to the ledger.'],
         'journals.void' => ['Void journal entries', 'Reverse posted entries.'],
         'periods.view' => ['View accounting periods', 'See fiscal years and period status.'],
         'periods.manage' => ['Manage accounting periods', 'Create fiscal years and periods.'],
@@ -84,6 +84,7 @@ class PermissionCatalog
         'payroll.view' => ['View payroll', 'See payroll runs and payslips.'],
         'payroll.manage' => ['Manage payroll setup', 'Pay periods, adjustments and benefit programs.'],
         'payroll.run' => ['Run payroll', 'Compute, approve, post and release payroll.'],
+        'payroll.shared-programs.manage' => ['Manage shared benefit programs', 'Edit or archive benefit programs shared by every branch.'],
         'portal.view' => ['Employee portal', 'Open own payslips, leave and attendance.'],
 
         'compliance.view' => ['View compliance calendar', 'See filings, due dates and proof of filing.'],
@@ -158,14 +159,9 @@ class PermissionCatalog
     public static function roleDescription(string $role): ?string
     {
         return match (RoleEnum::tryFrom($role)) {
-            RoleEnum::Admin => 'Full access to every module, including user and access administration.',
-            RoleEnum::FinanceManager => 'Oversees accounting: approves and posts entries, closes periods, sees all reports.',
-            RoleEnum::SeniorAccountant => 'Prepares and posts journal entries, reconciles banks and runs reports.',
-            RoleEnum::AccountingStaff => 'Day-to-day bookkeeping: drafts entries and records bills and receipts.',
-            RoleEnum::FrontDeskBilling => 'Issues invoices and collects payments at the front desk.',
-            RoleEnum::Payroll => 'Runs payroll, manages attendance, leave, rosters and benefits.',
-            RoleEnum::Auditor => 'Read-only access to the books, reports and audit trail.',
-            RoleEnum::Management => 'Dashboards and summary reports for decision-making.',
+            RoleEnum::Admin => 'Executive / owner: full access. Approves and releases payroll, verifies filings, closes periods and manages users.',
+            RoleEnum::Accountant => 'Runs finance and admin day to day: books, billing, payables, banks, payroll prep, attendance, leave and filings. Sign-offs go to the owner.',
+            RoleEnum::AccountingRetainer => 'Outsourced reviewer: sees the books, reports, payroll and audit trail; drafts adjusting entries for the owner to approve and verifies filings.',
             RoleEnum::Employee => 'Self-service: own attendance, leave filings and payslips.',
             null => null,
         };

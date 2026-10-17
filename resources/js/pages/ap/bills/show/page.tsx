@@ -1,4 +1,4 @@
-import { ConfirmDialog } from '@/components/confirm-dialog';
+import { ConfirmDialog, useConfirm } from '@/components/confirm-dialog';
 import { daysPastDue, formatAmount, formatDate, paymentMethodLabels, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
 import { StatusBadge } from '@/components/finance/status-badge';
@@ -314,14 +314,21 @@ function PayDialog({
     const { data, setData, errors, processing } = form;
     const fromBank = ['check', 'bank_transfer'].includes(data.payment_method);
     const bank = bankAccounts.find((b) => String(b.id) === data.bank_account_id);
+    const confirm = useConfirm();
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-lg">
                 <form
                     className="grid gap-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: 'Pay this bill?',
+                            description: `${formatPhpCurrency(Number(data.amount) || 0)} will be posted as paid to ${bill.vendor.name}${fromBank && bank ? ` from ${bank.name}` : ''}. Posted payments cannot be edited.`,
+                            confirmLabel: 'Record payment',
+                        });
+                        if (!ok) return;
                         form.transform((d) => ({ ...d, bank_account_id: fromBank ? d.bank_account_id : null }));
                         form.post(`/ap/bills/${bill.id}/pay`, { preserveScroll: true, onSuccess: () => onOpenChange(false) });
                     }}

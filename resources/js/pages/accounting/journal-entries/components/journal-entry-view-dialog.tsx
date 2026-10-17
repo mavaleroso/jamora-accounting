@@ -180,6 +180,12 @@ export function JournalEntryViewDialog({ open, onOpenChange, journalEntry, loadi
                                     <p>{journalEntry.prepared_by_user.name}</p>
                                 </div>
                             ) : null}
+                            {journalEntry.approved_by_user ? (
+                                <div>
+                                    <p className="text-xs text-muted-foreground">Approved by</p>
+                                    <p>{journalEntry.approved_by_user.name}</p>
+                                </div>
+                            ) : null}
                             {journalEntry.posted_by_user ? (
                                 <div>
                                     <p className="text-xs text-muted-foreground">Posted by</p>

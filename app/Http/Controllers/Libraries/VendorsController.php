@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Libraries;
 
 use App\Http\Controllers\Controller;
+use App\Models\Bill;
 use App\Models\Vendor;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
@@ -31,7 +32,7 @@ class VendorsController extends Controller
             ->when($filters['status'] === 'active', fn ($q) => $q->where('is_active', true))
             ->when($filters['status'] === 'inactive', fn ($q) => $q->where('is_active', false))
             ->orderBy('name')
-            ->paginate(20)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         return Inertia::render('libraries/vendors/page', [
@@ -41,7 +42,7 @@ class VendorsController extends Controller
                 'total' => Vendor::query()->count(),
                 'active' => Vendor::query()->where('is_active', true)->count(),
                 'withBalance' => Vendor::query()->whereHas('bills', $open)->count(),
-                'outstanding' => round((float) \App\Models\Bill::query()->whereIn('status', ['posted', 'partially_paid'])->sum('balance_due'), 2),
+                'outstanding' => round((float) Bill::query()->whereIn('status', ['posted', 'partially_paid'])->sum('balance_due'), 2),
             ],
         ]);
     }

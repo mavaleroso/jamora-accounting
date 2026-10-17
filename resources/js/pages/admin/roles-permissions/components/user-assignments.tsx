@@ -1,6 +1,7 @@
 import { Link, router } from '@inertiajs/react';
 import { AlertTriangle, Search, UserCog } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -30,9 +31,16 @@ export function UserAssignments({ users, roles, currentUserId }: { users: UserRo
         return true;
     });
 
-    const changeRole = (user: UserRow, roleName: string) => {
+    const confirm = useConfirm();
+    const changeRole = async (user: UserRow, roleName: string) => {
         const role = roleByName.get(roleName);
         if (!role || roleName === user.role) return;
+        const ok = await confirm({
+            title: `Make ${user.name} ${roleName}?`,
+            description: `${user.role ? `This replaces their ${user.role} role. ` : ''}Their access changes to what the ${roleName} role allows.`,
+            confirmLabel: 'Change role',
+        });
+        if (!ok) return;
         setPending(user.id);
         router.post(`${ROLES_URL}/${role.id}/assign`, { user_ids: [user.id] }, { preserveScroll: true, preserveState: true, onFinish: () => setPending(null) });
     };

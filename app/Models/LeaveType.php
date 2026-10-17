@@ -12,7 +12,7 @@ class LeaveType extends Model
 {
     protected $fillable = [
         'code', 'name', 'legal_basis', 'is_paid', 'balance_tracked', 'annual_entitlement',
-        'max_days_per_filing', 'max_carry_over', 'is_convertible', 'counts_calendar_days',
+        'max_days_per_filing', 'max_carry_over', 'prorate_first_year', 'is_convertible', 'counts_calendar_days',
         'gender', 'min_service_months', 'min_notice_days', 'attachment_required_after_days',
         'allow_half_day', 'sort_order', 'is_active',
     ];
@@ -25,6 +25,7 @@ class LeaveType extends Model
             'annual_entitlement' => 'float',
             'max_days_per_filing' => 'float',
             'max_carry_over' => 'float',
+            'prorate_first_year' => 'boolean',
             'is_convertible' => 'boolean',
             'counts_calendar_days' => 'boolean',
             'min_service_months' => 'integer',
@@ -74,4 +75,3 @@ class LeaveType extends Model
         };
     }
 }
-

@@ -1,7 +1,8 @@
 import { Head, Link, router, usePage } from '@inertiajs/react';
-import { PlusIcon } from 'lucide-react';
+import { PlusIcon, XIcon } from 'lucide-react';
 import * as React from 'react';
 import AppLayout from '@/layouts/app-layout';
+import { cn } from '@/lib/utils';
 import { DataTable } from '@/components/data-table';
 import Heading from '@/components/heading';
 import {
@@ -15,9 +16,7 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Label } from '@/components/ui/label';
 import {
     Select,
     SelectContent,
@@ -44,6 +43,7 @@ type Props = {
     total: number;
     pageSize: number;
     journals: JournalOption[];
+    initialStatus?: string;
 };
 
 type ListFilters = {
@@ -67,6 +67,7 @@ export default function JournalEntriesPage({
     total: initialTotal,
     pageSize: initialPageSize,
     journals,
+    initialStatus = '',
 }: Props) {
     const { auth } = usePage<{ auth: Auth }>().props;
     const can = (permission: string) => hasPermission(auth, permission);
@@ -78,8 +79,9 @@ export default function JournalEntriesPage({
     const [pageIndex, setPageIndex] = React.useState(0);
     const [pageSize, setPageSize] = React.useState(initialPageSize);
     const [search, setSearch] = React.useState('');
+    const [loading, setLoading] = React.useState(false);
     const [filters, setFilters] = React.useState<ListFilters>({
-        status: '',
+        status: initialStatus,
         journalId: '',
         dateFrom: '',
         dateTo: '',
@@ -144,18 +146,22 @@ export default function JournalEntriesPage({
 
     const handlePaginationChange = React.useCallback(
         (params: { pageIndex: number; pageSize: number; search?: string }) => {
+            setLoading(true);
             fetchPage({
                 pageIndex: params.pageIndex,
                 pageSize: params.pageSize,
                 search: params.search ?? search,
-            });
+            }).finally(() => setLoading(false));
         },
         [fetchPage, search],
     );
 
-    const applyFilters = React.useCallback(() => {
-        fetchPage({ pageIndex: 0, pageSize, search, filters });
-    }, [fetchPage, pageSize, search, filters]);
+    // Filters apply as soon as they change, like every other table toolbar
+    const setFilter = (patch: Partial<ListFilters>) => {
+        const next = { ...filters, ...patch };
+        setLoading(true);
+        fetchPage({ pageIndex: 0, pageSize, search, filters: next }).finally(() => setLoading(false));
+    };
 
     const resetFilters = React.useCallback(() => {
         const cleared: ListFilters = { status: '', journalId: '', dateFrom: '', dateTo: '' };
@@ -191,7 +197,7 @@ export default function JournalEntriesPage({
                 {
                     preserveScroll: true,
                     onSuccess: () => {
-                        toast.success('Journal entry posted successfully.');
+                        toast.success(entry.source_system === 'manual' ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.');
                         setPostTarget(null);
                         fetchPage({ pageIndex, pageSize, search, filters });
                     },
@@ -242,6 +248,7 @@ export default function JournalEntriesPage({
                 canView: can('journals.view'),
                 canEdit: can('journals.update'),
                 canPost: can('journals.post'),
+                canApprove: can('journals.approve'),
                 canVoid: can('journals.void'),
                 canDelete: can('journals.delete'),
                 onView: handleView,
@@ -283,48 +290,34 @@ export default function JournalEntriesPage({
                     ) : null}
                 </div>
 
-                <Card className="border-border/60 shadow-sm">
-                    <CardHeader className="border-b border-border/60 bg-muted/30 py-4">
-                        <CardTitle className="text-base">Filters</CardTitle>
-                        <CardDescription>Filter by status, journal, or date range.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-5">
-                        <div className="space-y-2">
-                            <Label>Status</Label>
-                            <Select
-                                value={filters.status || 'all'}
-                                onValueChange={(value) =>
-                                    setFilters((prev) => ({
-                                        ...prev,
-                                        status: value === 'all' ? '' : value,
-                                    }))
-                                }
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="All statuses" />
+                <DataTable
+                    title="Entries"
+                    description={`${total.toLocaleString()} journal ${total === 1 ? 'entry' : 'entries'} found.`}
+                    columns={columns}
+                    data={journalEntries}
+                    filterableColumns={journalEntryFilterableColumns}
+                    filterPlaceholder="Search entries"
+                    columnLabels={journalEntryColumnLabels}
+                    initialSorting={[{ id: 'entry_date', desc: true }]}
+                    enableRowSelection={false}
+                    emptyTitle="No journal entries found"
+                    toolbarFilterExtra={
+                        <>
+                            <Select value={filters.status || 'all'} onValueChange={(value) => setFilter({ status: value === 'all' ? '' : value })}>
+                                <SelectTrigger className={cn('h-9 w-full lg:w-36', filters.status && 'border-primary/50')} aria-label="Status">
+                                    <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="all">All statuses</SelectItem>
                                     <SelectItem value="draft">Draft</SelectItem>
-                                    <SelectItem value="pending">Pending</SelectItem>
+                                    <SelectItem value="pending">For approval</SelectItem>
                                     <SelectItem value="posted">Posted</SelectItem>
                                     <SelectItem value="void">Void</SelectItem>
                                 </SelectContent>
                             </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Journal</Label>
-                            <Select
-                                value={filters.journalId || 'all'}
-                                onValueChange={(value) =>
-                                    setFilters((prev) => ({
-                                        ...prev,
-                                        journalId: value === 'all' ? '' : value,
-                                    }))
-                                }
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="All journals" />
+                            <Select value={filters.journalId || 'all'} onValueChange={(value) => setFilter({ journalId: value === 'all' ? '' : value })}>
+                                <SelectTrigger className={cn('h-9 w-full lg:w-48', filters.journalId && 'border-primary/50')} aria-label="Journal">
+                                    <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="all">All journals</SelectItem>
@@ -335,66 +328,27 @@ export default function JournalEntriesPage({
                                     ))}
                                 </SelectContent>
                             </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Date from</Label>
-                            <DatePicker
-                                value={filters.dateFrom}
-                                onChange={(value) =>
-                                    setFilters((prev) => ({ ...prev, dateFrom: value }))
-                                }
-                                placeholder="Start date"
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Date to</Label>
-                            <DatePicker
-                                value={filters.dateTo}
-                                onChange={(value) =>
-                                    setFilters((prev) => ({ ...prev, dateTo: value }))
-                                }
-                                placeholder="End date"
-                            />
-                        </div>
-                        <div className="flex items-end gap-2">
-                            <Button type="button" onClick={applyFilters}>
-                                Apply
-                            </Button>
-                            {hasActiveFilters ? (
-                                <Button type="button" variant="outline" onClick={resetFilters}>
-                                    Reset
+                            <div className="flex items-center gap-2">
+                                <DatePicker value={filters.dateFrom} onChange={(value) => setFilter({ dateFrom: value })} placeholder="From" className="h-9 w-full lg:w-36" />
+                                <span className="text-xs text-muted-foreground">to</span>
+                                <DatePicker value={filters.dateTo} onChange={(value) => setFilter({ dateTo: value })} placeholder="To" className="h-9 w-full lg:w-36" />
+                            </div>
+                            {hasActiveFilters && (
+                                <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                                    <XIcon className="size-4" /> Clear
                                 </Button>
-                            ) : null}
-                        </div>
-                    </CardContent>
-                </Card>
-
-                <Card className="border-border/60 shadow-sm">
-                    <CardHeader className="border-b border-border/60 bg-muted/30 py-5">
-                        <CardTitle className="text-base font-semibold">Entries</CardTitle>
-                        <CardDescription>
-                            {total.toLocaleString()} journal {total === 1 ? 'entry' : 'entries'} found.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4">
-                        <DataTable
-                            columns={columns}
-                            data={journalEntries}
-                            filterableColumns={journalEntryFilterableColumns}
-                            filterPlaceholder="Search entries..."
-                            columnLabels={journalEntryColumnLabels}
-                            initialSorting={[{ id: 'entry_date', desc: true }]}
-                            enableRowSelection={false}
-                            serverSidePagination={{
-                                totalRowCount: total,
-                                pageIndex,
-                                pageSize,
-                                search,
-                                onPaginationChange: handlePaginationChange,
-                            }}
-                        />
-                    </CardContent>
-                </Card>
+                            )}
+                        </>
+                    }
+                    serverSidePagination={{
+                        totalRowCount: total,
+                        pageIndex,
+                        pageSize,
+                        search,
+                        onPaginationChange: handlePaginationChange,
+                        loading,
+                    }}
+                />
             </div>
 
             <JournalEntryViewDialog
@@ -410,16 +364,20 @@ export default function JournalEntriesPage({
             <AlertDialog open={Boolean(postTarget)} onOpenChange={(open) => !open && setPostTarget(null)}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
-                        <AlertDialogTitle>Post journal entry?</AlertDialogTitle>
+                        <AlertDialogTitle>
+                            {postTarget?.source_system === 'manual' ? 'Approve and post journal entry?' : 'Post journal entry?'}
+                        </AlertDialogTitle>
                         <AlertDialogDescription>
-                            This will post entry {postTarget?.entry_no} and update account balances. This action
-                            cannot be undone except by voiding the entry.
+                            {postTarget?.source_system === 'manual'
+                                ? `You are approving entry ${postTarget?.entry_no}${postTarget?.prepared_by_user ? ` prepared by ${postTarget.prepared_by_user.name}` : ''}. It will be posted and update account balances.`
+                                : `This will post entry ${postTarget?.entry_no} and update account balances.`}{' '}
+                            This action cannot be undone except by voiding the entry.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction onClick={() => postTarget && handlePost(postTarget)}>
-                            Post entry
+                            {postTarget?.source_system === 'manual' ? 'Approve & post' : 'Post entry'}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>

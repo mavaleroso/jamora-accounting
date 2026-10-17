@@ -197,7 +197,18 @@ export default function PayrollRunPage({ run, checks, payslips, totals, remittan
                         )}
                         {run.status === 'approved' && canRun && (
                             <>
-                                <Button variant="outline" disabled={busy} onClick={() => act(`${PAYROLL_URL}/${run.id}/reopen`)}>
+                                <Button
+                                    variant="outline"
+                                    disabled={busy}
+                                    onClick={() =>
+                                        setConfirm({
+                                            title: 'Return this payroll to draft?',
+                                            description: 'The approval is withdrawn and the time records are unlocked for corrections. It must be approved again before posting.',
+                                            label: 'Return to draft',
+                                            url: `${PAYROLL_URL}/${run.id}/reopen`,
+                                        })
+                                    }
+                                >
                                     <Undo2 className="size-4" /> Return to draft
                                 </Button>
                                 <Button
@@ -234,7 +245,7 @@ export default function PayrollRunPage({ run, checks, payslips, totals, remittan
                     <Tile label="Total employer cost" value={peso(employerCost)} hint={`Gross + ${peso(run.employer_total)} employer contributions`} />
                 </div>
 
-                {checks.length > 0 && <Checks checks={checks} isDraft={isDraft} />}
+                {checks.length > 0 && <Checks checks={checks} isDraft={isDraft} range={`date_from=${period.start_date}&date_to=${period.end_date}`} />}
 
                 {/* Tabs */}
                 <div className="border-b">
@@ -362,15 +373,17 @@ function Stepper({ run }: { run: Props['run'] }) {
 const CHECK_ICON = { error: AlertCircle, warning: AlertTriangle, info: Info } as const;
 const CHECK_TONE = { error: TONE.rose, warning: TONE.amber, info: 'bg-muted/40' } as const;
 const CHECK_LINK: Record<string, [string, string]> = {
-    open_records: ['/employee-management/attendance?view=timesheets', 'Open timesheets'],
+    open_records: ['/employee-management/attendance?view=timesheets&status=open', 'Open timesheets'],
     incomplete: ['/employee-management/attendance?view=timesheets&status=open', 'Fix missing punches'],
     pending_requests: ['/employee-management/requests?view=inbox', 'Open approvals'],
     no_record_days: ['/employee-management/attendance?view=timesheets', 'Open timesheets'],
+    benefit_review: ['/employee-management/benefits', 'Review benefits'],
     no_bank: ['/libraries/employees', 'Employee Directory'],
     missing_ids: ['/libraries/employees', 'Employee Directory'],
 };
 
-function Checks({ checks, isDraft }: { checks: CheckItem[]; isDraft: boolean }) {
+/** Time & Attendance links open on the payroll's cut-off (`range` is its date_from / date_to query). */
+function Checks({ checks, isDraft, range }: { checks: CheckItem[]; isDraft: boolean; range: string }) {
     return (
         <section className="space-y-2">
             <h2 className="text-sm font-semibold">{isDraft ? 'Before you approve' : 'Notes from review'}</h2>
@@ -385,7 +398,7 @@ function Checks({ checks, isDraft }: { checks: CheckItem[]; isDraft: boolean }) 
                                 <span className="font-semibold">{c.count}</span> {c.message}
                             </p>
                             {link && isDraft && (
-                                <Link href={link[0]} className="shrink-0 text-xs font-medium underline-offset-2 hover:underline">
+                                <Link href={link[0].includes('/attendance?') ? `${link[0]}&${range}` : link[0]} className="shrink-0 text-xs font-medium underline-offset-2 hover:underline">
                                     {link[1]}
                                 </Link>
                             )}

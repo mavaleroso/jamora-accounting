@@ -3,6 +3,7 @@ import { PlusIcon, Trash2Icon } from 'lucide-react';
 import * as React from 'react';
 import AppLayout from '@/layouts/app-layout';
 import Heading from '@/components/heading';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -135,6 +136,7 @@ export default function JournalEntryFormPage({
     journalEntry,
 }: Props) {
     const isEdit = Boolean(journalEntry?.id);
+    const confirm = useConfirm();
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Journal Entries', href: '/accounting/journal-entries' },
         {
@@ -190,8 +192,19 @@ export default function JournalEntryFormPage({
         })),
     });
 
-    const submit = (status: 'draft' | 'pending') => {
+    const submit = async (status: 'draft' | 'pending') => {
         if (!journalId) return;
+        if (!isEdit) {
+            const ok = await confirm({
+                title: status === 'pending' ? 'Create and submit this entry?' : 'Create this entry as a draft?',
+                description:
+                    status === 'pending'
+                        ? `A ${formatPhpCurrency(totals.totalDebit)} journal entry is created and sent for approval. It reaches the ledger once approved.`
+                        : `A ${formatPhpCurrency(totals.totalDebit)} journal entry is saved as a draft. Nothing is posted yet.`,
+                confirmLabel: status === 'pending' ? 'Create & submit' : 'Save draft',
+            });
+            if (!ok) return;
+        }
 
         setProcessing(true);
 
@@ -470,7 +483,7 @@ export default function JournalEntryFormPage({
                                 }
                                 onClick={() => submit('pending')}
                             >
-                                Submit
+                                Submit for approval
                             </Button>
                         </div>
                     </CardContent>

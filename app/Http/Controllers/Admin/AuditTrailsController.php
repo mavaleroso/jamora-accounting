@@ -27,7 +27,7 @@ class AuditTrailsController extends Controller
     public function index(Request $request): Response
     {
         $filters = $this->filters($request);
-        $perPage = max(10, min(100, (int) $request->query('per_page', 25)));
+        $perPage = max(10, min(100, (int) $request->query('per_page', 10)));
 
         $paginator = $this->query($filters)->with(['user:id,firstname,lastname,username', 'entity:id,code,name'])
             ->paginate($perPage)
@@ -48,13 +48,15 @@ class AuditTrailsController extends Controller
                 'to' => $paginator->lastItem(),
             ],
             'summary' => [
-                'today' => AuditTrail::query()->where('created_at', '>=', $today)->count(),
+                // Changes only; sign-ins and sign-outs have their own count.
+                'today' => AuditTrail::query()->where('created_at', '>=', $today)->whereNotIn('event', ['login', 'logout'])->count(),
                 'usersToday' => AuditTrail::query()->where('created_at', '>=', $today)->whereNotNull('user_id')->distinct()->count('user_id'),
                 'week' => [
                     'created' => (int) ($week['created'] ?? 0),
                     'updated' => (int) ($week['updated'] ?? 0),
                     'deleted' => (int) ($week['deleted'] ?? 0),
                     'other' => (int) ($week['request'] ?? 0) + (int) ($week['restored'] ?? 0),
+                    'logins' => (int) ($week['login'] ?? 0),
                 ],
             ],
             'options' => [
@@ -117,7 +119,7 @@ class AuditTrailsController extends Controller
     {
         $data = $request->validate([
             'search' => ['nullable', 'string', 'max:200'],
-            'event' => ['nullable', 'in:created,updated,deleted,restored,request'],
+            'event' => ['nullable', 'in:created,updated,deleted,restored,request,login,logout'],
             'user_id' => ['nullable', 'integer'],
             'subject_type' => ['nullable', 'string', 'max:255'],
             'subject_id' => ['nullable', 'string', 'max:100'],

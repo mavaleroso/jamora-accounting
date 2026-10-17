@@ -32,11 +32,13 @@ use Inertia\Response;
  *  - Timekeeper / HR (attendance.manage or payroll.manage): live team board, timesheet approval
  *    (approve or reject each day; employee time corrections are decided on the day itself), per-staff
  *    hours summary for the pay period, overtime inbox, manual entries, daily close and geofence settings.
- *  - Viewer (attendance.view without a linked employee, e.g. Auditor): team board and timesheets, read-only.
+ *  - Viewer (attendance.view without a linked employee, e.g. Accounting Retainer): team board and timesheets, read-only.
  */
 class AttendanceController extends Controller
 {
     private const VIEWS = ['clock', 'today', 'timesheets', 'requests', 'accomplishments'];
+
+    private const PAGE_SIZES = [10, 25, 50, 100];
 
     private const EMPLOYEE_COLUMNS = 'employee:id,employee_code,firstname,middlename,lastname,avatar,position,department,biometric_id';
 
@@ -105,6 +107,9 @@ class AttendanceController extends Controller
             ? $request->query('status') : '';
         $requestStatus = in_array($request->query('request_status'), ['pending', 'approved', 'rejected', 'cancelled', 'all'], true)
             ? $request->query('request_status') : ($canManage ? 'pending' : 'all');
+        $requestsPerPage = $this->pageSize($request, 'requests_per_page');
+        // Searching by name only makes sense when the list spans the team.
+        $requestsSearch = $canViewTeam ? trim((string) $request->query('requests_search')) : '';
 
         // Period records (timesheets)
         $periodQuery = DtrEntry::query()
@@ -161,9 +166,10 @@ class AttendanceController extends Controller
         $attendanceRequests = (clone $requestsBase)
             ->with([self::EMPLOYEE_COLUMNS, 'dtrEntry', 'reviewer:id,firstname,lastname', 'filer:id,firstname,lastname'])
             ->when($requestStatus !== 'all', fn ($q) => $q->where('status', $requestStatus))
+            ->when($requestsSearch !== '', fn ($q) => $this->whereEmployeeMatches($q, $requestsSearch))
             ->orderByRaw("case when status = 'pending' then 0 else 1 end")
             ->orderByDesc('created_at')
-            ->paginate(15, ['*'], 'requests_page')
+            ->paginate($requestsPerPage, ['*'], 'requests_page')
             ->withQueryString();
         AttendanceRequest::loadDayRecords($attendanceRequests->getCollection());
 
@@ -193,6 +199,8 @@ class AttendanceController extends Controller
                 'date_to' => $dateTo,
                 'status' => $recordStatus === '' ? 'all' : $recordStatus,
                 'request_status' => $requestStatus,
+                'requests_per_page' => $requestsPerPage,
+                'requests_search' => $requestsSearch,
             ],
             'entries' => $entries,
             'approval' => $approval,
@@ -234,8 +242,9 @@ class AttendanceController extends Controller
         $branchLat = $currentEntity && $currentEntity->latitude !== null ? (float) $currentEntity->latitude : 14.5547;
         $branchLon = $currentEntity && $currentEntity->longitude !== null ? (float) $currentEntity->longitude : 121.0244;
         $geofenceRadius = (int) ($currentEntity?->geofence_radius ?? 250);
-        $geofenceEnforced = $currentEntity && $currentEntity->geofence_enforced !== null
-            ? (bool) $currentEntity->geofence_enforced
+        // The same rule the clock screen shows (branchLocation): system switch AND branch setting.
+        $geofenceEnforced = $currentEntity
+            ? $currentEntity->geofenceEnforced()
             : (bool) config('attendance.geofence_enabled', true);
 
         $user = $request->user();
@@ -303,9 +312,20 @@ class AttendanceController extends Controller
             $workDate = $punchTime->toDateString();
             $timeStr = $punchTime->format('H:i:s');
 
+            $punchType = match ($validated['punch_type']) {
+                'in' => 'check_in',
+                'out' => 'check_out',
+                default => $validated['punch_type'],
+            };
+
             $dtr = DtrEntry::where('employee_id', $validated['employee_id'])
                 ->whereDate('work_date', $workDate)
                 ->first();
+
+            // Past midnight on a night shift, breaks and the check-out go to the shift that began yesterday.
+            if ($punchType !== 'check_in' && ! $dtr?->time_in) {
+                $dtr = $this->attendanceCalculator->openOvernightShift((int) $validated['employee_id'], $punchTime) ?? $dtr;
+            }
 
             $this->attendanceCalculator->assertEditable($dtr, 'location');
 
@@ -316,12 +336,6 @@ class AttendanceController extends Controller
                     'work_date' => $workDate,
                 ]);
             }
-
-            $punchType = match ($validated['punch_type']) {
-                'in' => 'check_in',
-                'out' => 'check_out',
-                default => $validated['punch_type'],
-            };
 
             // Enforce the punch sequence: in -> (break out -> break in) -> out.
             $sequenceError = match ($punchType) {
@@ -781,12 +795,16 @@ class AttendanceController extends Controller
 
             return [
                 'date' => $date->toDateString(),
-                'is_rest_day' => in_array($date->dayOfWeek, $employee->restDayNumbers(), true),
+                'is_rest_day' => $this->attendanceCalculator->scheduleFor($employee, $date)->isRestDay,
                 'entry' => $entry?->only(['id', 'time_in', 'time_out', 'regular_hours', 'ot_hours', 'tardiness_minutes', 'attendance_status', 'status']),
             ];
         });
 
         $todayEntry = $weekEntries->get($today->toDateString());
+        // Still on last night's shift: show that record so the employee can take a break or check out.
+        if (! $todayEntry?->time_in) {
+            $todayEntry = $this->attendanceCalculator->openOvernightShift($employee->id, Carbon::now()) ?? $todayEntry;
+        }
 
         return [
             'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'avatar_url']) + ['name' => $employee->name],
@@ -815,8 +833,10 @@ class AttendanceController extends Controller
             'latitude' => $entity?->latitude !== null ? (float) $entity->latitude : 14.5547,
             'longitude' => $entity?->longitude !== null ? (float) $entity->longitude : 121.0244,
             'geofence_radius' => (int) ($entity?->geofence_radius ?? 250),
-            'geofence_enforced' => config('attendance.geofence_enabled', true)
-                && (bool) ($entity?->geofence_enforced ?? true),
+            // Effective rule (what check-in enforces), plus its two parts for the settings dialog.
+            'geofence_enforced' => $entity ? $entity->geofenceEnforced() : (bool) config('attendance.geofence_enabled', true),
+            'branch_geofence_enforced' => (bool) ($entity?->geofence_enforced ?? true),
+            'geofence_system_enabled' => (bool) config('attendance.geofence_enabled', true),
         ];
     }
 
@@ -1028,6 +1048,24 @@ class AttendanceController extends Controller
             'pending_correction',
             $corrections->get($e->employee_id.'|'.$e->work_date->toDateString())
         ));
+    }
+
+    private function pageSize(Request $request, string $key): int
+    {
+        $size = $request->integer($key);
+
+        return in_array($size, self::PAGE_SIZES, true) ? $size : 25;
+    }
+
+    /** Narrow a query to rows whose employee's name or code contains the term. */
+    private function whereEmployeeMatches($query, string $term): void
+    {
+        $like = '%'.addcslashes($term, '%_\\').'%';
+        $query->whereHas('employee', fn ($q) => $q->where(fn ($w) => $w
+            ->where('firstname', 'like', $like)
+            ->orWhere('lastname', 'like', $like)
+            ->orWhere('employee_code', 'like', $like)
+            ->orWhereRaw("concat(firstname, ' ', lastname) like ?", [$like])));
     }
 
     private function dateParam(mixed $value): ?string

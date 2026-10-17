@@ -1,6 +1,7 @@
 import { router } from '@inertiajs/react';
 import { ChevronDown, Copy, Loader2, Lock, MoreHorizontal, Pencil, Search, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -130,7 +131,17 @@ export function RoleEditor({ role, modules, permissions, users, currentUserId, c
     const groups = groupByModule(modules, visible);
     const members = users.filter((u) => u.role === role.name);
 
-    const save = () => {
+    const confirm = useConfirm();
+    const save = async () => {
+        const added = [...draft].filter((k) => !original.has(k)).length;
+        const removed = [...original].filter((k) => !draft.has(k)).length;
+        const changes = [added && `grants ${added} permission${added === 1 ? '' : 's'}`, removed && `removes ${removed}`].filter(Boolean).join(' and ');
+        const ok = await confirm({
+            title: `Save changes to ${role.name}?`,
+            description: `This ${changes || 'saves the role'}${role.usersCount > 0 ? ` for ${role.usersCount} user${role.usersCount === 1 ? '' : 's'}` : ''}. It takes effect on their next page load.`,
+            confirmLabel: 'Save changes',
+        });
+        if (!ok) return;
         setSaving(true);
         setError(null);
         router.put(

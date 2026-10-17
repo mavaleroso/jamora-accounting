@@ -1,3 +1,4 @@
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
 import { FilterBar } from '@/components/finance/filter-bar';
 import { daysPastDue, formatAmount, formatDate } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
@@ -6,8 +7,6 @@ import { StatusBadge } from '@/components/finance/status-badge';
 import { StatCard, StatGrid } from '@/components/stat-card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
 import { hasPermission } from '@/lib/permissions';
@@ -37,6 +36,11 @@ type Props = {
     filters: Record<string, string | boolean | null>;
     summary: { outstanding: number; overdue: number; overdueCount: number; draftCount: number; billedMtd: number; collectedMtd: number };
 };
+
+/** Days past due for open invoices; 0 when not open or not late. */
+function lateDays(inv: InvoiceRow): number {
+    return ['confirmed', 'partially_paid'].includes(inv.status) ? daysPastDue(inv.due_date) : 0;
+}
 
 export default function InvoicesPage({ invoices, filters, summary }: Props) {
     const { auth } = usePage<{ auth: Auth }>().props;
@@ -93,116 +97,111 @@ export default function InvoicesPage({ invoices, filters, summary }: Props) {
                     />
                 </StatGrid>
 
-                <FilterBar
-                    url="/billing/invoices"
-                    filters={{
-                        search: filters.search,
-                        status: filters.status,
-                        pricing_type: filters.pricing_type,
-                        date_from: filters.date_from,
-                        date_to: filters.date_to,
-                        overdue: filters.overdue,
-                    }}
-                    searchPlaceholder="Invoice no., BIR SI/OR no. or customer"
-                    selects={[
-                        {
-                            key: 'status',
-                            label: 'Statuses',
-                            options: [
-                                { value: 'draft', label: 'Draft' },
-                                { value: 'confirmed', label: 'Open' },
-                                { value: 'partially_paid', label: 'Partially paid' },
-                                { value: 'paid', label: 'Paid' },
-                            ],
-                        },
-                        {
-                            key: 'pricing_type',
-                            label: 'Pricing',
-                            options: [
-                                { value: 'retail', label: 'Retail' },
-                                { value: 'wholesale', label: 'Wholesale' },
-                            ],
-                        },
-                    ]}
-                    dateRange={{ from: 'date_from', to: 'date_to' }}
-                />
-
-                <TableShell>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Invoice</TableHead>
-                                <TableHead>Customer</TableHead>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Due</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
-                                <TableHead className="text-right">Paid</TableHead>
-                                <TableHead className="text-right">Balance</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {invoices.data.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={8} className="text-muted-foreground h-32 text-center">
-                                        No invoices match these filters.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                invoices.data.map((inv) => {
-                                    const open = ['confirmed', 'partially_paid'].includes(inv.status);
-                                    const late = open ? daysPastDue(inv.due_date) : 0;
-
-                                    return (
-                                        <TableRow
-                                            key={inv.id}
-                                            className="hover:bg-muted/40 cursor-pointer"
-                                            onClick={() => router.visit(`/billing/invoices/${inv.id}`)}
-                                        >
-                                            <TableCell>
-                                                <div className="font-mono text-sm font-medium">{inv.invoice_no}</div>
-                                                <div className="text-muted-foreground text-xs">
-                                                    {inv.bir_si_or_no ? `BIR ${inv.bir_si_or_no}` : 'No BIR no. yet'}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="font-medium">{inv.partner?.name ?? '—'}</div>
-                                                <div className="flex gap-1 pt-0.5">
-                                                    <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal capitalize">
-                                                        {inv.pricing_type}
-                                                    </Badge>
-                                                    {inv.is_senior_pwd && (
-                                                        <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
-                                                            Senior/PWD
-                                                        </Badge>
-                                                    )}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="whitespace-nowrap">{formatDate(inv.invoice_date)}</TableCell>
-                                            <TableCell className="whitespace-nowrap">
-                                                {formatDate(inv.due_date)}
-                                                {late > 0 && (
-                                                    <div className="text-xs font-medium text-red-600 dark:text-red-400">{late} days overdue</div>
-                                                )}
-                                            </TableCell>
-                                            <TableCell>
-                                                <StatusBadge status={late > 0 ? 'overdue' : inv.status} />
-                                            </TableCell>
-                                            <TableCell className="text-right font-mono tabular-nums">{formatAmount(inv.total_amount)}</TableCell>
-                                            <TableCell className="text-muted-foreground text-right font-mono tabular-nums">
-                                                {formatAmount(inv.amount_paid)}
-                                            </TableCell>
-                                            <TableCell className="text-right font-mono font-medium tabular-nums">
-                                                {formatAmount(inv.balance_due)}
-                                            </TableCell>
-                                        </TableRow>
-                                    );
-                                })
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableShell>
-                <Paginator page={invoices} noun="invoices" />
+                <TableCard>
+                    <FilterBar
+                        url="/billing/invoices"
+                        filters={{
+                            search: filters.search,
+                            status: filters.status,
+                            pricing_type: filters.pricing_type,
+                            date_from: filters.date_from,
+                            date_to: filters.date_to,
+                            overdue: filters.overdue,
+                        }}
+                        searchPlaceholder="Invoice no., BIR SI/OR no. or customer"
+                        selects={[
+                            {
+                                key: 'status',
+                                label: 'Statuses',
+                                options: [
+                                    { value: 'draft', label: 'Draft' },
+                                    { value: 'confirmed', label: 'Open' },
+                                    { value: 'partially_paid', label: 'Partially paid' },
+                                    { value: 'paid', label: 'Paid' },
+                                ],
+                            },
+                            {
+                                key: 'pricing_type',
+                                label: 'Pricing',
+                                options: [
+                                    { value: 'retail', label: 'Retail' },
+                                    { value: 'wholesale', label: 'Wholesale' },
+                                ],
+                            },
+                        ]}
+                        dateRange={{ from: 'date_from', to: 'date_to' }}
+                        chipLabels={{ overdue: 'Overdue only' }}
+                    />
+                    <ListTable
+                        rows={invoices.data}
+                        rowKey={(inv) => inv.id}
+                        sequenceStart={invoices.from ?? 1}
+                        onRowClick={(inv) => router.visit(`/billing/invoices/${inv.id}`)}
+                        rowAccent={(inv) => (lateDays(inv) > 0 ? 'bg-red-500' : 'bg-primary')}
+                        columns={[
+                            {
+                                id: 'invoice',
+                                header: 'Invoice',
+                                cell: (inv) => (
+                                    <>
+                                        <div className="font-mono text-sm font-medium">{inv.invoice_no}</div>
+                                        <div className="text-xs text-muted-foreground">{inv.bir_si_or_no ? `BIR ${inv.bir_si_or_no}` : 'No BIR no. yet'}</div>
+                                    </>
+                                ),
+                            },
+                            {
+                                id: 'customer',
+                                header: 'Customer',
+                                cell: (inv) => (
+                                    <>
+                                        <div className="font-medium">{inv.partner?.name ?? '—'}</div>
+                                        <div className="flex gap-1 pt-0.5">
+                                            <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal capitalize">
+                                                {inv.pricing_type}
+                                            </Badge>
+                                            {inv.is_senior_pwd && (
+                                                <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+                                                    Senior/PWD
+                                                </Badge>
+                                            )}
+                                        </div>
+                                    </>
+                                ),
+                            },
+                            { id: 'date', header: 'Date', minScreen: 'lg', className: 'whitespace-nowrap', cell: (inv) => formatDate(inv.invoice_date) },
+                            {
+                                id: 'due',
+                                header: 'Due',
+                                className: 'whitespace-nowrap',
+                                cell: (inv) => (
+                                    <>
+                                        {formatDate(inv.due_date)}
+                                        {lateDays(inv) > 0 && <div className="text-xs font-medium text-red-600 dark:text-red-400">{lateDays(inv)} days overdue</div>}
+                                    </>
+                                ),
+                            },
+                            { id: 'status', header: 'Status', cell: (inv) => <StatusBadge status={lateDays(inv) > 0 ? 'overdue' : inv.status} /> },
+                            { id: 'total', header: 'Total', align: 'right', className: 'font-mono tabular-nums', cell: (inv) => formatAmount(inv.total_amount) },
+                            { id: 'paid', header: 'Paid', align: 'right', minScreen: 'xl', className: 'font-mono text-muted-foreground tabular-nums', cell: (inv) => formatAmount(inv.amount_paid) },
+                            { id: 'balance', header: 'Balance', align: 'right', className: 'font-mono font-medium tabular-nums', cell: (inv) => formatAmount(inv.balance_due) },
+                        ]}
+                        mobileRow={(inv) => (
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate font-mono text-sm font-medium">{inv.invoice_no}</span>
+                                    <span className="font-mono text-sm font-medium tabular-nums">{formatAmount(inv.balance_due)}</span>
+                                </div>
+                                <div className="truncate text-sm">{inv.partner?.name ?? '—'}</div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                    <StatusBadge status={lateDays(inv) > 0 ? 'overdue' : inv.status} />
+                                    <span>{formatDate(inv.invoice_date)}</span>
+                                </div>
+                            </div>
+                        )}
+                        empty={<TableEmpty icon={ReceiptIcon} title="No invoices match these filters" description="Try a different search, status or date range." />}
+                    />
+                    <Paginator page={invoices} />
+                </TableCard>
             </PageBody>
         </AppLayout>
     );

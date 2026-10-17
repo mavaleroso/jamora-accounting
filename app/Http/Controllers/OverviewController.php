@@ -99,6 +99,11 @@ class OverviewController extends Controller
             $metrics[] = $this->metric('Unposted entries', $unposted, tone: $this->alertTone($unposted), href: '/accounting/journal-entries');
         }
 
+        if ($can(['journals.approve'])) {
+            $awaiting = JournalEntry::query()->where('source_system', 'manual')->where('status', 'pending')->count();
+            $metrics[] = $this->metric('Entries for approval', $awaiting, tone: $this->alertTone($awaiting), href: '/accounting/journal-entries?status=pending', hint: 'Submitted manual entries waiting for your review.');
+        }
+
         if ($can(['dashboard.view'])) {
             $totals = $this->classificationTotals($today->copy()->startOfMonth(), $today->copy()->endOfMonth());
             $metrics[] = $this->metric('Revenue MTD', $totals['revenue'], 'currency', href: '/accounting/dashboard');

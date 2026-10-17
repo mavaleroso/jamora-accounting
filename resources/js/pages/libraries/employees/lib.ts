@@ -48,7 +48,14 @@ export type Employee = {
     bank_name?: string | null;
     bank_account_no?: string | null;
     is_active: boolean;
+    /** How SSS / PhilHealth / Pag-IBIG are deducted; a missing agency (or null) = automatic. */
+    contribution_settings?: Partial<Record<ContributionAgency, ContributionSetting>> | null;
+    /** The login linked to this employee (every new employee gets one). */
+    user?: { id: number; username: string | null; email: string | null; status: boolean; roles?: { id: number; name: string }[] } | null;
 };
+
+/** A user who can be linked to a new employee: not yet an employee in this branch. */
+export type LinkableUser = { id: number; name: string; username: string | null; email: string | null; role: string | null };
 
 export type LeaveTypeOption = {
     id: number;
@@ -72,7 +79,93 @@ export type Policy = {
     daysPerYear: number;
     hoursPerDay: number;
     defaultRestDays: number[];
+    statutory?: StatutoryTables;
 };
+
+/** Monthly contribution tables from config/people.php (statutory). */
+export type StatutoryTables = {
+    sss: {
+        rate_employee: number;
+        rate_employer: number;
+        msc_min: number;
+        msc_max: number;
+        msc_step: number;
+        ec_low: number;
+        ec_high: number;
+        ec_threshold: number;
+    };
+    philhealth: { rate: number; floor: number; ceiling: number };
+    pagibig: { rate_employee: number; rate_employee_low: number; low_threshold: number; rate_employer: number; max_fund_salary: number };
+};
+
+export type ContributionAgency = 'sss' | 'philhealth' | 'pagibig';
+/** auto = deducted, computed from the contribution table on the salary; none = not deducted. */
+export type ContributionMode = 'auto' | 'none';
+export type ContributionSetting = { mode: ContributionMode | string };
+
+export const CONTRIBUTION_MODES: { value: ContributionMode; label: string }[] = [
+    { value: 'auto', label: 'Automatic' },
+    { value: 'none', label: 'Not deducted' },
+];
+
+export const CONTRIBUTIONS: {
+    key: ContributionAgency;
+    label: string;
+    agency: string;
+    idField: 'sss_number' | 'philhealth_number' | 'pagibig_number';
+    idLabel: string;
+    idPlaceholder: string;
+}[] = [
+    {
+        key: 'sss',
+        label: 'SSS',
+        agency: 'Social Security System',
+        idField: 'sss_number',
+        idLabel: 'SSS number',
+        idPlaceholder: '00-0000000-0',
+    },
+    {
+        key: 'philhealth',
+        label: 'PhilHealth',
+        agency: 'Philippine Health Insurance',
+        idField: 'philhealth_number',
+        idLabel: 'PhilHealth number (PIN)',
+        idPlaceholder: '00-000000000-0',
+    },
+    {
+        key: 'pagibig',
+        label: 'Pag-IBIG',
+        agency: 'Home Development Mutual Fund',
+        idField: 'pagibig_number',
+        idLabel: 'Pag-IBIG MID number',
+        idPlaceholder: '0000-0000-0000',
+    },
+];
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Monthly SSS / PhilHealth / Pag-IBIG from the tables, as payroll computes them automatically
+ * (App\Services\People\BenefitCalculator). SSS employer share excludes EC.
+ */
+export function statutoryEstimate(monthly: number, t: StatutoryTables) {
+    const s = t.sss;
+    const msc = Math.max(s.msc_min, Math.min(s.msc_max, Math.round(monthly / s.msc_step) * s.msc_step));
+    const ec = msc < s.ec_threshold ? s.ec_low : s.ec_high;
+    const phBase = Math.max(t.philhealth.floor, Math.min(t.philhealth.ceiling, monthly));
+    const phTotal = round2(phBase * t.philhealth.rate);
+    const phEe = round2(phTotal / 2);
+    const h = t.pagibig;
+    const hBase = Math.min(h.max_fund_salary, monthly);
+    return {
+        sss: { employee: round2(msc * s.rate_employee), employer: round2(msc * s.rate_employer), ec, msc },
+        philhealth: { employee: phEe, employer: round2(phTotal - phEe) },
+        pagibig: {
+            employee: round2(hBase * (monthly <= h.low_threshold ? h.rate_employee_low : h.rate_employee)),
+            employer: round2(hBase * h.rate_employer),
+        },
+    };
+}
 
 export const PRESET_POSITIONS = [
     'Lead Optometrist',
@@ -137,8 +230,7 @@ export const STATUTORY_FIELDS = [
 export const labelOf = (list: { value: string; label: string }[], value?: string | null) =>
     list.find((o) => o.value === value)?.label ?? (value ? value.replace(/_/g, ' ') : '—');
 
-export const fullName = (e: Pick<Employee, 'name' | 'firstname' | 'lastname'>) =>
-    e.name ?? `${e.firstname} ${e.lastname}`;
+export const fullName = (e: Pick<Employee, 'name' | 'firstname' | 'lastname'>) => e.name ?? `${e.firstname} ${e.lastname}`;
 
 /** "2026-01-15T00:00:00.000000Z" → "2026-01-15" */
 export const toDateInput = (value?: string | null) => (value ? value.slice(0, 10) : '');
@@ -198,15 +290,13 @@ export const restDayLabel = (days: number[] | null | undefined, fallback: number
 /** Daily / monthly equivalents using the configured days-per-year factor. */
 export const payEquivalents = (payType: string, amount: number, policy: Policy) => {
     const { daysPerYear, hoursPerDay } = policy;
-    const daily =
-        payType === 'monthly' ? (amount * 12) / daysPerYear : payType === 'hourly' ? amount * hoursPerDay : amount;
+    const daily = payType === 'monthly' ? (amount * 12) / daysPerYear : payType === 'hourly' ? amount * hoursPerDay : amount;
     return { daily, monthly: (daily * daysPerYear) / 12, hourly: daily / hoursPerDay };
 };
 
 export const payUnit = (payType: string) => PAY_TYPES.find((p) => p.value === payType)?.unit ?? '';
 
-export const formatPay = (e: Pick<Employee, 'basic_pay' | 'pay_type'>) =>
-    `${formatPhpCurrency(Number(e.basic_pay))}${payUnit(e.pay_type)}`;
+export const formatPay = (e: Pick<Employee, 'basic_pay' | 'pay_type'>) => `${formatPhpCurrency(Number(e.basic_pay))}${payUnit(e.pay_type)}`;
 
 export const missingStatutory = (e: Employee) => STATUTORY_FIELDS.filter((f) => !e[f.key]);
 

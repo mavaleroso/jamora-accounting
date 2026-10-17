@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\EmployeeManagement;
 
+use App\Enums\PermissionEnum;
 use App\Http\Controllers\Controller;
 use App\Models\BenefitProgram;
 use App\Models\Employee;
@@ -27,9 +28,10 @@ class BenefitsAdministrationController extends Controller
 {
     public function __construct(protected BenefitCalculator $benefitCalculator) {}
 
-    public function index(EntityContext $entityContext): Response
+    public function index(Request $request, EntityContext $entityContext): Response
     {
         $entityId = $entityContext->id();
+        $canChangeShared = (bool) $request->user()?->can(PermissionEnum::PayrollSharedProgramsManage->value);
         $today = Carbon::today();
 
         $employees = Employee::query()
@@ -56,7 +58,7 @@ class BenefitsAdministrationController extends Controller
 
         return Inertia::render('employee-management/benefits/page', [
             'today' => $today->toDateString(),
-            'programs' => $programs->map(function (BenefitProgram $p) use ($current, $enrollments) {
+            'programs' => $programs->map(function (BenefitProgram $p) use ($current, $enrollments, $canChangeShared) {
                 $live = $current->where('benefit_program_id', $p->id);
 
                 return [
@@ -66,6 +68,7 @@ class BenefitsAdministrationController extends Controller
                     'employee_rate' => (float) $p->employee_rate,
                     'employer_rate' => (float) $p->employer_rate,
                     'is_global' => $p->entity_id === null,
+                    'editable' => $p->entity_id !== null || $canChangeShared,
                     'enrolled' => $live->count(),
                     'enrollments_total' => $enrollments->where('benefit_program_id', $p->id)->count(),
                     'monthly_employee' => round((float) $live->sum('employee_share'), 2),
@@ -85,24 +88,25 @@ class BenefitsAdministrationController extends Controller
                     'effective_date' => $b->effective_date?->toDateString(),
                     'end_date' => $b->end_date?->toDateString(),
                     'notes' => $b->notes,
+                    'needs_review' => $b->review_flagged_at !== null,
+                    'review_note' => $b->review_note,
                 ])->values(),
             'employees' => $employees->map(function (Employee $e) {
                 $monthly = $e->monthlyRate();
-                $sss = $this->benefitCalculator->computeSss($monthly);
-                $ph = $this->benefitCalculator->computePhilHealth($monthly);
-                $hdmf = $this->benefitCalculator->computePagIbig($monthly);
+                $st = $this->benefitCalculator->statutoryFor($e, $monthly);
 
                 return [
                     ...$e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department', 'pay_type']),
                     'basic_pay' => (float) $e->basic_pay,
                     'monthly_rate' => round($monthly, 2),
                     'statutory' => [
-                        'sss' => ['employee' => (float) $sss['employee_share'], 'employer' => round($sss['employer_share'] - ($sss['ec'] ?? 0), 2), 'ec' => (float) ($sss['ec'] ?? 0), 'msc' => $sss['msc'] ?? null],
-                        'philhealth' => ['employee' => (float) $ph['employee_share'], 'employer' => (float) $ph['employer_share']],
-                        'pagibig' => ['employee' => (float) $hdmf['employee_share'], 'employer' => (float) $hdmf['employer_share']],
+                        'sss' => $st['sss'],
+                        'philhealth' => $st['philhealth'],
+                        'pagibig' => $st['pagibig'],
                     ],
+                    // An ID is not needed for a contribution the employee does not pay.
                     'missing_ids' => collect(['sss_number' => 'SSS', 'philhealth_number' => 'PhilHealth', 'pagibig_number' => 'Pag-IBIG', 'tin' => 'TIN'])
-                        ->filter(fn ($label, $field) => blank($e->{$field}))
+                        ->filter(fn ($label, $field) => blank($e->{$field}) && ($st[str_replace('_number', '', $field)]['mode'] ?? null) !== 'none')
                         ->values(),
                 ];
             })->values(),
@@ -172,7 +176,8 @@ class BenefitsAdministrationController extends Controller
             'notes' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $employeeBenefit->update($data);
+        // Saving is HR's review: the shares stand as entered.
+        $employeeBenefit->update([...$data, 'review_flagged_at' => null, 'review_note' => null]);
 
         return redirect()->back()->with('status', 'Enrollment updated.');
     }
@@ -190,7 +195,7 @@ class BenefitsAdministrationController extends Controller
             'end_date.after_or_equal' => 'The end date cannot be before the enrollment started.',
         ]);
 
-        $employeeBenefit->update(['end_date' => $data['end_date']]);
+        $employeeBenefit->update(['end_date' => $data['end_date'], 'review_flagged_at' => null, 'review_note' => null]);
 
         return redirect()->back()->with('status', 'Enrollment ends on '.Carbon::parse($data['end_date'])->format('M j, Y').'.');
     }
@@ -215,6 +220,7 @@ class BenefitsAdministrationController extends Controller
     public function updateProgram(Request $request, BenefitProgram $benefitProgram, EntityContext $entityContext): RedirectResponse
     {
         $program = $this->companyProgram($benefitProgram->id, $entityContext->id());
+        $this->assertCanChange($program, $request);
         $program->update($this->validateProgram($request, $program));
 
         return redirect()->back()->with('status', "{$program->name} updated. Existing enrollments keep their amounts.");
@@ -223,9 +229,10 @@ class BenefitsAdministrationController extends Controller
     /**
      * Archive (stops applying to payroll, no new enrollments) or restore a program.
      */
-    public function toggleProgram(BenefitProgram $benefitProgram, EntityContext $entityContext): RedirectResponse
+    public function toggleProgram(Request $request, BenefitProgram $benefitProgram, EntityContext $entityContext): RedirectResponse
     {
         $program = $this->companyProgram($benefitProgram->id, $entityContext->id());
+        $this->assertCanChange($program, $request);
         $program->update(['is_active' => ! $program->is_active]);
 
         return redirect()->back()->with('status', $program->is_active ? "{$program->name} restored." : "{$program->name} archived — it no longer applies to payroll.");
@@ -280,6 +287,19 @@ class BenefitsAdministrationController extends Controller
         }
 
         return $program;
+    }
+
+    /**
+     * A program shared by every branch changes payroll everywhere: only roles allowed to manage
+     * shared programs may edit or archive it. Enrolling a branch's own staff needs no such right.
+     */
+    private function assertCanChange(BenefitProgram $program, Request $request): void
+    {
+        if ($program->entity_id === null && ! $request->user()?->can(PermissionEnum::PayrollSharedProgramsManage->value)) {
+            throw ValidationException::withMessages([
+                'benefit_program_id' => "{$program->name} is shared by every branch. Ask someone allowed to manage shared programs to change it.",
+            ]);
+        }
     }
 
     private function assertEntity(EmployeeBenefit $enrollment, ?int $entityId): void

@@ -1,16 +1,16 @@
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
 import { formatAmount, formatDate, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
 import { Paginator, type Paginated } from '@/components/finance/paginator';
 import { StatusBadge } from '@/components/finance/status-badge';
 import InputError from '@/components/input-error';
 import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import AppLayout from '@/layouts/app-layout';
 import { hasPermission } from '@/lib/permissions';
 import type { Auth, BreadcrumbItem } from '@/types';
@@ -59,7 +59,7 @@ export default function ReconciliationsPage({ reconciliations, accounts, filters
                     description="Match each account to its bank statement: enter the ending balance, tick the cleared items, and complete when the difference is zero."
                 />
 
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     {accounts.map((a) => (
                         <Card key={a.id} className={`gap-3 ${filters.bank_account_id === a.id ? 'ring-primary ring-2' : ''}`}>
                             <CardHeader className="flex flex-row items-start justify-between gap-2">
@@ -113,67 +113,57 @@ export default function ReconciliationsPage({ reconciliations, accounts, filters
                     ))}
                 </div>
 
-                <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold">History</h2>
-                    {filters.bank_account_id && (
-                        <Button variant="ghost" size="sm" onClick={() => router.get('/banks/reconciliations')}>
-                            Show all accounts
-                        </Button>
-                    )}
-                </div>
-                <TableShell>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Account</TableHead>
-                                <TableHead>Statement date</TableHead>
-                                <TableHead className="text-right">Beginning</TableHead>
-                                <TableHead className="text-right">Statement ending</TableHead>
-                                <TableHead className="text-right">Cleared balance</TableHead>
-                                <TableHead className="text-right">Difference</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Reconciled by</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {reconciliations.data.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={8} className="text-muted-foreground h-24 text-center">
-                                        No reconciliations yet.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                reconciliations.data.map((r) => (
-                                    <TableRow
-                                        key={r.id}
-                                        className="hover:bg-muted/40 cursor-pointer"
-                                        onClick={() => router.visit(`/banks/reconciliations/${r.id}`)}
-                                    >
-                                        <TableCell className="font-medium">
-                                            {r.bank_account ? `${r.bank_account.code} · ${r.bank_account.name}` : '—'}
-                                        </TableCell>
-                                        <TableCell>{formatDate(r.statement_date)}</TableCell>
-                                        <TableCell className="text-right font-mono tabular-nums">{formatAmount(r.beginning_balance)}</TableCell>
-                                        <TableCell className="text-right font-mono tabular-nums">
-                                            {formatAmount(r.statement_ending_balance)}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono tabular-nums">{formatAmount(r.cleared_balance)}</TableCell>
-                                        <TableCell
-                                            className={`text-right font-mono tabular-nums ${Math.abs(Number(r.difference)) >= 0.005 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}
-                                        >
-                                            {formatAmount(r.difference)}
-                                        </TableCell>
-                                        <TableCell>
-                                            <StatusBadge status={r.status} />
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground text-sm">{r.reconciled_by?.name ?? '—'}</TableCell>
-                                    </TableRow>
-                                ))
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableShell>
-                <Paginator page={reconciliations} noun="reconciliations" />
+                <TableCard
+                    title="History"
+                    description="Completed and in-progress reconciliations, newest first."
+                    actions={
+                        filters.bank_account_id && (
+                            <Button variant="ghost" size="sm" onClick={() => router.get('/banks/reconciliations')}>
+                                Show all accounts
+                            </Button>
+                        )
+                    }
+                >
+                    <ListTable
+                        rows={reconciliations.data}
+                        rowKey={(r) => r.id}
+                        sequenceStart={reconciliations.from ?? 1}
+                        onRowClick={(r) => router.visit(`/banks/reconciliations/${r.id}`)}
+                        rowAccent={(r) => (Math.abs(Number(r.difference)) >= 0.005 ? 'bg-red-500' : 'bg-emerald-500')}
+                        columns={[
+                            { id: 'account', header: 'Account', className: 'font-medium', cell: (r) => (r.bank_account ? `${r.bank_account.code} · ${r.bank_account.name}` : '—') },
+                            { id: 'date', header: 'Statement date', className: 'whitespace-nowrap', cell: (r) => formatDate(r.statement_date) },
+                            { id: 'beginning', header: 'Beginning', align: 'right', minScreen: 'xl', className: 'font-mono tabular-nums', cell: (r) => formatAmount(r.beginning_balance) },
+                            { id: 'ending', header: 'Statement ending', align: 'right', minScreen: 'lg', className: 'font-mono tabular-nums', cell: (r) => formatAmount(r.statement_ending_balance) },
+                            { id: 'cleared', header: 'Cleared balance', align: 'right', minScreen: 'lg', className: 'font-mono tabular-nums', cell: (r) => formatAmount(r.cleared_balance) },
+                            {
+                                id: 'difference',
+                                header: 'Difference',
+                                align: 'right',
+                                cell: (r) => (
+                                    <span className={`font-mono tabular-nums ${Math.abs(Number(r.difference)) >= 0.005 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                        {formatAmount(r.difference)}
+                                    </span>
+                                ),
+                            },
+                            { id: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
+                            { id: 'by', header: 'Reconciled by', minScreen: 'xl', className: 'text-sm text-muted-foreground', cell: (r) => r.reconciled_by?.name ?? '—' },
+                        ]}
+                        mobileRow={(r) => (
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-sm font-medium">{r.bank_account ? r.bank_account.name : '—'}</span>
+                                    <StatusBadge status={r.status} />
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                    {formatDate(r.statement_date)} · difference {formatAmount(r.difference)}
+                                </div>
+                            </div>
+                        )}
+                        empty={<TableEmpty title="No reconciliations yet" description="Start one from a bank account card above." />}
+                    />
+                    <Paginator page={reconciliations} />
+                </TableCard>
             </PageBody>
 
             {starting && <StartDialog account={starting} onClose={() => setStarting(null)} />}
@@ -184,14 +174,21 @@ export default function ReconciliationsPage({ reconciliations, accounts, filters
 function StartDialog({ account, onClose }: { account: AccountBoard; onClose: () => void }) {
     const form = useForm({ bank_account_id: account.id, statement_date: todayIso(), statement_ending_balance: '' });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
     return (
         <Dialog open onOpenChange={(o) => !o && onClose()}>
             <DialogContent className="sm:max-w-md">
                 <form
                     className="grid gap-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: `Start a reconciliation for ${account.name}?`,
+                            description: `A statement dated ${data.statement_date} with an ending balance of ${formatAmount(Number(data.statement_ending_balance) || 0, { currency: true })} is opened for ticking. You can discard it later.`,
+                            confirmLabel: 'Start reconciliation',
+                        });
+                        if (!ok) return;
                         form.post('/banks/reconciliations');
                     }}
                 >

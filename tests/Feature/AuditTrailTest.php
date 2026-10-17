@@ -116,3 +116,48 @@ test('the audit trail needs its permission', function () {
     $user->entities()->attach($this->entity->id, ['is_default' => true]);
     $this->actingAs($user)->withSession(['current_entity_id' => $this->entity->id])->get('/admin/audit-trails')->assertForbidden();
 });
+
+test('signing in and out are recorded with the user, IP address and device', function () {
+    $user = User::factory()->create(['username' => 'sally', 'password' => 'secret-pass', 'status' => true]);
+    $user->assignRole(Role::findOrCreate('Accountant', 'web')); // users without a role cannot sign in
+    AuditTrail::query()->delete();
+
+    $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.7'])->withHeader('User-Agent', 'AuditTest/1.0')
+        ->post('/login', ['username' => 'sally', 'password' => 'secret-pass'])->assertRedirect();
+    $this->assertAuthenticatedAs($user);
+
+    $login = AuditTrail::where('event', 'login')->firstOrFail();
+    expect($login->user_id)->toBe($user->id)
+        ->and($login->subject_type)->toBe(User::class)
+        ->and($login->subject_id)->toBe((string) $user->id)
+        ->and($login->description)->toBe('Signed in with password')
+        ->and($login->ip_address)->toBe('10.0.0.7')
+        ->and($login->user_agent)->toBe('AuditTest/1.0');
+
+    $this->post('/logout')->assertRedirect();
+    $this->assertGuest();
+
+    $logout = AuditTrail::where('event', 'logout')->firstOrFail();
+    expect($logout->user_id)->toBe($user->id)->and($logout->description)->toBe('Signed out');
+});
+
+test('a failed sign-in is not recorded as a login', function () {
+    User::factory()->create(['username' => 'sally', 'password' => 'secret-pass', 'status' => true])->assignRole(Role::findOrCreate('Accountant', 'web'));
+
+    $this->post('/login', ['username' => 'sally', 'password' => 'wrong']);
+    $this->assertGuest();
+
+    expect(AuditTrail::where('event', 'login')->exists())->toBeFalse();
+});
+
+test('sign-ins can be filtered and are counted apart from changes', function () {
+    app(AuditLogger::class)->authEvent('login', $this->admin, 'Signed in with password');
+
+    ($this->as)()->get('/admin/audit-trails?event=login')->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('filters.event', 'login')
+            ->has('items', 1)
+            ->where('items.0.event', 'login')
+            ->where('summary.week.logins', 1)
+            ->where('summary.today', 0));
+});

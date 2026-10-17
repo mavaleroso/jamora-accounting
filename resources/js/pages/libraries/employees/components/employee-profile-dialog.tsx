@@ -1,52 +1,29 @@
-import { AlertTriangle, Fingerprint, Mail, Pencil, Phone } from 'lucide-react';
-import * as React from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Skeleton } from '@/components/ui/skeleton';
 import { formatPhpCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
+import { AlertTriangle, CalendarCheck, ClipboardList, History, LayoutGrid, Lock, Pencil, ReceiptText, RefreshCw } from 'lucide-react';
+import * as React from 'react';
 import {
-    addMonths,
-    CIVIL_STATUSES,
     EMPLOYMENT_STATUSES,
     EMPLOYMENT_TYPES,
-    formatDate,
     formatPay,
     fullName,
-    missingStatutory,
+    labelOf,
     payEquivalents,
-    PROBATION_MONTHS,
-    restDayLabel,
-    shiftRange,
-    STATUTORY_FIELDS,
     statusBadgeClass,
     tenure,
     typeBadgeClass,
-    labelOf,
-    leaveTypesLabel,
     type Employee,
     type LeaveTypeOption,
     type Policy,
 } from '../lib';
 import { EmployeeAvatar } from './employee-avatar';
-
-function Item({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
-    return (
-        <div className="min-w-0">
-            <dt className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
-            <dd className={cn('mt-0.5 truncate text-sm', mono && 'font-mono')}>{children || <span className="text-muted-foreground">—</span>}</dd>
-        </div>
-    );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-    return (
-        <section className="space-y-3">
-            <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{title}</h3>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">{children}</dl>
-        </section>
-    );
-}
+import { ActivityTab, AttendanceTab, PayrollTab, RequestsTab } from './profile/history-tabs';
+import { OverviewTab } from './profile/overview-tab';
+import { useEmployeeOverview, type EmployeeOverview } from './profile/types';
 
 type Props = {
     open: boolean;
@@ -57,28 +34,66 @@ type Props = {
     onEdit: (employee: Employee) => void;
 };
 
+type TabId = 'overview' | 'payroll' | 'requests' | 'attendance' | 'activity';
+
+const TABS: { id: TabId; label: string; icon: typeof LayoutGrid; permission?: keyof EmployeeOverview['can'] }[] = [
+    { id: 'overview', label: 'Overview', icon: LayoutGrid },
+    { id: 'payroll', label: 'Payroll', icon: ReceiptText, permission: 'payroll' },
+    { id: 'requests', label: 'Requests', icon: ClipboardList, permission: 'requests' },
+    { id: 'attendance', label: 'Time & attendance', icon: CalendarCheck, permission: 'attendance' },
+    { id: 'activity', label: 'Activity log', icon: History, permission: 'activity' },
+];
+
+/** A headline figure in the profile header. */
+function Stat({ label, value, hint, loading }: { label: string; value: React.ReactNode; hint?: React.ReactNode; loading?: boolean }) {
+    return (
+        <div className="min-w-0 px-4 py-3">
+            <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">{label}</p>
+            {loading ? (
+                <Skeleton className="mt-1 h-5 w-24" />
+            ) : (
+                <p className="mt-0.5 truncate font-mono text-base font-semibold tabular-nums">{value}</p>
+            )}
+            {hint && !loading && <p className="text-muted-foreground truncate text-[11px]">{hint}</p>}
+        </div>
+    );
+}
+
 export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy, leaveTypes, onEdit }: Props) {
+    const [tab, setTab] = React.useState<TabId>('overview');
+    const { data, loading, error, reload } = useEmployeeOverview(e?.id ?? null, open);
+
+    // Each employee opens on the overview.
+    React.useEffect(() => {
+        if (open) setTab('overview');
+    }, [open, e?.id]);
+
     if (!e) return null;
 
-    const missing = missingStatutory(e);
     const service = tenure(e.hire_date, e.separation_date);
     const equivalents = payEquivalents(e.pay_type, Number(e.basic_pay), policy);
-    const probationEnds =
-        e.employment_type === 'probationary' && !e.regularization_date ? addMonths(e.hire_date, PROBATION_MONTHS) : null;
-    const shift = e.default_shift_template;
+    const vl = data?.leave.find((b) => b.code === 'VL');
+    const sl = data?.leave.find((b) => b.code === 'SL');
+    const pending = data?.requests?.counts.pending ?? 0;
+    const allowed = (t: (typeof TABS)[number]) => !t.permission || !data || data.can[t.permission];
+
+    const counts: Partial<Record<TabId, number>> = {
+        payroll: data?.payroll?.payslips.length,
+        requests: pending || undefined,
+        activity: data?.activity?.items.length,
+    };
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="flex max-h-[92vh] flex-col gap-0 p-0 sm:max-w-2xl">
-                <DialogHeader className="border-b px-6 pt-6 pb-5">
-                    <div className="flex items-start gap-4 pr-6">
+            <DialogContent className="flex max-h-[94vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl md:h-[min(92vh,920px)]">
+                {/* Header */}
+                <DialogHeader className="border-b px-6 pt-6 pb-4">
+                    <div className="flex flex-col gap-4 pr-6 sm:flex-row sm:items-start">
                         <EmployeeAvatar employee={e} className="size-16 text-lg" />
                         <div className="min-w-0 flex-1 text-left">
                             <DialogTitle className="text-xl">{fullName(e)}</DialogTitle>
-                            <DialogDescription className="mt-1">
-                                {[e.position, e.department].filter(Boolean).join(' · ') || 'No position assigned'}
-                            </DialogDescription>
-                            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                            <DialogDescription className="mt-0.5">{e.position || 'No position assigned'}</DialogDescription>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                 <Badge variant="outline" className="font-mono">
                                     {e.employee_code}
                                 </Badge>
@@ -95,122 +110,124 @@ export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy,
                                 )}
                             </div>
                         </div>
+                        <Button onClick={() => onEdit(e)} className="shrink-0">
+                            <Pencil className="size-4" />
+                            Edit
+                        </Button>
                     </div>
                 </DialogHeader>
 
-                <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
-                    {(missing.length > 0 || probationEnds || !e.biometric_id) && e.employment_status === 'active' && (
-                        <div className="space-y-1.5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                            {missing.length > 0 && (
-                                <div className="flex items-center gap-2">
-                                    <AlertTriangle className="size-3.5 shrink-0" />
-                                    Missing statutory IDs: {missing.map((m) => m.label).join(', ')}
-                                </div>
-                            )}
-                            {!e.biometric_id && (
-                                <div className="flex items-center gap-2">
-                                    <AlertTriangle className="size-3.5 shrink-0" />
-                                    No biometric ID — time clock punches can’t be matched.
-                                </div>
-                            )}
-                            {probationEnds && (
-                                <div className="flex items-center gap-2">
-                                    <AlertTriangle className="size-3.5 shrink-0" />
-                                    Probation ends {formatDate(probationEnds)} — review for regularization.
-                                </div>
-                            )}
+                {/* Headline figures */}
+                <div className="bg-muted/30 grid grid-cols-2 divide-x divide-y border-b sm:grid-cols-4 sm:divide-y-0">
+                    <Stat
+                        label="Service"
+                        value={service || '—'}
+                        hint={
+                            e.hire_date
+                                ? `Since ${new Date(`${e.hire_date.slice(0, 10)}T00:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                                : undefined
+                        }
+                    />
+                    <Stat label="Basic rate" value={formatPay(e)} hint={`${formatPhpCurrency(equivalents.monthly)} a month`} />
+                    <Stat
+                        label={data?.payroll ? `Net pay · ${data.payroll.year}` : 'Net pay'}
+                        loading={loading && !data}
+                        value={data?.payroll ? formatPhpCurrency(data.payroll.ytd.net) : '—'}
+                        hint={
+                            data?.payroll
+                                ? `${data.payroll.ytd.payslips} released payslip${data.payroll.ytd.payslips === 1 ? '' : 's'}`
+                                : data
+                                  ? 'No payroll access'
+                                  : undefined
+                        }
+                    />
+                    <Stat
+                        label="Leave available"
+                        loading={loading && !data}
+                        value={vl || sl ? [vl && `VL ${vl.available ?? 0}`, sl && `SL ${sl.available ?? 0}`].filter(Boolean).join(' · ') : '—'}
+                        hint={pending ? `${pending} request${pending === 1 ? '' : 's'} pending` : 'Days this year'}
+                    />
+                </div>
+
+                {/* Tabs */}
+                <div className="border-b px-4">
+                    <div role="tablist" aria-label="Employee profile" className="-mb-px flex gap-1 overflow-x-auto">
+                        {TABS.filter(allowed).map((t) => {
+                            const Icon = t.icon;
+                            const active = t.id === tab;
+                            const count = counts[t.id];
+                            return (
+                                <button
+                                    key={t.id}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={active}
+                                    onClick={() => setTab(t.id)}
+                                    className={cn(
+                                        'inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors',
+                                        active ? 'border-primary text-foreground' : 'text-muted-foreground hover:text-foreground border-transparent',
+                                    )}
+                                >
+                                    <Icon className="size-4" />
+                                    {t.label}
+                                    {count ? (
+                                        <span
+                                            className={cn(
+                                                'rounded-full px-1.5 text-[10px] leading-4 font-semibold tabular-nums',
+                                                t.id === 'requests' ? 'bg-amber-500 text-white' : 'bg-muted text-muted-foreground',
+                                            )}
+                                        >
+                                            {count}
+                                        </span>
+                                    ) : null}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Body */}
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                    {error && (
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+                            <span className="flex items-center gap-2">
+                                <AlertTriangle className="size-4" /> {error}
+                            </span>
+                            <Button size="sm" variant="outline" onClick={reload}>
+                                <RefreshCw className="size-3.5" /> Try again
+                            </Button>
                         </div>
                     )}
 
-                    <Section title="Contact & personal">
-                        <Item label="Email">
-                            {e.email && (
-                                <a href={`mailto:${e.email}`} className="inline-flex items-center gap-1 hover:underline">
-                                    <Mail className="size-3.5 text-muted-foreground" />
-                                    {e.email}
-                                </a>
-                            )}
-                        </Item>
-                        <Item label="Mobile">
-                            {e.phone && (
-                                <a href={`tel:${e.phone}`} className="inline-flex items-center gap-1 hover:underline">
-                                    <Phone className="size-3.5 text-muted-foreground" />
-                                    {e.phone}
-                                </a>
-                            )}
-                        </Item>
-                        <Item label="Sex / civil status">
-                            {[e.gender && (e.gender === 'female' ? 'Female' : 'Male'), e.civil_status && labelOf(CIVIL_STATUSES, e.civil_status)]
-                                .filter(Boolean)
-                                .join(' · ')}
-                        </Item>
-                    </Section>
+                    {tab === 'overview' && <OverviewTab employee={e} policy={policy} leaveTypes={leaveTypes} data={data} loading={loading} />}
 
-                    <Section title="Employment">
-                        <Item label="Hire date">
-                            {e.hire_date && (
-                                <>
-                                    {formatDate(e.hire_date)}
-                                    {service && <span className="text-muted-foreground"> · {service}</span>}
-                                </>
-                            )}
-                        </Item>
-                        <Item label="Regularized">{e.regularization_date && formatDate(e.regularization_date)}</Item>
-                        {e.separation_date && <Item label="Separated">{formatDate(e.separation_date)}</Item>}
-                        <Item label="Biometric ID" mono>
-                            {e.biometric_id && (
-                                <span className="inline-flex items-center gap-1">
-                                    <Fingerprint className="size-3.5 text-muted-foreground" />
-                                    {e.biometric_id}
-                                </span>
-                            )}
-                        </Item>
-                        <Item label="Default shift">{shift ? `${shift.name} (${shiftRange(shift)})` : 'Company default'}</Item>
-                        <Item label="Rest days">{restDayLabel(e.rest_days, policy.defaultRestDays)}</Item>
-                    </Section>
+                    {tab !== 'overview' && loading && !data && (
+                        <div className="space-y-3">
+                            <Skeleton className="h-16 w-full" />
+                            <Skeleton className="h-64 w-full" />
+                        </div>
+                    )}
 
-                    <Section title="Compensation">
-                        <Item label="Basic rate" mono>
-                            {formatPay(e)}
-                        </Item>
-                        <Item label="Daily / hourly" mono>
-                            {formatPhpCurrency(equivalents.daily)} / {formatPhpCurrency(equivalents.hourly)}
-                        </Item>
-                        <Item label="Monthly equivalent" mono>
-                            {formatPhpCurrency(equivalents.monthly)}
-                        </Item>
-                        <Item label="Payroll bank">{e.bank_name}</Item>
-                        <Item label="Account no." mono>
-                            {e.bank_account_no}
-                        </Item>
-                    </Section>
-
-                    <Section title="Leave">
-                        <Item label="Can file">{leaveTypesLabel(e.leave_type_ids, leaveTypes)}</Item>
-                        <Item label="Opening VL / SL">
-                            {Number(e.vacation_leave_credits ?? 0)} / {Number(e.sick_leave_credits ?? 0)} days
-                        </Item>
-                    </Section>
-
-                    <Section title="Government IDs">
-                        {STATUTORY_FIELDS.map((f) => (
-                            <Item key={f.key} label={f.label} mono>
-                                {e[f.key] || <span className="font-sans text-amber-600 dark:text-amber-400">Missing</span>}
-                            </Item>
-                        ))}
-                    </Section>
-                </div>
-
-                <div className="flex justify-end gap-2 border-t px-6 py-4">
-                    <Button variant="outline" onClick={() => onOpenChange(false)}>
-                        Close
-                    </Button>
-                    <Button onClick={() => onEdit(e)}>
-                        <Pencil className="size-4" />
-                        Edit
-                    </Button>
+                    {tab !== 'overview' && data && (
+                        <>
+                            {tab === 'payroll' && (data.payroll ? <PayrollTab payroll={data.payroll} /> : <NoAccess what="payroll" />)}
+                            {tab === 'requests' && (data.requests ? <RequestsTab requests={data.requests} /> : <NoAccess what="requests" />)}
+                            {tab === 'attendance' &&
+                                (data.attendance ? <AttendanceTab attendance={data.attendance} /> : <NoAccess what="time records" />)}
+                            {tab === 'activity' && (data.activity ? <ActivityTab activity={data.activity} /> : <NoAccess what="the activity log" />)}
+                        </>
+                    )}
                 </div>
             </DialogContent>
         </Dialog>
+    );
+}
+
+function NoAccess({ what }: { what: string }) {
+    return (
+        <div className="text-muted-foreground flex flex-col items-center gap-2 rounded-xl border border-dashed px-4 py-10 text-center text-sm">
+            <Lock className="size-6 opacity-60" />
+            Your role does not include access to {what}.
+        </div>
     );
 }

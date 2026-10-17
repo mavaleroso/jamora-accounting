@@ -13,6 +13,7 @@ import {
 import * as React from 'react';
 import AppLayout from '@/layouts/app-layout';
 import Heading from '@/components/heading';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -108,6 +109,7 @@ export default function ShiftRosterPage({
 
     const [isShiftModalOpen, setIsShiftModalOpen] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const confirm = useConfirm();
 
     // Form state
     const [formState, setFormState] = React.useState({
@@ -202,8 +204,15 @@ export default function ShiftRosterPage({
         }
     };
 
-    const handleSaveShift = (e: React.FormEvent) => {
+    const handleSaveShift = async (e: React.FormEvent) => {
         e.preventDefault();
+        const emp = employees.find((x) => String(x.id) === formState.employee_id);
+        const ok = await confirm({
+            title: 'Save this schedule?',
+            description: `${emp ? `${emp.firstname} ${emp.lastname}` : 'The employee'} is scheduled ${formState.is_rest_day ? 'as a rest day' : `for ${formState.shift_start}–${formState.shift_end}`} on ${formState.roster_date}.`,
+            confirmLabel: 'Save schedule',
+        });
+        if (!ok) return;
         setIsSubmitting(true);
 
         router.post('/employee-management/roster', formState, {
@@ -216,7 +225,13 @@ export default function ShiftRosterPage({
         });
     };
 
-    const handlePublishRoster = () => {
+    const handlePublishRoster = async () => {
+        const ok = await confirm({
+            title: 'Publish this week’s roster?',
+            description: `Schedules for ${weekStart} to ${weekEnd} become visible to employees in their portal.`,
+            confirmLabel: 'Publish roster',
+        });
+        if (!ok) return;
         setIsSubmitting(true);
         router.post(
             '/employee-management/roster/publish',

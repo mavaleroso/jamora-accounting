@@ -4,6 +4,7 @@ namespace App\Http\Controllers\EmployeeManagement;
 
 use App\Http\Controllers\Controller;
 use App\Models\AttendanceRequest;
+use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Holiday;
 use App\Models\LeaveRequest;
@@ -16,6 +17,8 @@ use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -322,18 +325,20 @@ class ShiftRosterController extends Controller
         }
 
         $validated = $request->validate([
-            'employee_id' => ['required', 'exists:employees,id'],
+            'employee_id' => ['required', Rule::exists('employees', 'id')->where('entity_id', $entityId)],
             'roster_date' => ['required', 'date'],
             'shift_template_id' => ['nullable', 'exists:shift_templates,id'],
             'shift_name' => ['required', 'string', 'max:100'],
-            'shift_start' => ['nullable'],
-            'shift_end' => ['nullable'],
+            'shift_start' => ['nullable', 'date_format:H:i,H:i:s'],
+            'shift_end' => ['nullable', 'date_format:H:i,H:i:s'],
             'break_minutes' => ['nullable', 'integer', 'min:0', 'max:240'],
             'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:60'],
             'is_rest_day' => ['boolean'],
             'status' => ['nullable', 'in:draft,published'],
             'notes' => ['nullable', 'string', 'max:255'],
         ]);
+
+        $this->assertDayOpen((int) $validated['employee_id'], $validated['roster_date']);
 
         $isRestDay = (bool) ($validated['is_rest_day'] ?? false);
         $status = $validated['status'] ?? ShiftRoster::STATUS_PUBLISHED;
@@ -363,6 +368,7 @@ class ShiftRosterController extends Controller
                 'notes' => $validated['notes'] ?? null,
             ]
         );
+        $this->recomputeDays((int) $validated['employee_id'], $validated['roster_date'], $validated['roster_date']);
 
         return redirect()->back()->with('status', 'Shift updated successfully.');
     }
@@ -380,6 +386,7 @@ class ShiftRosterController extends Controller
                 'published_at' => now(),
                 'published_by' => $request->user()?->id,
             ]);
+        $this->recomputeDays(null, $weekStart, $endOfWeek);
 
         return redirect()->back()->with('status', 'Roster for this week has been published.');
     }
@@ -390,7 +397,9 @@ class ShiftRosterController extends Controller
             abort(403);
         }
 
+        $this->assertDayOpen($roster->employee_id, $roster->roster_date->toDateString());
         $roster->delete();
+        $this->recomputeDays($roster->employee_id, $roster->roster_date->toDateString(), $roster->roster_date->toDateString());
 
         return redirect()->back()->with('status', 'Shift assignment removed.');
     }
@@ -413,7 +422,8 @@ class ShiftRosterController extends Controller
         }
 
         foreach ($sourceRosters as $src) {
-            $dayOffset = Carbon::parse($src->roster_date)->diffInDays($sourceWeekStart);
+            // Carbon 3 diffs are signed: measure from the week start forward so the offset is 0–6.
+            $dayOffset = (int) $sourceWeekStart->diffInDays(Carbon::parse($src->roster_date));
             $targetDate = (clone $targetWeekStart)->addDays($dayOffset)->toDateString();
 
             ShiftRoster::updateOrCreate(
@@ -437,6 +447,35 @@ class ShiftRosterController extends Controller
         }
 
         return redirect()->back()->with('status', 'Previous week roster copied as drafts. Review and publish when ready.');
+    }
+
+    /**
+     * A day already paid by an approved payroll keeps the schedule it was paid on.
+     */
+    private function assertDayOpen(int $employeeId, string $date): void
+    {
+        $locked = DtrEntry::query()
+            ->where('employee_id', $employeeId)
+            ->whereDate('work_date', $date)
+            ->where('status', DtrEntry::STATUS_LOCKED)
+            ->exists();
+
+        if ($locked) {
+            throw ValidationException::withMessages(['roster_date' => 'Payroll for this day is already approved, so its shift can no longer change.']);
+        }
+    }
+
+    /**
+     * Re-run lateness, undertime and overtime for time records already on these days, against the new schedule.
+     */
+    private function recomputeDays(?int $employeeId, string $from, string $to): void
+    {
+        DtrEntry::query()
+            ->whereBetween('work_date', [$from, $to])
+            ->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId))
+            ->where('status', '!=', DtrEntry::STATUS_LOCKED)
+            ->get()
+            ->each(fn (DtrEntry $dtr) => $this->attendanceCalculator->compute($dtr)->save());
     }
 
     public function storeTemplate(Request $request, EntityContext $entityContext): RedirectResponse

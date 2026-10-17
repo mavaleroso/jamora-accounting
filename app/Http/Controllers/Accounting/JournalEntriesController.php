@@ -12,6 +12,7 @@ use App\Models\AccountingPeriod;
 use App\Models\CostCenter;
 use App\Models\Journal;
 use App\Models\JournalEntry;
+use App\Services\Accounting\CashMovementService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -30,7 +31,11 @@ class JournalEntriesController extends Controller
         $pageSize = (int) $request->get('per_page', 20);
         $pageSize = max(1, min(100, $pageSize));
 
+        // ?status=pending opens the approval queue (linked from the dashboard).
+        $status = in_array($request->query('status'), ['draft', 'pending', 'posted', 'void'], true) ? $request->query('status') : '';
+
         $query = $this->baseQuery();
+        $this->applyListFilters($query, ['status' => $status]);
         $paginator = $query->paginate($pageSize);
         $resource = JournalEntryResource::collection(collect($paginator->items()))->toArray($request);
 
@@ -39,6 +44,7 @@ class JournalEntriesController extends Controller
             'total' => $paginator->total(),
             'pageSize' => $pageSize,
             'journals' => $this->journalOptions(),
+            'initialStatus' => $status,
         ]);
     }
 
@@ -111,6 +117,7 @@ class JournalEntriesController extends Controller
             'lines.account',
             'lines.costCenter',
             'preparedByUser',
+            'approvedByUser',
             'postedByUser',
             'voidedByUser',
         ]);
@@ -181,18 +188,37 @@ class JournalEntriesController extends Controller
         }
     }
 
+    /**
+     * Manual entries (the Accountant's or the Retainer's adjustments) reach the ledger only when
+     * someone with journals.approve — the owner, unless granted to others — approves them.
+     * System drafts (e.g. optical sync) are posted with journals.post.
+     */
     public function post(Request $request, JournalEntry $journalEntry): RedirectResponse|JsonResponse
     {
+        $user = $request->user();
+        $manual = $journalEntry->source_system === 'manual';
+
         try {
-            $this->journalPostingService->post($journalEntry, $request->user());
+            if ($manual && ! $user->can('journals.approve')) {
+                throw new AccountingException('Manual entries are posted when the Executive approves them. Submit the entry for approval.');
+            }
+            if (! $manual && ! $user->can('journals.post')) {
+                throw new AccountingException('You are not allowed to post this entry.');
+            }
+
+            $manual
+                ? $this->journalPostingService->approveAndPost($journalEntry, $user)
+                : $this->journalPostingService->post($journalEntry, $user);
+
+            $message = $manual ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.';
 
             if ($request->expectsJson()) {
-                return response()->json(['message' => 'Journal entry posted successfully.']);
+                return response()->json(['message' => $message]);
             }
 
             return redirect()
                 ->back()
-                ->with('status', 'Journal entry posted successfully.');
+                ->with('status', $message);
         } catch (AccountingException $e) {
             if ($request->expectsJson()) {
                 return response()->json(['message' => $e->getMessage()], 422);
@@ -246,7 +272,7 @@ class JournalEntriesController extends Controller
             'accounts' => Account::query()
                 ->where('is_postable', true)
                 ->where('is_active', true)
-                ->whereNotIn('id', app(\App\Services\Accounting\CashMovementService::class)->cashAccountIds())
+                ->whereNotIn('id', app(CashMovementService::class)->cashAccountIds())
                 ->orderBy('code')
                 ->get(['id', 'code', 'name'])
                 ->map(fn (Account $account) => [

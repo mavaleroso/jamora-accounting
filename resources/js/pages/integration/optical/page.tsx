@@ -2,6 +2,7 @@ import { Head, Link, router } from '@inertiajs/react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { AlertTriangleIcon, PlayIcon, RefreshCwIcon } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import { DataTable } from '@/components/data-table';
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header';
 import Heading from '@/components/heading';
@@ -87,7 +88,15 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount }: Props) {
     const [to, setTo] = React.useState('');
     const [syncing, setSyncing] = React.useState(false);
 
-    const handleSync = () => {
+    const confirm = useConfirm();
+    const handleSync = async () => {
+        const range = from || to ? `from ${from || 'the last sync'} to ${to || 'today'}` : 'since the last sync';
+        const ok = await confirm({
+            title: 'Run the optical sync?',
+            description: `Completed orders and payments ${range} are pulled from the Optical POS and turned into journal entries.`,
+            confirmLabel: 'Run sync',
+        });
+        if (!ok) return;
         setSyncing(true);
         router.post(
             '/integration/optical/run',
@@ -149,19 +158,14 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount }: Props) {
                     </CardContent>
                 </Card>
 
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Sync History</CardTitle>
-                        <CardDescription>Recent sync runs from manual triggers and the hourly scheduler.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <DataTable
-                            columns={columns}
-                            data={runs}
-                            initialSorting={[{ id: 'started_at', desc: true }]}
-                        />
-                    </CardContent>
-                </Card>
+                <DataTable
+                    title="Sync History"
+                    description="Recent sync runs from manual triggers and the hourly scheduler."
+                    columns={columns}
+                    data={runs}
+                    initialSorting={[{ id: 'started_at', desc: true }]}
+                    emptyTitle="No sync runs yet"
+                />
             </div>
         </AppLayout>
     );

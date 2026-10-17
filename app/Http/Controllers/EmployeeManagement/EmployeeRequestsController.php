@@ -14,6 +14,7 @@ use App\Services\People\EmployeeRequestFeed;
 use App\Services\People\EmployeeResolver;
 use App\Services\People\LeaveService;
 use App\Support\EntityContext;
+use App\Support\PrivateFiles;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Employee Requests — one place to file and decide every request an employee can make:
@@ -34,7 +36,7 @@ use Inertia\Response;
  *  - Employee (linked employee, cannot approve): files requests, tracks them, sees own balances.
  *  - Approver (leave.approve and/or attendance.manage, or payroll.manage): approvals inbox for the
  *    kinds they may decide, who's out, team history and balances, filing on behalf.
- *  - Viewer (view rights, no linked employee, cannot approve — e.g. Auditor): team history and
+ *  - Viewer (view rights, no linked employee, cannot approve — e.g. Accounting Retainer): team history and
  *    balances, read-only.
  */
 class EmployeeRequestsController extends Controller
@@ -72,11 +74,11 @@ class EmployeeRequestsController extends Controller
         $kind = in_array($request->query('kind'), self::KINDS, true) ? $request->query('kind') : '';
         $status = in_array($request->query('status'), [...self::STATUSES, 'all'], true) ? $request->query('status') : 'all';
         $employeeId = $view === 'all' ? ($request->integer('employee_id') ?: null) : null;
-        // History table: search, sort and page size (the approvals inbox keeps oldest-first).
+        // Tables: search, sort and page size (the approvals inbox defaults to oldest-first).
         $search = trim((string) $request->query('q', ''));
         $sort = in_array($request->query('sort'), ['filed', 'date'], true) ? $request->query('sort') : '';
         $dir = $request->query('dir') === 'asc' ? 'asc' : 'desc';
-        $perPage = in_array($request->integer('per_page'), [10, 15, 25, 50], true) ? $request->integer('per_page') : 15;
+        $perPage = in_array($request->integer('per_page'), [10, 15, 25, 50, 100], true) ? $request->integer('per_page') : 15;
         // Time corrections are decided on the day itself in Time & Attendance › Timesheets, not here.
         $approvable = array_values(array_diff($this->approvableKinds($perspective), [AttendanceRequest::TYPE_CORRECTION]));
 
@@ -91,13 +93,13 @@ class EmployeeRequestsController extends Controller
                 'all' => $scope->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId)),
             };
             $scope->when($kind !== '', fn ($q) => $q->where('kind', $kind));
-            $scope->when($search !== '' && $view !== 'inbox', function ($q) use ($search, $view, $entityId) {
+            $scope->when($search !== '', function ($q) use ($search, $view, $entityId) {
                 $like = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $search).'%';
                 $q->where(function ($w) use ($like, $view, $entityId) {
                     $w->where('reason', 'like', $like)
                         ->orWhere('destination', 'like', $like)
                         ->orWhere('type_name', 'like', $like);
-                    if ($view === 'all') {
+                    if ($view !== 'mine') {
                         $w->orWhereIn('employee_id', Employee::query()->where('entity_id', $entityId)
                             ->where(fn ($e) => $e->where('firstname', 'like', $like)->orWhere('lastname', 'like', $like)->orWhere('employee_code', 'like', $like))
                             ->select('id'));
@@ -108,12 +110,13 @@ class EmployeeRequestsController extends Controller
             $statusCounts = (clone $scope)->selectRaw('status, count(*) as total')->groupBy('status')->pluck('total', 'status');
 
             $rows = $scope
-                ->when($view === 'inbox', fn ($q) => $q->where('status', 'pending')->orderBy('created_at'))
+                ->when($view === 'inbox', fn ($q) => $q->where('status', 'pending'))
                 ->when($view !== 'inbox' && $status !== 'all', fn ($q) => $q->where('status', $status))
-                ->when($view !== 'inbox' && $sort === '', fn ($q) => $q->orderByRaw("case when status = 'pending' then 0 else 1 end")->orderByDesc('created_at'))
-                ->when($view !== 'inbox' && $sort !== '', fn ($q) => $q->orderBy($sort === 'date' ? 'date_from' : 'created_at', $dir))
+                ->when($sort === '' && $view === 'inbox', fn ($q) => $q->orderBy('created_at'))
+                ->when($sort === '' && $view !== 'inbox', fn ($q) => $q->orderByRaw("case when status = 'pending' then 0 else 1 end")->orderByDesc('created_at'))
+                ->when($sort !== '', fn ($q) => $q->orderBy($sort === 'date' ? 'date_from' : 'created_at', $dir))
                 ->orderByDesc('id')
-                ->paginate($view === 'inbox' ? 15 : $perPage)
+                ->paginate($perPage)
                 ->withQueryString();
 
             $feed = $rows->setCollection($this->requestFeed->present($rows->getCollection()));
@@ -225,7 +228,7 @@ class EmployeeRequestsController extends Controller
                 'end_date' => $validated['end_date'],
                 'half_day' => $validated['half_day'] ?? null,
                 'reason' => $validated['reason'],
-                'attachment_path' => $request->file('attachment')?->store('leave-attachments', 'public'),
+                'attachment_path' => $request->file('attachment')?->store('leave-attachments', PrivateFiles::DISK),
             ], $user);
             $label = $leaveType->name;
         } else {
@@ -276,10 +279,29 @@ class EmployeeRequestsController extends Controller
         $this->assertEntity($leaveRequest->entity_id, $entityContext);
         $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'leave.approve');
 
+        // Once approved leave has begun, only HR can withdraw it (the days may already be paid).
+        if ($leaveRequest->status === LeaveRequest::STATUS_APPROVED
+            && $leaveRequest->start_date->lte(Carbon::today())
+            && ! $this->employeeResolver->isHr($request->user(), 'leave.approve')) {
+            throw ValidationException::withMessages(['status' => 'This leave has already started. Ask HR to cancel it.']);
+        }
+
         $reason = $request->validate(['reason' => ['nullable', 'string', 'max:255']])['reason'] ?? null;
         $this->leaveService->cancel($leaveRequest, $request->user(), $reason ?: 'Withdrawn by the employee.');
 
         return redirect()->back()->with('status', 'Leave request cancelled and credits restored.');
+    }
+
+    /**
+     * The supporting document of a leave request, for the employee who filed it and leave approvers.
+     */
+    public function leaveAttachment(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): StreamedResponse
+    {
+        $this->assertEntity($leaveRequest->entity_id, $entityContext);
+        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'leave.approve');
+        abort_unless($leaveRequest->attachment_path, 404);
+
+        return PrivateFiles::response($leaveRequest->attachment_path);
     }
 
     public function cancelAttendance(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
