@@ -83,7 +83,7 @@ class PayrollCalculator
             $to = $employee->separation_date->copy()->startOfDay();
         }
 
-        $days = ['worked' => 0.0, 'absent' => 0, 'paid_leave' => 0.0, 'unpaid_leave' => 0.0, 'unworked_holiday' => 0, 'not_employed' => 0, 'no_record' => 0];
+        $days = ['worked' => 0.0, 'absent' => 0.0, 'paid_leave' => 0.0, 'unpaid_leave' => 0.0, 'unworked_holiday' => 0, 'not_employed' => 0, 'no_record' => 0];
         $hoursWorked = 0.0;
         $lateMinutes = 0;
         $undertimeMinutes = 0;
@@ -98,12 +98,14 @@ class PayrollCalculator
         $incomplete = 0;
 
         $byDate = $dtrs->keyBy(fn (DtrEntry $d) => Carbon::parse($d->work_date)->toDateString());
-        $restDays = $employee->restDayNumbers();
 
         foreach (CarbonPeriod::create($period->start_date, $period->end_date) as $date) {
             $d = $date->toDateString();
             $dtr = $byDate->get($d);
-            $isRestDay = in_array($date->dayOfWeek, $restDays, true);
+            // A recorded day carries its own schedule; otherwise the published roster / shift template decides.
+            $isRestDay = $dtr?->day_type
+                ? str_contains($dtr->day_type, 'rest_day')
+                : $this->attendance->scheduleFor($employee, $date)->isRestDay;
 
             if ($date->lt($from) || $date->gt($to)) {
                 if (! $isRestDay && ! $this->isHoliday($employee->entity_id, $date)) {
@@ -148,11 +150,16 @@ class PayrollCalculator
                 continue;
             }
 
+            // Half-day leave: the leave half is credited here; the other half was either worked or missed.
+            $leave = $dtr->leave_request_id ? $leaves->get($dtr->leave_request_id) : null;
+            $leaveDay = $leave?->half_day ? 0.5 : 1.0;
+            $paid = $leave?->type ? (bool) $leave->type->is_paid : true;
+
             if ($status === 'on_leave') {
-                $leave = $leaves->get($dtr->leave_request_id);
-                $portion = $leave?->half_day ? 0.5 : 1.0;
-                $paid = $leave?->type ? (bool) $leave->type->is_paid : true;
-                $days[$paid ? 'paid_leave' : 'unpaid_leave'] += $portion;
+                $days[$paid ? 'paid_leave' : 'unpaid_leave'] += $leaveDay;
+                if ($leaveDay < 1) {
+                    $days['absent'] += 0.5;
+                }
 
                 continue;
             }
@@ -168,7 +175,12 @@ class PayrollCalculator
             }
 
             $hours = min((float) $hoursPerDay, (float) $dtr->regular_hours);
-            $days['worked']++;
+            if ($leave && $leaveDay < 1) {
+                $days[$paid ? 'paid_leave' : 'unpaid_leave'] += 0.5;
+                $days['worked'] += 0.5;
+            } else {
+                $days['worked']++;
+            }
             $hoursWorked += (float) $dtr->regular_hours;
             $lateMinutes += (int) round((float) $dtr->tardiness_minutes);
             $undertimeMinutes += (int) round((float) $dtr->undertime_minutes);
@@ -262,19 +274,20 @@ class PayrollCalculator
         // monthly salary. Daily / hourly-paid: what was actually earned this cut-off, scaled to a month.
         $share = $this->contributionShare($period);
         $contributionBase = $payType === 'monthly' ? $monthlyRate : max(0, $basicEarned) * $period->periodsPerMonth();
-        $sss = $philhealth = $pagibig = ['employee_share' => 0.0, 'employer_share' => 0.0, 'ec' => 0.0, 'msc' => null];
+        // Computed from the tables on the salary, unless set to "not deducted" on the employee record.
+        $zero = ['employee' => 0.0, 'employer' => 0.0, 'ec' => 0.0, 'msc' => null, 'mode' => 'auto'];
+        $statutory = ['sss' => $zero, 'philhealth' => $zero, 'pagibig' => $zero];
         if ($gross > 0 && $share > 0) {
-            $sss = $this->benefits->computeSss($contributionBase);
-            $philhealth = $this->benefits->computePhilHealth($contributionBase);
-            $pagibig = $this->benefits->computePagIbig($contributionBase);
+            $statutory = $this->benefits->statutoryFor($employee, $contributionBase);
         }
+        ['sss' => $sss, 'philhealth' => $philhealth, 'pagibig' => $pagibig] = $statutory;
         $sssEc = round((float) ($sss['ec'] ?? 0) * $share, 2);
-        $sssEe = round($sss['employee_share'] * $share, 2);
-        $sssEr = round($sss['employer_share'] * $share, 2) - $sssEc; // employer share excluding EC
-        $phEe = round($philhealth['employee_share'] * $share, 2);
-        $phEr = round($philhealth['employer_share'] * $share, 2);
-        $hdmfEe = round($pagibig['employee_share'] * $share, 2);
-        $hdmfEr = round($pagibig['employer_share'] * $share, 2);
+        $sssEe = round($sss['employee'] * $share, 2);
+        $sssEr = round(($sss['employer'] + ($sss['ec'] ?? 0)) * $share, 2) - $sssEc; // employer share excluding EC
+        $phEe = round($philhealth['employee'] * $share, 2);
+        $phEr = round($philhealth['employer'] * $share, 2);
+        $hdmfEe = round($pagibig['employee'] * $share, 2);
+        $hdmfEr = round($pagibig['employer'] * $share, 2);
         $eeContributions = $sssEe + $phEe + $hdmfEe;
 
         // Withholding tax.
@@ -301,8 +314,11 @@ class PayrollCalculator
         if ($openRecords > 0) {
             $warnings[] = "{$openRecords} time record(s) not yet approved.";
         }
+        $idFor = ['sss_number' => 'sss', 'philhealth_number' => 'philhealth', 'pagibig_number' => 'pagibig'];
         foreach (['sss_number' => 'SSS', 'philhealth_number' => 'PhilHealth', 'pagibig_number' => 'Pag-IBIG', 'tin' => 'TIN'] as $field => $label) {
-            if (blank($employee->{$field})) {
+            // No ID is needed for a contribution the employee does not pay.
+            $notDeducted = isset($idFor[$field]) && $employee->contributionMode($idFor[$field]) === 'none';
+            if (! $notDeducted && blank($employee->{$field})) {
                 $warnings[] = "No {$label} number on file.";
             }
         }
@@ -347,6 +363,8 @@ class PayrollCalculator
                 'contribution_share' => $share,
                 'contribution_base' => round($contributionBase, 2),
                 'sss_msc' => $sss['msc'] ?? null,
+                // Contributions set to "not deducted" on the employee record, for the payslip.
+                'contribution_modes' => array_filter(array_map(fn (array $c) => $c['mode'], $statutory), fn (string $m) => $m !== 'auto'),
                 'adjustments' => $adjustments->map(fn (PayrollAdjustment $a) => [
                     'id' => $a->id,
                     'kind' => $a->kind,

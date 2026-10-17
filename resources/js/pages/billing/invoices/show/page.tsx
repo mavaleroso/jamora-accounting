@@ -1,4 +1,4 @@
-import { ConfirmDialog } from '@/components/confirm-dialog';
+import { ConfirmDialog, useConfirm } from '@/components/confirm-dialog';
 import { daysPastDue, formatAmount, formatDate, paymentMethodLabels, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
 import { StatusBadge } from '@/components/finance/status-badge';
@@ -373,9 +373,16 @@ function PaymentDialog({
     const { data, setData, errors, processing } = form;
     const needsBank = ['check', 'bank_transfer'].includes(data.payment_method);
     const needsRef = data.payment_method !== 'cash';
+    const confirm = useConfirm();
 
-    const submit = (e: React.FormEvent) => {
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const ok = await confirm({
+            title: 'Record this collection?',
+            description: `${formatPhpCurrency(Number(data.amount) || 0)} will be posted as received against invoice ${invoice.invoice_no}. Posted receipts cannot be edited.`,
+            confirmLabel: 'Record collection',
+        });
+        if (!ok) return;
         form.transform((d) => ({ ...d, bank_account_id: needsBank ? d.bank_account_id : null }));
         form.post(`/billing/invoices/${invoice.id}/collect`, {
             preserveScroll: true,
@@ -510,6 +517,7 @@ function DepositDialog({
         applied_date: todayIso(),
     });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
     const choose = (id: string) => {
         const dep = deposits.find((d) => String(d.id) === id);
@@ -525,8 +533,14 @@ function DepositDialog({
             <DialogContent className="sm:max-w-lg">
                 <form
                     className="grid gap-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: 'Apply this deposit?',
+                            description: `${formatPhpCurrency(Number(data.amount) || 0)} of the customer's deposit will be applied to invoice ${invoice.invoice_no} and posted.`,
+                            confirmLabel: 'Apply deposit',
+                        });
+                        if (!ok) return;
                         form.post(`/billing/invoices/${invoice.id}/apply-deposit`, { preserveScroll: true, onSuccess: () => onOpenChange(false) });
                     }}
                 >

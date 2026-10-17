@@ -49,7 +49,7 @@ class BillsController extends Controller
             ->orderByRaw("case when status in ('posted','partially_paid') then 0 when status = 'draft' then 1 else 2 end")
             ->orderBy('due_date')
             ->orderByDesc('id')
-            ->paginate(15)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         $open = Bill::query()->whereIn('status', ['posted', 'partially_paid']);

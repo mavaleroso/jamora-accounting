@@ -6,6 +6,7 @@ use App\Models\AuditTrail;
 use App\Support\EntityContext;
 use BackedEnum;
 use DateTimeInterface;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -15,8 +16,8 @@ use Throwable;
 
 /**
  * Records every Eloquent create / update / delete / restore with before and after values, plus
- * role & permission assignments (Spatie events) and write requests that changed no model (bulk
- * query updates). Rows written while handling one request or command share a batch id.
+ * role & permission assignments (Spatie events), sign-ins and sign-outs, and write requests that
+ * changed no model (bulk query updates). Rows written while handling one request or command share a batch id.
  *
  * Registered as a singleton; wired up in AppServiceProvider.
  */
@@ -140,6 +141,32 @@ class AuditLogger
             'old_values' => $how === 'detached' ? [$relation => $names] : null,
             'new_values' => $how === 'attached' ? [$relation => $names] : null,
             'description' => ucfirst($how).' '.$relation.': '.implode(', ', $names),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Sessions
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * A sign-in or sign-out, recorded against the user with the IP address and device.
+     *
+     * @param  'login'|'logout'  $event
+     */
+    public function authEvent(string $event, Authenticatable $user, string $description): void
+    {
+        if (! $this->enabled) {
+            return;
+        }
+
+        $this->write([
+            'event' => $event,
+            'action' => $event,
+            'user_id' => $user->getAuthIdentifier(),
+            'subject_type' => $user instanceof Model ? $user::class : null,
+            'subject_id' => (string) $user->getAuthIdentifier(),
+            'subject_label' => $user instanceof Model ? $this->label($user) : null,
+            'description' => $description,
         ]);
     }
 

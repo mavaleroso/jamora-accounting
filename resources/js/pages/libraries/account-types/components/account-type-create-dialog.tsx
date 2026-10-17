@@ -1,6 +1,7 @@
 import { router } from '@inertiajs/react';
 import * as React from 'react';
 
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -24,11 +25,15 @@ export function AccountTypeCreateDialog({
     errors = {},
 }: AccountTypeCreateDialogProps) {
     const [processing, setProcessing] = React.useState(false);
+    const confirm = useConfirm();
 
-    const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const form = e.currentTarget;
         const formData = new FormData(form);
+        const label = [formData.get('code'), formData.get('name')].filter(Boolean).join(' · ');
+        const ok = await confirm({ title: 'Create this account type?', description: `${label || 'The new account type'} will be added and available across the app.`, confirmLabel: 'Create' });
+        if (!ok) return;
         setProcessing(true);
         router.post('/libraries/account-types', formData, {
             preserveScroll: true,

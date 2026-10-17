@@ -8,7 +8,6 @@ use App\Models\User;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 /**
  * Leave requests and day-level attendance requests as one feed, in one display shape.
@@ -90,7 +89,7 @@ class EmployeeRequestFeed
                 'is_paid' => (bool) ($l->type?->is_paid ?? true),
                 'days' => (float) $l->days_count,
                 'half_day' => $l->half_day,
-                'attachment_url' => $l->attachment_path ? Storage::disk('public')->url($l->attachment_path) : null,
+                'attachment_url' => $l->attachment_path ? route('employee-management.requests.leave.attachment', $l->id) : null,
             ],
         ];
     }

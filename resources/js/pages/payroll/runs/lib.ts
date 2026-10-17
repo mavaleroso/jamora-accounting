@@ -86,7 +86,15 @@ export type PayslipRow = {
     meta: {
         pay_type?: string;
         rates?: { monthly: number; daily: number; hourly: number };
-        days?: { worked: number; absent: number; paid_leave: number; unpaid_leave: number; unworked_holiday: number; not_employed: number; no_record: number };
+        days?: {
+            worked: number;
+            absent: number;
+            paid_leave: number;
+            unpaid_leave: number;
+            unworked_holiday: number;
+            not_employed: number;
+            no_record: number;
+        };
         hours_worked?: number;
         late_minutes?: number;
         undertime_minutes?: number;
@@ -96,6 +104,8 @@ export type PayslipRow = {
         contribution_share?: number;
         contribution_base?: number;
         sss_msc?: number | null;
+        /** Contributions set to "not deducted" on the employee record. */
+        contribution_modes?: Partial<Record<'sss' | 'philhealth' | 'pagibig', 'none'>>;
         adjustments?: { id: number; kind: 'earning' | 'deduction'; category: string; description: string; amount: number; taxable: boolean }[];
         benefits?: PayslipBenefit[];
         warnings?: string[];

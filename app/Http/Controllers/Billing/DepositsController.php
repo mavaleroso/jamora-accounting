@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\BankAccount;
 use App\Models\CustomerDeposit;
+use App\Models\InvoicePayment;
 use App\Models\Journal;
 use App\Models\Partner;
 use App\Services\Accounting\CashMovementService;
@@ -46,7 +47,7 @@ class DepositsController extends Controller
             ->when($filters['date_to'], fn ($q, $d) => $q->whereDate('deposit_date', '<=', $d))
             ->orderByDesc('deposit_date')
             ->orderByDesc('id')
-            ->paginate(15)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         $open = CustomerDeposit::query()->where('status', 'open');
@@ -57,7 +58,7 @@ class DepositsController extends Controller
             'summary' => [
                 'liability' => round((float) (clone $open)->sum(DB::raw('amount - applied_amount')), 2),
                 'openCount' => (clone $open)->count(),
-                'appliedMtd' => round((float) \App\Models\InvoicePayment::query()
+                'appliedMtd' => round((float) InvoicePayment::query()
                     ->where('payment_method', 'deposit')
                     ->whereDate('paid_date', '>=', now('Asia/Manila')->startOfMonth()->toDateString())
                     ->sum('amount'), 2),

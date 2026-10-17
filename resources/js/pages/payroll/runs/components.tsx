@@ -1,6 +1,4 @@
-import { Link, useForm } from '@inertiajs/react';
-import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
-import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import InputError from '@/components/input-error';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
@@ -10,6 +8,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import { Link, useForm } from '@inertiajs/react';
+import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
+import * as React from 'react';
 import { DAY_TYPE_LABEL, fmtRange, PAY_TYPE, PAYROLL_URL, peso, TONE, type AdjustmentCategory, type PayslipRow } from './lib';
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -22,7 +23,7 @@ function Line({ label, value, note, negative, strong }: { label: string; value: 
         <div className={cn('flex items-baseline justify-between gap-4 py-0.5 text-sm', strong && 'mt-1 border-t pt-1.5 font-semibold')}>
             <span className={cn(!strong && 'text-muted-foreground')}>
                 {label}
-                {note && <span className="ml-1 text-[11px] text-muted-foreground/80">({note})</span>}
+                {note && <span className="text-muted-foreground/80 ml-1 text-[11px]">({note})</span>}
             </span>
             <span className={cn('font-mono tabular-nums', negative && value && 'text-rose-600 dark:text-rose-400')}>
                 {negative && value ? '−' : ''}
@@ -34,7 +35,7 @@ function Line({ label, value, note, negative, strong }: { label: string; value: 
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div>
-        <p className="mb-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">{title}</p>
+        <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">{title}</p>
         {children}
     </div>
 );
@@ -43,6 +44,7 @@ export function PayslipDialog({
     payslip: p,
     period,
     editable,
+    selfService = false,
     onClose,
     onAdd,
     onRemoveAdjustment,
@@ -50,9 +52,11 @@ export function PayslipDialog({
     payslip: PayslipRow | null;
     period: { start_date: string; end_date: string; pay_date: string | null };
     editable: boolean;
+    /** The employee viewing their own payslip: no payroll-team warnings or admin hints. */
+    selfService?: boolean;
     onClose: () => void;
-    onAdd: (employeeId: number) => void;
-    onRemoveAdjustment: (id: number) => void;
+    onAdd?: (employeeId: number) => void;
+    onRemoveAdjustment?: (id: number) => void;
 }) {
     const m = p?.meta ?? {};
     const days = m.days;
@@ -67,7 +71,12 @@ export function PayslipDialog({
                     <>
                         <DialogHeader>
                             <div className="flex items-center gap-3">
-                                <PersonAvatar src={p.employee?.avatar_url} seed={p.employee?.employee_code ?? String(p.id)} name={p.employee?.name} className="size-10" />
+                                <PersonAvatar
+                                    src={p.employee?.avatar_url}
+                                    seed={p.employee?.employee_code ?? String(p.id)}
+                                    name={p.employee?.name}
+                                    className="size-10"
+                                />
                                 <div>
                                     <DialogTitle>{p.employee?.name}</DialogTitle>
                                     <DialogDescription>
@@ -78,7 +87,7 @@ export function PayslipDialog({
                         </DialogHeader>
 
                         {/* Basis */}
-                        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-3 text-xs sm:grid-cols-4">
+                        <div className="bg-muted/30 grid grid-cols-2 gap-2 rounded-lg border p-3 text-xs sm:grid-cols-4">
                             <div>
                                 <p className="text-muted-foreground">{PAY_TYPE[p.employee?.pay_type ?? 'monthly']}</p>
                                 <p className="font-mono font-medium">{peso(p.employee?.basic_rate)}</p>
@@ -107,7 +116,7 @@ export function PayslipDialog({
                             )}
                         </div>
 
-                        {(m.warnings ?? []).length > 0 && (
+                        {!selfService && (m.warnings ?? []).length > 0 && (
                             <ul className={cn('space-y-0.5 rounded-md border px-3 py-2 text-xs', p.net_pay < 0 ? TONE.rose : TONE.amber)}>
                                 {m.warnings!.map((w) => (
                                     <li key={w} className="flex gap-1.5">
@@ -121,17 +130,39 @@ export function PayslipDialog({
                             <div className="space-y-4">
                                 <Section title="Earnings">
                                     <Line label="Basic pay" value={p.basic_pay} />
-                                    <Line label="Absences" value={p.absences} note={days ? `${days.absent + days.not_employed}d` : undefined} negative />
-                                    <Line label="Late & undertime" value={p.tardiness} note={m.late_minutes || m.undertime_minutes ? `${(m.late_minutes ?? 0) + (m.undertime_minutes ?? 0)} min` : undefined} negative />
+                                    <Line
+                                        label="Absences"
+                                        value={p.absences}
+                                        note={days ? `${days.absent + days.not_employed}d` : undefined}
+                                        negative
+                                    />
+                                    <Line
+                                        label="Late & undertime"
+                                        value={p.tardiness}
+                                        note={
+                                            m.late_minutes || m.undertime_minutes
+                                                ? `${(m.late_minutes ?? 0) + (m.undertime_minutes ?? 0)} min`
+                                                : undefined
+                                        }
+                                        negative
+                                    />
                                     <Line label="Unpaid leave" value={p.unpaid_leave} note={days ? `${days.unpaid_leave}d` : undefined} negative />
                                     <Line label="Overtime" value={p.ot_pay} note={m.ot_hours ? `${m.ot_hours}h approved` : undefined} />
                                     {Object.entries(m.premiums ?? {}).map(([type, amount]) => (
                                         <Line key={type} label={DAY_TYPE_LABEL[type] ?? type} value={amount} />
                                     ))}
                                     {days && days.unworked_holiday > 0 && p.employee?.pay_type !== 'monthly' && (
-                                        <Line label="Regular holiday pay" value={days.unworked_holiday * (rates?.daily ?? 0)} note={`${days.unworked_holiday}d`} />
+                                        <Line
+                                            label="Regular holiday pay"
+                                            value={days.unworked_holiday * (rates?.daily ?? 0)}
+                                            note={`${days.unworked_holiday}d`}
+                                        />
                                     )}
-                                    <Line label="Night differential" value={p.night_diff_pay} note={m.night_diff_hours ? `${m.night_diff_hours}h` : undefined} />
+                                    <Line
+                                        label="Night differential"
+                                        value={p.night_diff_pay}
+                                        note={m.night_diff_hours ? `${m.night_diff_hours}h` : undefined}
+                                    />
                                     <Line label="Taxable allowances" value={p.taxable_allowances} />
                                     <Line label="Non-taxable allowances" value={p.non_taxable_allowances} />
                                     <Line label="Gross pay" value={p.gross_pay} strong />
@@ -152,7 +183,11 @@ export function PayslipDialog({
                                     <Line label="SSS" value={p.sss} note={m.sss_msc ? `MSC ${peso(m.sss_msc)}` : undefined} />
                                     <Line label="PhilHealth" value={p.philhealth} />
                                     <Line label="Pag-IBIG" value={p.pagibig} />
-                                    <Line label="Withholding tax" value={p.withholding_tax} note={p.is_mwe ? 'MWE — exempt' : `on ${peso(p.taxable_income)}`} />
+                                    <Line
+                                        label="Withholding tax"
+                                        value={p.withholding_tax}
+                                        note={p.is_mwe ? 'MWE — exempt' : `on ${peso(p.taxable_income)}`}
+                                    />
                                     {adjustments
                                         .filter((a) => a.kind === 'deduction')
                                         .map((a) => (
@@ -166,10 +201,19 @@ export function PayslipDialog({
 
                                 <div className="flex items-center justify-between rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5 dark:border-emerald-800 dark:bg-emerald-950/40">
                                     <span className="text-sm font-semibold">Net pay</span>
-                                    <span className={cn('font-mono text-lg font-semibold', p.net_pay < 0 ? 'text-rose-600' : 'text-emerald-700 dark:text-emerald-400')}>{peso(p.net_pay)}</span>
+                                    <span
+                                        className={cn(
+                                            'font-mono text-lg font-semibold',
+                                            p.net_pay < 0 ? 'text-rose-600' : 'text-emerald-700 dark:text-emerald-400',
+                                        )}
+                                    >
+                                        {peso(p.net_pay)}
+                                    </span>
                                 </div>
-                                <p className="text-[11px] text-muted-foreground">
-                                    {p.employee?.bank_name ? `Credited to ${p.employee.bank_name} ${p.employee.bank_account_hint ?? ''}` : 'No payroll bank account — pay by cash or cheque.'}
+                                <p className="text-muted-foreground text-[11px]">
+                                    {p.employee?.bank_name
+                                        ? `Credited to ${p.employee.bank_name} ${p.employee.bank_account_hint ?? ''}`
+                                        : 'No payroll bank account — pay by cash or cheque.'}
                                     {' · '}13th month accrual {peso(p.thirteenth_month_accrual)}
                                 </p>
 
@@ -178,7 +222,12 @@ export function PayslipDialog({
                                         <ul className="space-y-1">
                                             {benefits.map((b) => (
                                                 <li key={b.id} className="flex items-center gap-2 text-sm">
-                                                    <span className={cn('rounded px-1.5 text-[10px] font-medium', b.mode === 'earning' ? TONE.emerald : TONE.violet)}>
+                                                    <span
+                                                        className={cn(
+                                                            'rounded px-1.5 text-[10px] font-medium',
+                                                            b.mode === 'earning' ? TONE.emerald : TONE.violet,
+                                                        )}
+                                                    >
                                                         {b.mode === 'earning' ? (b.taxable ? 'Taxable' : 'Non-taxable') : 'Contribution'}
                                                     </span>
                                                     <span className="min-w-0 flex-1 truncate">{b.name}</span>
@@ -188,30 +237,43 @@ export function PayslipDialog({
                                                 </li>
                                             ))}
                                         </ul>
-                                        <p className="mt-1 text-[11px] text-muted-foreground">
-                                            From enrollments in{' '}
-                                            <Link href="/employee-management/benefits" className="underline underline-offset-2">
-                                                Benefits Admin
-                                            </Link>
-                                            . Recompute the draft after changing them.
-                                        </p>
+                                        {!selfService && (
+                                            <p className="text-muted-foreground mt-1 text-[11px]">
+                                                From enrollments in{' '}
+                                                <Link href="/employee-management/benefits" className="underline underline-offset-2">
+                                                    Benefits Admin
+                                                </Link>
+                                                . Recompute the draft after changing them.
+                                            </p>
+                                        )}
                                     </Section>
                                 )}
 
                                 <Section title="Adjustments">
                                     {adjustments.length === 0 ? (
-                                        <p className="text-xs text-muted-foreground">None on this payroll.</p>
+                                        <p className="text-muted-foreground text-xs">None on this payroll.</p>
                                     ) : (
                                         <ul className="space-y-1">
                                             {adjustments.map((a) => (
                                                 <li key={a.id} className="flex items-center gap-2 text-sm">
-                                                    <span className={cn('rounded px-1.5 text-[10px] font-medium', a.kind === 'earning' ? TONE.emerald : TONE.rose)}>
+                                                    <span
+                                                        className={cn(
+                                                            'rounded px-1.5 text-[10px] font-medium',
+                                                            a.kind === 'earning' ? TONE.emerald : TONE.rose,
+                                                        )}
+                                                    >
                                                         {a.kind === 'earning' ? (a.taxable ? 'Taxable' : 'Non-taxable') : 'Deduction'}
                                                     </span>
                                                     <span className="min-w-0 flex-1 truncate">{a.description}</span>
                                                     <span className="font-mono text-xs">{peso(a.amount)}</span>
                                                     {editable && (
-                                                        <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" aria-label={`Remove ${a.description}`} onClick={() => onRemoveAdjustment(a.id)}>
+                                                        <Button
+                                                            size="icon"
+                                                            variant="ghost"
+                                                            className="text-muted-foreground size-7"
+                                                            aria-label={`Remove ${a.description}`}
+                                                            onClick={() => onRemoveAdjustment?.(a.id)}
+                                                        >
                                                             <Trash2 className="size-3.5" />
                                                         </Button>
                                                     )}
@@ -220,7 +282,7 @@ export function PayslipDialog({
                                         </ul>
                                     )}
                                     {editable && p.employee && (
-                                        <Button size="sm" variant="outline" className="mt-2" onClick={() => onAdd(p.employee!.id)}>
+                                        <Button size="sm" variant="outline" className="mt-2" onClick={() => onAdd?.(p.employee!.id)}>
                                             <Plus className="size-3.5" /> Add adjustment
                                         </Button>
                                     )}
@@ -256,23 +318,51 @@ export function AdjustmentDialog({
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-md">
-                {open && <AdjustmentForm runId={runId} employeeId={employeeId} payslips={payslips} categories={categories} onDone={() => onOpenChange(false)} />}
+                {open && (
+                    <AdjustmentForm
+                        runId={runId}
+                        employeeId={employeeId}
+                        payslips={payslips}
+                        categories={categories}
+                        onDone={() => onOpenChange(false)}
+                    />
+                )}
             </DialogContent>
         </Dialog>
     );
 }
 
-function AdjustmentForm({ runId, employeeId, payslips, categories, onDone }: { runId: number; employeeId: number | null; payslips: PayslipRow[]; categories: AdjustmentCategory[]; onDone: () => void }) {
+function AdjustmentForm({
+    runId,
+    employeeId,
+    payslips,
+    categories,
+    onDone,
+}: {
+    runId: number;
+    employeeId: number | null;
+    payslips: PayslipRow[];
+    categories: AdjustmentCategory[];
+    onDone: () => void;
+}) {
     const form = useForm({ employee_id: employeeId ? String(employeeId) : '', category: 'allowance', description: '', amount: '', taxable: true });
     const { data, setData, errors, processing } = form;
     const category = categories.find((c) => c.key === data.category);
     const isEarning = category?.kind === 'earning';
+    const confirm = useConfirm();
 
     return (
         <form
             className="space-y-4"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
                 e.preventDefault();
+                const person = payslips.find((p) => String(p.employee?.id) === data.employee_id)?.employee?.name;
+                const ok = await confirm({
+                    title: `Add this ${isEarning ? 'earning' : 'deduction'}?`,
+                    description: `${peso(Number(data.amount) || 0)} ${category?.label ? `(${category.label}) ` : ''}is added to ${person ?? 'the employee'}'s payslip and the draft is recomputed.`,
+                    confirmLabel: 'Add adjustment',
+                });
+                if (!ok) return;
                 form.transform((d) => ({ ...d, taxable: isEarning ? d.taxable : false }));
                 form.post(`${PAYROLL_URL}/${runId}/adjustments`, { preserveScroll: true, onSuccess: onDone });
             }}
@@ -333,11 +423,23 @@ function AdjustmentForm({ runId, employeeId, payslips, categories, onDone }: { r
             <div className="grid grid-cols-[1fr_140px] gap-3">
                 <div className="space-y-1.5">
                     <Label className="text-xs">Description (optional)</Label>
-                    <Input value={data.description} onChange={(e) => setData('description', e.target.value)} placeholder={category?.label} maxLength={255} />
+                    <Input
+                        value={data.description}
+                        onChange={(e) => setData('description', e.target.value)}
+                        placeholder={category?.label}
+                        maxLength={255}
+                    />
                 </div>
                 <div className="space-y-1.5">
                     <Label className="text-xs">Amount (₱)</Label>
-                    <Input type="number" min="0.01" step="0.01" value={data.amount} onChange={(e) => setData('amount', e.target.value)} className="text-right font-mono" />
+                    <Input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={data.amount}
+                        onChange={(e) => setData('amount', e.target.value)}
+                        className="text-right font-mono"
+                    />
                 </div>
             </div>
             <InputError message={errors.amount ?? (errors as Record<string, string>).status} />
@@ -346,7 +448,7 @@ function AdjustmentForm({ runId, employeeId, payslips, categories, onDone }: { r
                 <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
                     <div>
                         <Label className="text-sm">Taxable</Label>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-muted-foreground text-[11px]">
                             De minimis benefits within BIR ceilings and reimbursements are not taxable (RR 11-2018). Everything else is.
                         </p>
                     </div>
@@ -385,16 +487,26 @@ export function ReleaseDialog({
     payDate: string | null;
     bankAccounts: { id: number; name: string; bank_name: string | null; account_number: string | null }[];
 }) {
-    const form = useForm({ paid_on: payDate ?? new Date().toISOString().slice(0, 10), bank_account_id: bankAccounts[0] ? String(bankAccounts[0].id) : '' });
+    const form = useForm({
+        paid_on: payDate ?? new Date().toISOString().slice(0, 10),
+        bank_account_id: bankAccounts[0] ? String(bankAccounts[0].id) : '',
+    });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-md">
                 <form
                     className="space-y-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: `Release ${peso(net)} net pay?`,
+                            description: 'The payout is posted to the books and the run is marked paid. This cannot be undone.',
+                            confirmLabel: 'Release pay',
+                        });
+                        if (!ok) return;
                         form.transform((d) => ({ ...d, bank_account_id: d.bank_account_id || null }));
                         form.post(`${PAYROLL_URL}/${runId}/pay`, { preserveScroll: true, onSuccess: () => onOpenChange(false) });
                     }}
@@ -402,8 +514,8 @@ export function ReleaseDialog({
                     <DialogHeader>
                         <DialogTitle>Release pay</DialogTitle>
                         <DialogDescription>
-                            Records the payout of {peso(net)} net pay: debits Salaries Payable and credits the paying bank. Upload the bank disbursement list to your
-                            bank first.
+                            Records the payout of {peso(net)} net pay: debits Salaries Payable and credits the paying bank. Upload the bank
+                            disbursement list to your bank first.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="grid grid-cols-2 gap-3">

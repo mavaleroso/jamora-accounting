@@ -19,6 +19,8 @@ export type Program = {
     is_taxable: boolean;
     is_active: boolean;
     is_global: boolean;
+    /** False for a program shared by every branch when the user may not manage shared programs. */
+    editable: boolean;
     default_employee_share: number;
     default_employer_share: number;
     employee_rate: number;
@@ -40,9 +42,14 @@ export type Enrollment = {
     effective_date: string | null;
     end_date: string | null;
     notes: string | null;
+    /** Flagged after a salary change: the share was worked out from salary. Cleared when HR saves the enrollment. */
+    needs_review: boolean;
+    review_note: string | null;
 };
 
 type Share = { employee: number; employer: number };
+
+export type ContributionMode = 'auto' | 'none';
 
 export type EmployeeRow = {
     id: number;
@@ -56,7 +63,12 @@ export type EmployeeRow = {
     pay_type: 'monthly' | 'daily' | 'hourly';
     basic_pay: number;
     monthly_rate: number;
-    statutory: { sss: Share & { ec: number; msc: number | null }; philhealth: Share; pagibig: Share };
+    /** mode: auto = contribution table, fixed = set on the employee record, none = not deducted. */
+    statutory: {
+        sss: Share & { ec: number; msc: number | null; mode: ContributionMode };
+        philhealth: Share & { mode: ContributionMode };
+        pagibig: Share & { mode: ContributionMode };
+    };
     missing_ids: string[];
 };
 

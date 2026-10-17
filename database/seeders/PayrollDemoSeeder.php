@@ -52,7 +52,9 @@ class PayrollDemoSeeder extends Seeder
         }
         app(EntityContext::class)->set($entity);
 
-        $user = User::query()->where('username', 'payroll')->first() ?? User::query()->orderBy('id')->first();
+        // The Accountant prepares; the owner (Admin) approves, posts and releases.
+        $user = User::query()->where('username', 'accountant')->first() ?? User::query()->orderBy('id')->first();
+        $owner = User::query()->where('username', 'admin')->first() ?? $user;
         $today = Carbon::today();
 
         // Cut-offs: the four before the current one, the current one, and the next two.
@@ -86,7 +88,7 @@ class PayrollDemoSeeder extends Seeder
                 continue;
             }
 
-            $this->runPayroll($payroll, $period, $user, self::HISTORY[$i], $bank);
+            $this->runPayroll($payroll, $period, $user, $owner, self::HISTORY[$i], $bank);
         }
     }
 
@@ -377,7 +379,7 @@ class PayrollDemoSeeder extends Seeder
         }
     }
 
-    private function runPayroll(PayrollService $payroll, PayrollPeriod $period, User $user, string $target, ?BankAccount $bank): void
+    private function runPayroll(PayrollService $payroll, PayrollPeriod $period, User $user, User $owner, string $target, ?BankAccount $bank): void
     {
         $run = null;
         try {
@@ -386,13 +388,13 @@ class PayrollDemoSeeder extends Seeder
             $run = $payroll->compute($period->fresh(), $user);
 
             if ($target !== 'draft') {
-                $run = $payroll->approve($run, $user);
+                $run = $payroll->approve($run, $owner);
             }
             if (in_array($target, ['posted', 'paid'], true)) {
-                $run = $payroll->post($run->fresh(), $user);
+                $run = $payroll->post($run->fresh(), $owner);
             }
             if ($target === 'paid') {
-                $run = $payroll->pay($run->fresh(), $user, $period->pay_date->toDateString(), $bank);
+                $run = $payroll->pay($run->fresh(), $owner, $period->pay_date->toDateString(), $bank);
             }
 
             $this->command?->info(sprintf('%s: %s — %d payslips, net ₱%s', $period->code, $run->status, $run->headcount, number_format((float) $run->net_total, 2)));

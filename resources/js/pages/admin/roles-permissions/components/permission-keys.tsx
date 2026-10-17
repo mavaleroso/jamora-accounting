@@ -1,7 +1,7 @@
 import { useForm, router } from '@inertiajs/react';
 import { Code2, Loader2, Lock, MoreHorizontal, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import * as React from 'react';
-import { ConfirmDialog } from '@/components/confirm-dialog';
+import { ConfirmDialog, useConfirm } from '@/components/confirm-dialog';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -127,9 +127,18 @@ export function PermissionKeys({ permissions, modules, roles }: { permissions: P
 function KeyForm({ permission, roles, onDone }: { permission: Permission | null; roles: Role[]; onDone: () => void }) {
     const form = useForm({ name: permission?.key ?? '', roles: permission?.roles ?? ([] as string[]) });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
-    const submit = (e: React.FormEvent) => {
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!permission) {
+            const ok = await confirm({
+                title: `Create the permission key ${data.name || ''}?`,
+                description: data.roles.length ? `It is granted to ${data.roles.join(', ')}.` : 'It is not granted to any role yet.',
+                confirmLabel: 'Create key',
+            });
+            if (!ok) return;
+        }
         if (permission) form.put(`/admin/permissions/${permission.id}`, { preserveScroll: true, onSuccess: onDone });
         else form.post('/admin/permissions', { preserveScroll: true, onSuccess: onDone });
     };

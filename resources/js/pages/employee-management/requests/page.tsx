@@ -11,7 +11,8 @@ import { CancelDialog, DecisionDialog } from './components/decision-dialogs';
 import { FileRequestDialog } from './components/file-request-dialog';
 import { KindTile } from './components/kind-tile';
 import { BalancesPanel, OutPanel } from './components/panels';
-import { RequestFeed } from './components/request-feed';
+import { RequestDataTable, type FeedChange } from './components/request-datatable';
+import { RequestTable } from './components/request-table';
 import { TeamBalances } from './components/team-balances';
 import {
     canDecide,
@@ -82,7 +83,7 @@ export default function EmployeeRequestsPage(props: Props) {
     }, []);
 
     const navigate = React.useCallback(
-        (changes: Partial<Filters> & { view?: View }) => {
+        (changes: FeedChange & { view?: View }) => {
             const viewChanged = changes.view && changes.view !== view;
             const next = viewChanged ? { view: changes.view, year } : { view, ...filters, ...changes };
             // Leave defaults out of the URL.
@@ -120,23 +121,17 @@ export default function EmployeeRequestsPage(props: Props) {
                 description: 'File leave, overtime and other requests, and follow each one until it is decided.',
             };
 
-    const sharedFeed = (extra: Partial<React.ComponentProps<typeof RequestFeed>> = {}) =>
-        feed && (
-            <RequestFeed
-                view={view}
-                feed={feed}
-                filters={filters}
-                perspective={perspective}
-                selfId={self?.id ?? null}
-                statusCounts={statusCounts}
-                kinds={view === 'mine' ? fileableKinds(perspective) : KIND_ORDER}
-                employees={employees}
-                onFilter={navigate}
-                onDecide={(item, d) => setDecision({ item, decision: d })}
-                onCancel={setCancelItem}
-                {...extra}
-            />
-        );
+    const feedProps = feed && {
+        feed,
+        filters,
+        perspective,
+        selfId: self?.id ?? null,
+        statusCounts,
+        employees,
+        onFilter: navigate,
+        onDecide: (item: RequestItem, d: 'approved' | 'declined') => setDecision({ item, decision: d }),
+        onCancel: setCancelItem,
+    };
 
     const outToday = team?.out.filter((i) => i.date_from <= today && i.date_to >= today).length ?? 0;
 
@@ -228,7 +223,14 @@ export default function EmployeeRequestsPage(props: Props) {
                                         <h2 className="text-base font-semibold">Request history</h2>
                                         <span className="text-muted-foreground text-xs">Click a row for its full details.</span>
                                     </div>
-                                    {sharedFeed({ emptyHint: 'Requests you file show up here with their approval status.' })}
+                                    {feedProps && (
+                                        <RequestTable
+                                            {...feedProps}
+                                            view="mine"
+                                            kinds={fileableKinds(perspective)}
+                                            emptyHint="Requests you file show up here with their approval status."
+                                        />
+                                    )}
                                 </section>
                             </div>
                             <aside className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1 xl:content-start">
@@ -292,7 +294,7 @@ export default function EmployeeRequestsPage(props: Props) {
                                         <ArrowRight className="size-4 shrink-0" />
                                     </Link>
                                 )}
-                                {sharedFeed({ kinds: approvable, kindCounts: badges.inboxByKind })}
+                                {feedProps && <RequestDataTable {...feedProps} view="inbox" kinds={approvable} kindCounts={badges.inboxByKind} />}
                             </div>
                             <aside className="space-y-4">
                                 <OutPanel
@@ -310,7 +312,7 @@ export default function EmployeeRequestsPage(props: Props) {
                 {/* Full width for the table; who's out sits below it. */}
                 {view === 'all' && (
                     <div className="space-y-5">
-                        {sharedFeed()}
+                        {feedProps && <RequestDataTable {...feedProps} view="all" kinds={KIND_ORDER} />}
                         {team && (
                             <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
                                 <OutPanel

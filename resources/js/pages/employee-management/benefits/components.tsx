@@ -3,6 +3,7 @@ import { Info, Loader2, Search } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
 import { PersonAvatar } from '@/components/person-avatar';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -159,8 +160,16 @@ function EnrollForm({
         setData('employee_ids', on ? [...new Set([...data.employee_ids, ...ids])] : data.employee_ids.filter((x) => !ids.includes(x)));
     };
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const n = data.employee_ids.length;
+        const ok = await confirm({
+            title: `Enroll ${n} employee${n === 1 ? '' : 's'}${program ? ` in ${program.name}` : ''}?`,
+            description: 'The enrollment applies to payroll from its effective date.',
+            confirmLabel: 'Enroll',
+        });
+        if (!ok) return;
         form.transform((d) => ({
             benefit_program_id: d.benefit_program_id,
             employee_ids: d.employee_ids,
@@ -390,6 +399,27 @@ function EnrollmentForm({ enrollment, program, employee, onDone }: { enrollment:
 
             <PayrollEffect program={program} />
 
+            {enrollment.needs_review && (
+                <div className={cn('flex flex-col gap-2 rounded-lg border px-3 py-2.5 text-xs sm:flex-row sm:items-center sm:justify-between', TONE.amber)}>
+                    <p>
+                        {enrollment.review_note} At the new salary the shares are {isEarning ? '' : `EE ${peso(defaults.employee)} · `}
+                        {isEarning ? peso(defaults.employer) : `ER ${peso(defaults.employer)}`}. Saving keeps whatever amounts you enter.
+                    </p>
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        onClick={() => {
+                            setData('employee_share', String(defaults.employee));
+                            setData('employer_share', String(defaults.employer));
+                        }}
+                    >
+                        Use updated amounts
+                    </Button>
+                </div>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-2">
                 {!isEarning && (
                     <Field label="Employee share" htmlFor="ee" error={errors.employee_share} hint={`Default ${peso(defaults.employee)}`}>
@@ -525,8 +555,17 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
                       .slice(0, 30),
         }));
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!program) {
+            const ok = await confirm({
+                title: `Create the ${data.name || 'new'} program?`,
+                description: 'The benefit program is added and employees can then be enrolled in it.',
+                confirmLabel: 'Create program',
+            });
+            if (!ok) return;
+        }
         const opts = { preserveScroll: true, onSuccess: onDone };
         if (program) form.put(`${BENEFITS_URL}/programs/${program.id}`, opts);
         else form.post(`${BENEFITS_URL}/programs`, opts);

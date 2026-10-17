@@ -41,7 +41,7 @@ function statusBadge(status: JournalEntryStatus) {
         case 'draft':
             return { variant: 'outline' as const, icon: FileTextIcon, label: 'Draft' };
         case 'pending':
-            return { variant: 'secondary' as const, icon: SendIcon, label: 'Pending' };
+            return { variant: 'secondary' as const, icon: SendIcon, label: 'For approval' };
         case 'posted':
             return { variant: 'default' as const, icon: CheckCircle2Icon, label: 'Posted' };
         case 'void':
@@ -71,6 +71,8 @@ export type JournalEntryTableActions = {
     canView: boolean;
     canEdit: boolean;
     canPost: boolean;
+    /** Manual entries are posted by approving them (journals.approve). */
+    canApprove: boolean;
     canVoid: boolean;
     canDelete: boolean;
     onView: (entry: JournalEntry) => void;
@@ -82,7 +84,7 @@ export type JournalEntryTableActions = {
 export function getJournalEntryColumns(
     actions: JournalEntryTableActions,
 ): ColumnDef<JournalEntry>[] {
-    const { canView, canEdit, canPost, canVoid, canDelete, onView, onPost, onVoid, onDelete } = actions;
+    const { canView, canEdit, canPost, canApprove, canVoid, canDelete, onView, onPost, onVoid, onDelete } = actions;
 
     return [
         {
@@ -90,7 +92,9 @@ export function getJournalEntryColumns(
             cell: ({ row }) => {
                 const entry = row.original;
                 const editable = entry.status === 'draft' || entry.status === 'pending';
-                const hasActions = canView || (canEdit && editable) || (canPost && editable) || (canVoid && entry.status === 'posted') || (canDelete && entry.status === 'draft');
+                const manual = entry.source_system === 'manual';
+                const postable = editable && (manual ? canApprove : canPost);
+                const hasActions = canView || (canEdit && editable) || postable || (canVoid && entry.status === 'posted') || (canDelete && entry.status === 'draft');
 
                 if (!hasActions) {
                     return null;
@@ -120,12 +124,12 @@ export function getJournalEntryColumns(
                                     </Link>
                                 </DropdownMenuItem>
                             ) : null}
-                            {canPost && editable ? (
+                            {postable ? (
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => onPost(entry)}>
                                         <CheckCircle2Icon className="mr-2 size-4" />
-                                        Post
+                                        {manual ? 'Approve & post' : 'Post'}
                                     </DropdownMenuItem>
                                 </>
                             ) : null}

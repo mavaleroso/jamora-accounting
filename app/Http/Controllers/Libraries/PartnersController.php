@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Libraries;
 
 use App\Http\Controllers\Controller;
+use App\Models\Invoice;
 use App\Models\Partner;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
@@ -34,7 +35,7 @@ class PartnersController extends Controller
             ->when($filters['status'] === 'active', fn ($q) => $q->where('is_active', true))
             ->when($filters['status'] === 'inactive', fn ($q) => $q->where('is_active', false))
             ->orderBy('name')
-            ->paginate(20)
+            ->paginate($this->perPage($request))
             ->withQueryString();
 
         return Inertia::render('libraries/partners/page', [
@@ -44,7 +45,7 @@ class PartnersController extends Controller
                 'total' => Partner::query()->count(),
                 'active' => Partner::query()->where('is_active', true)->count(),
                 'withBalance' => Partner::query()->whereHas('invoices', $open)->count(),
-                'outstanding' => round((float) \App\Models\Invoice::query()->whereIn('status', ['confirmed', 'partially_paid'])->sum('balance_due'), 2),
+                'outstanding' => round((float) Invoice::query()->whereIn('status', ['confirmed', 'partially_paid'])->sum('balance_due'), 2),
             ],
         ]);
     }

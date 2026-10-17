@@ -41,7 +41,7 @@ test('People Access redirects to user assignments', function () {
 });
 
 test('roles can be created from a copy, renamed and deleted', function () {
-    $payroll = Role::findByName('Payroll');
+    $payroll = Role::findByName('Accountant');
     ($this->as)()->post('/admin/roles', ['name' => 'Branch Cashier', 'description' => 'Front desk cash only', 'copy_from' => $payroll->id])
         ->assertSessionHasNoErrors();
 
@@ -72,10 +72,10 @@ test('the Admin role cannot lose access administration', function () {
 });
 
 test('users are assigned a role, replacing their current one, but not their own', function () {
-    $auditor = Role::findByName('Auditor');
+    $auditor = Role::findByName('Accounting Retainer');
 
     ($this->as)()->post("/admin/roles/{$auditor->id}/assign", ['user_ids' => [$this->other->id]])->assertSessionHasNoErrors();
-    expect($this->other->fresh()->getRoleNames()->all())->toBe(['Auditor']);
+    expect($this->other->fresh()->getRoleNames()->all())->toBe(['Accounting Retainer']);
 
     ($this->as)()->post("/admin/roles/{$auditor->id}/assign", ['user_ids' => [$this->admin->id]])->assertSessionHasErrors('user_ids');
     expect($this->admin->fresh()->hasRole('Admin'))->toBeTrue();
@@ -90,4 +90,48 @@ test('built-in permission keys cannot be renamed or deleted; custom keys can', f
     $custom = Permission::findByName('inventory.adjust');
     ($this->as)()->delete("/admin/permissions/{$custom->id}")->assertSessionHasNoErrors();
     expect(Permission::where('name', 'inventory.adjust')->exists())->toBeFalse();
+});
+
+test('the built-in roles are the owner, the accountant, the retainer and employees', function () {
+    expect(Role::pluck('name')->sort()->values()->all())->toBe(['Accountant', 'Accounting Retainer', 'Admin', 'Employee']);
+});
+
+test('the accountant does the work but the owner signs it off', function () {
+    $accountant = Role::findByName('Accountant');
+
+    foreach (['journals.create', 'journals.post', 'billing.collect', 'ap.pay', 'banks.reconcile', 'payroll.manage', 'leave.approve', 'attendance.manage', 'compliance.manage', 'portal.view'] as $permission) {
+        expect($accountant->hasPermissionTo($permission))->toBeTrue("Accountant should hold {$permission}");
+    }
+    foreach (['journals.approve', 'payroll.run', 'compliance.verify', 'periods.close', 'periods.reopen', 'journals.void', 'admin.users.manage', 'admin.roles-permissions.manage', 'admin.audit-trails.view'] as $permission) {
+        expect($accountant->hasPermissionTo($permission))->toBeFalse("Accountant should not hold {$permission}");
+    }
+});
+
+test('the accounting retainer reviews everything, drafts adjustments and can verify filings', function () {
+    $retainer = Role::findByName('Accounting Retainer');
+    $writes = $retainer->permissions->pluck('name')->reject(fn (string $p) => str_ends_with($p, '.view'))->sort()->values()->all();
+
+    expect($writes)->toBe(['compliance.verify', 'journals.create', 'journals.update', 'reports.export', 'settings.profile.manage'])
+        ->and($retainer->hasPermissionTo('journals.approve'))->toBeFalse()
+        ->and($retainer->hasPermissionTo('admin.audit-trails.view'))->toBeTrue()
+        ->and($retainer->hasPermissionTo('payroll.view'))->toBeTrue()
+        ->and($retainer->hasPermissionTo('portal.view'))->toBeFalse();
+});
+
+test('the recalibration migration moves users off retired roles', function () {
+    $legacy = Role::findOrCreate('Payroll', 'web');
+    $auditor = Role::findOrCreate('Auditor', 'web');
+    $custom = Role::findOrCreate('Branch Cashier', 'web');
+    $this->other->syncRoles([$legacy]);
+    $reviewer = User::factory()->create();
+    $reviewer->assignRole($auditor);
+    $cashier = User::factory()->create();
+    $cashier->assignRole($custom);
+
+    (require database_path('migrations/2026_10_22_100000_recalibrate_roles.php'))->up();
+
+    expect($this->other->fresh()->getRoleNames()->all())->toBe(['Accountant'])
+        ->and($reviewer->fresh()->getRoleNames()->all())->toBe(['Accounting Retainer'])
+        ->and($cashier->fresh()->getRoleNames()->all())->toBe(['Branch Cashier'])
+        ->and(Role::whereIn('name', ['Payroll', 'Auditor'])->exists())->toBeFalse();
 });

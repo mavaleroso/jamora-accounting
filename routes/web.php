@@ -1,39 +1,21 @@
 <?php
 
+use App\Enums\RoleEnum;
 use App\Http\Controllers\Accounting\AccountsController;
+use App\Http\Controllers\Accounting\CashBankTransactionsController;
 use App\Http\Controllers\Accounting\DashboardController;
 use App\Http\Controllers\Accounting\GeneralLedgerController;
 use App\Http\Controllers\Accounting\JournalEntriesController;
 use App\Http\Controllers\Accounting\PeriodsController;
-use App\Http\Controllers\Reports\BalanceSheetController;
-use App\Http\Controllers\Reports\CashFlowController;
-use App\Http\Controllers\Reports\IncomeStatementController;
-use App\Http\Controllers\Reports\JournalRegisterController;
-use App\Http\Controllers\Reports\TrialBalanceController;
 use App\Http\Controllers\Admin\AuditTrailsController;
-use App\Http\Controllers\Ap\BillsController;
-use App\Http\Controllers\Billing\DepositsController;
-use App\Http\Controllers\Billing\InvoicesController;
-use App\Http\Controllers\Banks\BankAccountsController;
-use App\Http\Controllers\Banks\ReconciliationsController;
-use App\Http\Controllers\EntitiesController;
-use App\Http\Controllers\OverviewController;
-use App\Http\Controllers\Libraries\AccountTypesController;
-use App\Http\Controllers\Libraries\CostCentersController;
-use App\Http\Controllers\Libraries\EmployeesController;
-use App\Http\Controllers\Libraries\JournalsController;
-use App\Http\Controllers\Libraries\PartnersController;
-use App\Http\Controllers\Libraries\TaxCodesController;
-use App\Http\Controllers\Libraries\VendorsController;
-use App\Http\Controllers\Payroll\DtrController;
-use App\Http\Controllers\Payroll\PayrollPeriodsController;
-use App\Http\Controllers\Payroll\PayrollRunsController;
-use App\Http\Controllers\Reports\ApAgingController;
-use App\Http\Controllers\Reports\ArAgingController;
-use App\Http\Controllers\Accounting\CashBankTransactionsController;
 use App\Http\Controllers\Admin\PermissionsController;
 use App\Http\Controllers\Admin\RolesController;
 use App\Http\Controllers\Admin\UsersController;
+use App\Http\Controllers\Ap\BillsController;
+use App\Http\Controllers\Banks\BankAccountsController;
+use App\Http\Controllers\Banks\ReconciliationsController;
+use App\Http\Controllers\Billing\DepositsController;
+use App\Http\Controllers\Billing\InvoicesController;
 use App\Http\Controllers\EmployeeManagement\AttendanceController;
 use App\Http\Controllers\EmployeeManagement\BenefitsAdministrationController;
 use App\Http\Controllers\EmployeeManagement\ComplianceController;
@@ -41,13 +23,32 @@ use App\Http\Controllers\EmployeeManagement\EmployeeDashboardController;
 use App\Http\Controllers\EmployeeManagement\EmployeePortalController;
 use App\Http\Controllers\EmployeeManagement\EmployeeRequestsController;
 use App\Http\Controllers\EmployeeManagement\LeaveManagementController;
+use App\Http\Controllers\EmployeeManagement\MyPayController;
 use App\Http\Controllers\EmployeeManagement\PeopleReportsController;
 use App\Http\Controllers\EmployeeManagement\ShiftRosterController;
+use App\Http\Controllers\EntitiesController;
 use App\Http\Controllers\Integration\InventoryIntegrationController;
 use App\Http\Controllers\Integration\OpticalSyncController;
-use App\Enums\RoleEnum;
+use App\Http\Controllers\Libraries\AccountTypesController;
+use App\Http\Controllers\Libraries\CostCentersController;
+use App\Http\Controllers\Libraries\EmployeeOverviewController;
+use App\Http\Controllers\Libraries\EmployeesController;
+use App\Http\Controllers\Libraries\JournalsController;
+use App\Http\Controllers\Libraries\PartnersController;
+use App\Http\Controllers\Libraries\TaxCodesController;
+use App\Http\Controllers\Libraries\VendorsController;
+use App\Http\Controllers\OverviewController;
+use App\Http\Controllers\Payroll\DtrController;
+use App\Http\Controllers\Payroll\PayrollPeriodsController;
+use App\Http\Controllers\Payroll\PayrollRunsController;
+use App\Http\Controllers\Reports\ApAgingController;
+use App\Http\Controllers\Reports\ArAgingController;
+use App\Http\Controllers\Reports\BalanceSheetController;
+use App\Http\Controllers\Reports\CashFlowController;
+use App\Http\Controllers\Reports\IncomeStatementController;
+use App\Http\Controllers\Reports\JournalRegisterController;
+use App\Http\Controllers\Reports\TrialBalanceController;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
 
 Route::get('/', function () {
     if (auth()->check()) {
@@ -55,6 +56,7 @@ Route::get('/', function () {
         if ($user->hasRole(RoleEnum::Employee->value)) {
             return redirect()->route('employee-management.portal.index');
         }
+
         // Everyone else lands on the Overview, which lists the modules they can access.
         return redirect()->route('overview');
     }
@@ -87,7 +89,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('{journalEntry}/edit', 'edit')->name('edit')->middleware('permission:journals.update');
             Route::put('{journalEntry}', 'update')->name('update')->middleware('permission:journals.update');
             Route::delete('{journalEntry}', 'destroy')->name('destroy')->middleware('permission:journals.delete');
-            Route::post('{journalEntry}/post', 'post')->name('post')->middleware('permission:journals.post');
+            Route::post('{journalEntry}/post', 'post')->name('post')->middleware('permission:journals.post|journals.approve');
             Route::post('{journalEntry}/void', 'void')->name('void')->middleware('permission:journals.void');
         });
 
@@ -200,6 +202,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(EmployeesController::class)->prefix('employees')->name('employees.')->middleware('permission:libraries.employees.manage')->group(function () {
             Route::get('/', 'index')->name('index');
             Route::post('/', 'store')->name('store');
+            // Profile view: balances, payroll, requests, time records and activity, loaded on open.
+            Route::get('{employee}/overview', EmployeeOverviewController::class)->name('overview');
             Route::put('{employee}', 'update')->name('update');
             Route::delete('{employee}', 'destroy')->name('destroy');
         });
@@ -368,20 +372,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/', 'store')->name('store')->middleware($any);
             Route::post('leave/{leaveRequest}/review', 'reviewLeave')->name('leave.review')->middleware('permission:leave.approve|payroll.manage');
             Route::post('leave/{leaveRequest}/cancel', 'cancelLeave')->name('leave.cancel')->middleware($any);
+            Route::get('leave/{leaveRequest}/attachment', 'leaveAttachment')->name('leave.attachment')->middleware($any);
             Route::post('attendance/{attendanceRequest}/review', 'reviewAttendance')->name('attendance.review')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('attendance/{attendanceRequest}/cancel', 'cancelAttendance')->name('attendance.cancel')->middleware($any);
         });
 
-        // Legacy leave endpoints; the page itself redirects to Employee Requests.
-        Route::controller(LeaveManagementController::class)->prefix('leave')->name('leave.')->group(function () {
-            Route::get('/', 'index')->name('index')->middleware('permission:leave.view|leave.file|leave.approve|payroll.view');
-            Route::post('/', 'store')->name('store')->middleware('permission:leave.file|payroll.manage');
-            Route::post('requests', 'store')->name('requests.store')->middleware('permission:leave.file|payroll.manage');
-            Route::post('{leaveRequest}/status', 'updateStatus')->name('status')->middleware('permission:leave.approve|payroll.manage');
-            Route::post('{leaveRequest}/approve', 'approve')->name('approve')->middleware('permission:leave.approve|payroll.manage');
-            Route::post('{leaveRequest}/decline', 'decline')->name('decline')->middleware('permission:leave.approve|payroll.manage');
-            Route::post('{leaveRequest}/cancel', 'cancel')->name('cancel')->middleware('permission:leave.file|leave.approve|payroll.manage');
-        });
+        // Old Leave page address; leave is filed, decided and cancelled in Employee Requests.
+        Route::get('leave', [LeaveManagementController::class, 'index'])->name('leave.index')
+            ->middleware('permission:leave.view|leave.file|leave.approve|payroll.view');
 
         Route::controller(BenefitsAdministrationController::class)->prefix('benefits')->name('benefits.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.manage|libraries.employees.manage');
@@ -400,6 +398,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:portal.view|payroll.view');
         });
 
+        // The employee's own pay history: payslips, contributions, tax and benefits.
+        Route::get('my-pay', [MyPayController::class, 'index'])->name('my-pay.index')->middleware('permission:portal.view');
+
         Route::controller(PeopleReportsController::class)->prefix('reports')->name('reports.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.view|dashboard.view');
             Route::get('export', 'export')->name('export')->middleware('permission:payroll.view|dashboard.view');
@@ -412,6 +413,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:compliance.view|compliance.manage|compliance.verify');
             Route::post('/', 'store')->name('store')->middleware('permission:compliance.manage');
             Route::post('generate-calendar', 'generateCalendar')->name('generate-calendar')->middleware('permission:compliance.manage');
+            Route::get('{complianceItem}/evidence', 'evidence')->name('evidence')->middleware('permission:compliance.view|compliance.manage|compliance.verify');
             Route::post('{complianceItem}/status', 'updateStatus')->name('status')->middleware('permission:compliance.manage');
             Route::post('{complianceItem}/verify', 'verify')->name('verify')->middleware('permission:compliance.verify');
             Route::post('{complianceItem}/return', 'returnForCorrection')->name('return')->middleware('permission:compliance.verify');

@@ -4,7 +4,7 @@ export type AuditTrailUser = {
     username: string | null;
 };
 
-export type AuditEvent = 'created' | 'updated' | 'deleted' | 'restored' | 'request';
+export type AuditEvent = 'created' | 'updated' | 'deleted' | 'restored' | 'request' | 'login' | 'logout';
 
 /** One audited change (App\Http\Resources\AuditTrailResource). */
 export type AuditTrail = {
@@ -58,11 +58,13 @@ export type JournalEntry = {
     total_credit: number;
     source_system?: string;
     prepared_by?: number | null;
+    approved_by?: number | null;
     posted_by?: number | null;
     posted_at?: string | null;
     voided_by?: number | null;
     voided_at?: string | null;
     prepared_by_user?: { id: number; name: string } | null;
+    approved_by_user?: { id: number; name: string } | null;
     posted_by_user?: { id: number; name: string } | null;
     voided_by_user?: { id: number; name: string } | null;
     lines?: JournalEntryLine[];

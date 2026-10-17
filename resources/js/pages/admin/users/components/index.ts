@@ -1,11 +1,6 @@
-export { CreateUserDialog } from './create-user-dialog';
-export {
-    getUsersColumns,
-    usersColumnLabels,
-    usersFilterableColumns,
-    type UsersTableActions,
-} from './columns';
-export { EditUserDialog } from './edit-user-dialog';
-export { UserFormFields } from './user-form-fields';
-export { ViewUserDialog } from './view-user-dialog';
+export { AccessFields } from './access-fields';
+export { PermissionPicker } from './permission-picker';
 export { RbacUserDialog } from './rbac-user-dialog';
+export { RoleBadge, Section, StatusBadge, UserAvatar } from './shared';
+export { UserFormDialog } from './user-form-dialog';
+export { ViewUserDialog } from './view-user-dialog';

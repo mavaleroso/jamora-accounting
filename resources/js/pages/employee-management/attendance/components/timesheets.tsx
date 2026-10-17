@@ -391,7 +391,15 @@ export function Timesheets({
                     busy={busy}
                     selected={selectedStaff}
                     onSelect={setSelectedStaff}
-                    onApprove={(id) => post(`${ATTENDANCE_URL}/approve-bulk`, { ...period, employee_id: id })}
+                    onApprove={(id) => {
+                        const r = summary.find((s) => s.employee.id === id);
+                        setConfirm({
+                            title: `Approve ${r ? fullName(r.employee) : 'this employee'}?`,
+                            description: `${plural(r?.ready ?? 0, 'ready day')} in this period are approved and counted for payroll. Days with a missing punch or a correction to check are skipped.`,
+                            action: 'Approve',
+                            run: () => post(`${ATTENDANCE_URL}/approve-bulk`, { ...period, employee_id: id }),
+                        });
+                    }}
                     onUnapprove={(r) =>
                         setConfirm({
                             title: `Unapprove ${fullName(r.employee)}?`,
@@ -418,7 +426,14 @@ export function Timesheets({
                     onApproveDay={(ids) => approveDays(ids)}
                     onApprove={(e) => post(`${ATTENDANCE_URL}/${e.id}/approve`)}
                     onReject={onReject}
-                    onReopen={(e) => post(`${ATTENDANCE_URL}/${e.id}/reopen`)}
+                    onReopen={(e) =>
+                        setConfirm({
+                            title: 'Unapprove this day?',
+                            description: 'The day goes back to unapproved and is not counted for payroll until it is approved again.',
+                            action: 'Unapprove',
+                            run: () => post(`${ATTENDANCE_URL}/${e.id}/reopen`),
+                        })
+                    }
                     onVerify={(e) => post(`${ATTENDANCE_URL}/${e.id}/verify`)}
                     onEdit={onEdit}
                     onRequest={(e) => onRequest(e, 'correction')}

@@ -7,6 +7,7 @@ use App\Models\BankAccount;
 use App\Models\CustomerDeposit;
 use App\Models\InventoryItem;
 use App\Models\Invoice;
+use App\Models\InvoicePayment;
 use App\Models\Partner;
 use App\Services\Accounting\CashMovementService;
 use App\Services\Billing\InvoiceService;
@@ -34,7 +35,7 @@ class InvoicesController extends Controller
             'date_to' => $request->get('date_to'),
             'overdue' => $request->boolean('overdue'),
         ];
-        $pageSize = max(1, min(100, (int) $request->get('per_page', 15)));
+        $pageSize = $this->perPage($request);
         $today = Carbon::now('Asia/Manila')->toDateString();
 
         $query = Invoice::query()
@@ -63,7 +64,7 @@ class InvoicesController extends Controller
                 'overdueCount' => (clone $open)->whereDate('due_date', '<', $today)->count(),
                 'draftCount' => Invoice::query()->where('status', 'draft')->count(),
                 'billedMtd' => round((float) Invoice::query()->where('status', '!=', 'draft')->whereDate('invoice_date', '>=', $monthStart)->sum('total_amount'), 2),
-                'collectedMtd' => round((float) \App\Models\InvoicePayment::query()
+                'collectedMtd' => round((float) InvoicePayment::query()
                     ->whereDate('paid_date', '>=', $monthStart)
                     ->where('payment_method', '!=', 'deposit')
                     ->sum('amount'), 2),

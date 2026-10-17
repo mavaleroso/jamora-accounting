@@ -19,14 +19,9 @@ class UserSeeder extends Seeder
         $this->call(RolesAndPermissionsSeeder::class);
 
         $users = [
-            ['admin', 'Admin', null, 'User', 'Administrator', RoleEnum::Admin],
-            ['finance-manager', 'Frank', 'Finance', 'Manager', 'Finance Manager', RoleEnum::FinanceManager],
-            ['senior-accountant', 'Sally', null, 'Accountant', 'Senior Accountant', RoleEnum::SeniorAccountant],
-            ['accounting-staff', 'Alex', null, 'Accountant', 'Accounting Staff', RoleEnum::AccountingStaff],
-            ['front-desk', 'Dana', null, 'Billing', 'Front-desk Billing', RoleEnum::FrontDeskBilling],
-            ['payroll', 'Parker', null, 'Payroll', 'Payroll', RoleEnum::Payroll],
-            ['auditor', 'Avery', null, 'Auditor', 'Auditor', RoleEnum::Auditor],
-            ['management', 'Morgan', null, 'Manager', 'Management', RoleEnum::Management],
+            ['admin', 'Admin', null, 'User', 'Executive / Owner', RoleEnum::Admin],
+            ['accountant', 'Sally', null, 'Accountant', 'Accountant', RoleEnum::Accountant],
+            ['retainer', 'Avery', null, 'Retainer', 'Accounting Retainer (outsourced)', RoleEnum::AccountingRetainer],
             ['employee', 'Staff', 'Demo', 'Employee', 'Optical Staff / Assistant', RoleEnum::Employee],
         ];
 

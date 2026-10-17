@@ -1,152 +1,92 @@
 import { router } from '@inertiajs/react';
 import * as React from 'react';
-
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import type { User } from '@/types';
-import { toast } from '@/lib/toast';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import type { AccessCatalog, UserRow } from '../lib';
+import { extrasOnly, rolePermissions, USERS_URL } from '../lib';
+import { AccessFields } from './access-fields';
+import { RoleBadge, UserAvatar } from './shared';
 
-type RbacUserDialogProps = {
+type Props = AccessCatalog & {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    user: User | null;
-    roles: { name: string; permissions: string[] }[];
-    permissions: string[];
+    user: UserRow | null;
 };
 
-export function RbacUserDialog({
-    open,
-    onOpenChange,
-    user,
-    roles,
-    permissions,
-}: RbacUserDialogProps) {
+export function RbacUserDialog({ open, onOpenChange, user, roles, permissions, modules }: Props) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="flex h-[min(94vh,46rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,72rem)]">
+                {user && (
+                    <>
+                        <DialogHeader className="border-b px-6 py-4 text-left">
+                            <DialogTitle>Manage access</DialogTitle>
+                            <DialogDescription asChild>
+                                <div className="flex items-center gap-2.5 pt-1">
+                                    <UserAvatar user={user} className="size-8" />
+                                    <span className="min-w-0 text-sm">
+                                        <span className="block font-medium text-foreground">{user.name}</span>
+                                        <span className="flex items-center gap-1.5 text-xs">
+                                            Currently <RoleBadge role={user.roles?.[0]} />
+                                        </span>
+                                    </span>
+                                </div>
+                            </DialogDescription>
+                        </DialogHeader>
+                        {open && <AccessForm key={user.id} user={user} roles={roles} permissions={permissions} modules={modules} onDone={() => onOpenChange(false)} />}
+                    </>
+                )}
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function AccessForm({ user, roles, permissions, modules, onDone }: AccessCatalog & { user: UserRow; onDone: () => void }) {
+    const initialRole = user.roles?.[0] ?? '';
+    const initialExtras = React.useMemo(() => extrasOnly(user.permissions, rolePermissions(roles, initialRole)), [user, roles, initialRole]);
+    const [role, setRole] = React.useState(initialRole);
+    const [extras, setExtras] = React.useState(initialExtras);
+    const [errors, setErrors] = React.useState<Record<string, string>>({});
     const [processing, setProcessing] = React.useState(false);
-    const [selectedRole, setSelectedRole] = React.useState('');
-    const [selectedPermissions, setSelectedPermissions] = React.useState<string[]>([]);
 
-    React.useEffect(() => {
-        if (!user) return;
-        setSelectedRole(user.roles?.[0] ?? '');
-        setSelectedPermissions(user.permissions ?? []);
-    }, [user]);
+    const dirty = role !== initialRole || extras.length !== initialExtras.length || extras.some((p) => !initialExtras.includes(p));
 
-    const handleRoleChange = (roleName: string) => {
-        setSelectedRole(roleName);
-        const role = roles.find((r) => r.name === roleName);
-        if (role) {
-            setSelectedPermissions(role.permissions);
-        }
-    };
-
-    const togglePermission = (permission: string) => {
-        setSelectedPermissions((prev) =>
-            prev.includes(permission)
-                ? prev.filter((p) => p !== permission)
-                : [...prev, permission],
-        );
-    };
-
-    const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    const submit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!user) return;
         setProcessing(true);
         router.patch(
-            `/admin/users/${user.id}/rbac`,
-            {
-                role: selectedRole,
-                permissions: selectedPermissions,
-                permissions_present: true,
-            },
+            `${USERS_URL}/${user.id}/rbac`,
+            { role, permissions: extras, permissions_present: true },
             {
                 preserveScroll: true,
+                preserveState: true,
                 onFinish: () => setProcessing(false),
-                onSuccess: () => {
-                    toast.success('User roles and permissions updated.');
-                    onOpenChange(false);
+                onSuccess: () => onDone(),
+                onError: (errs) => {
+                    setErrors(errs);
+                    toast.error(errs.role ?? 'Could not update access.');
                 },
-                onError: () => toast.error('Failed to update roles and permissions.'),
             },
         );
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle>Update roles & permissions</DialogTitle>
-                    <DialogDescription>
-                        {user ? `Update access for ${user.name}.` : 'Select a user.'}
-                    </DialogDescription>
-                </DialogHeader>
-                {user && (
-                    <form id="rbac-user-form" onSubmit={handleSubmit}>
-                        <div className="grid gap-4 py-4">
-                            <div className="space-y-1">
-                                <label className="text-sm font-medium">Role</label>
-                                <Select value={selectedRole} onValueChange={handleRoleChange}>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select a role" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {roles.map((role) => (
-                                            <SelectItem key={role.name} value={role.name}>
-                                                {role.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Permissions</label>
-                                <p className="text-xs text-muted-foreground">
-                                    Changing the role will reset permissions to that role’s defaults.
-                                </p>
-                                <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-input bg-background p-3">
-                                    {permissions.length === 0 ? (
-                                        <p className="text-sm text-muted-foreground">
-                                            No permissions available.
-                                        </p>
-                                    ) : (
-                                        permissions.map((permission) => (
-                                            <label key={permission} className="flex items-center gap-2 text-sm">
-                                                <Checkbox
-                                                    checked={selectedPermissions.includes(permission)}
-                                                    onCheckedChange={() => togglePermission(permission)}
-                                                />
-                                                <span>{permission}</span>
-                                            </label>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </form>
-                )}
-                <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5 lg:overflow-hidden lg:p-6">
+                <AccessFields roles={roles} permissions={permissions} modules={modules} role={role} onRoleChange={setRole} extras={extras} onExtrasChange={setExtras} errors={errors} layout="split" />
+            </div>
+            <DialogFooter className="items-center border-t bg-muted/30 px-5 py-3 sm:justify-between">
+                <span className="text-xs text-muted-foreground">{dirty ? 'Unsaved changes' : 'No changes yet'}</span>
+                <div className="flex gap-2">
+                    <Button type="button" variant="outline" onClick={onDone}>
                         Cancel
                     </Button>
-                    <Button type="submit" form="rbac-user-form" disabled={processing || !user}>
-                        {processing ? 'Saving...' : 'Save'}
+                    <Button type="submit" disabled={processing || !role || !dirty}>
+                        {processing ? 'Saving…' : 'Save access'}
                     </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                </div>
+            </DialogFooter>
+        </form>
     );
 }

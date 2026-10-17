@@ -2,12 +2,12 @@ import { Head, router } from '@inertiajs/react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { PencilIcon } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import { DataTable } from '@/components/data-table';
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header';
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
@@ -41,6 +41,7 @@ type Props = {
 export default function OpticalRulesPage({ rules, accounts }: Props) {
     const [editOpen, setEditOpen] = React.useState(false);
     const [selectedRule, setSelectedRule] = React.useState<PostingRule | null>(null);
+    const confirm = useConfirm();
     const [debitAccountId, setDebitAccountId] = React.useState('');
     const [creditAccountId, setCreditAccountId] = React.useState('');
     const [isActive, setIsActive] = React.useState(true);
@@ -54,8 +55,14 @@ export default function OpticalRulesPage({ rules, accounts }: Props) {
         setEditOpen(true);
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!selectedRule) return;
+        const ok = await confirm({
+            title: `Save the ${selectedRule.name} rule?`,
+            description: 'Documents synced from now on post with these accounts. Entries already posted are not changed.',
+            confirmLabel: 'Save rule',
+        });
+        if (!ok) return;
 
         setSaving(true);
         router.put(
@@ -133,17 +140,7 @@ export default function OpticalRulesPage({ rules, accounts }: Props) {
                     description="Configure default accounts used when syncing Optical sales and collections."
                 />
 
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Optical Posting Rules</CardTitle>
-                        <CardDescription>
-                            These rules map sync events to chart-of-accounts entries.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <DataTable columns={columns} data={rules} />
-                    </CardContent>
-                </Card>
+                <DataTable title="Optical Posting Rules" description="These rules map sync events to chart-of-accounts entries." columns={columns} data={rules} emptyTitle="No posting rules yet" />
             </div>
 
             <Dialog open={editOpen} onOpenChange={setEditOpen}>

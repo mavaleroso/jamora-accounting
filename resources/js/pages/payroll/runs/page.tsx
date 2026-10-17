@@ -1,6 +1,7 @@
 import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { AlertTriangle, ArrowRight, CalendarPlus, CalendarRange, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
 import * as React from 'react';
+import { useConfirm } from '@/components/confirm-dialog';
 import Heading from '@/components/heading';
 import InputError from '@/components/input-error';
 import { Badge } from '@/components/ui/badge';
@@ -308,6 +309,7 @@ function PeriodItem({
     onCompute: () => void;
     onEdit: () => void;
 }) {
+    const confirm = useConfirm();
     const run = p.run;
     const late = !!p.pay_date && p.pay_date < today && run?.status !== 'paid';
 
@@ -370,7 +372,10 @@ function PeriodItem({
                                 variant="ghost"
                                 className="size-8 text-muted-foreground"
                                 aria-label={`Remove ${p.code}`}
-                                onClick={() => confirm(`Remove pay period ${p.code}?`) && router.delete(`/payroll/periods/${p.id}`, { preserveScroll: true })}
+                                onClick={async () => {
+                                    const ok = await confirm({ title: `Remove pay period ${p.code}?`, description: 'The pay period is deleted. You can generate or add it again later.', confirmLabel: 'Remove', variant: 'destructive' });
+                                    if (ok) router.delete(`/payroll/periods/${p.id}`, { preserveScroll: true });
+                                }}
                             >
                                 <Trash2 className="size-4" />
                             </Button>
@@ -391,6 +396,7 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
         second_pay_day: String(payDays.second),
     });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
     const dayLabel = (d: string) => (d === '0' ? 'last day of the month' : `the ${d}${['th', 'st', 'nd', 'rd'][Number(d) % 10 > 3 || [11, 12, 13].includes(Number(d)) ? 0 : Number(d) % 10]}`);
 
     return (
@@ -398,8 +404,14 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
             <DialogContent className="sm:max-w-md">
                 <form
                     className="space-y-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: 'Generate pay periods?',
+                            description: `Pay periods for ${data.months === '1' ? 'one month' : `${data.months} months`} from ${data.month} are created. Periods that already exist are skipped.`,
+                            confirmLabel: 'Generate',
+                        });
+                        if (!ok) return;
                         form.post('/payroll/periods/generate', { preserveScroll: true, onSuccess: () => onOpenChange(false) });
                     }}
                 >
@@ -479,6 +491,7 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
 function CustomPeriodDialog({ open, onOpenChange, period }: { open: boolean; onOpenChange: (o: boolean) => void; period?: PeriodRow | null }) {
     const form = useForm({ code: '', start_date: '', end_date: '', pay_date: '', frequency: 'semi_monthly' });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
     React.useEffect(() => {
         if (open && period) {
@@ -499,8 +512,16 @@ function CustomPeriodDialog({ open, onOpenChange, period }: { open: boolean; onO
             <DialogContent className="sm:max-w-md">
                 <form
                     className="space-y-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        if (!period) {
+                            const ok = await confirm({
+                                title: `Create pay period ${data.code || ''}?`,
+                                description: `A cut-off from ${data.start_date || '—'} to ${data.end_date || '—'}${data.pay_date ? `, paid on ${data.pay_date}` : ''}, is added to the payroll calendar.`,
+                                confirmLabel: 'Create period',
+                            });
+                            if (!ok) return;
+                        }
                         const done = { preserveScroll: true, onSuccess: () => { form.reset(); onOpenChange(false); } };
                         if (period) form.put(`/payroll/periods/${period.id}`, done);
                         else form.post('/payroll/periods', done);

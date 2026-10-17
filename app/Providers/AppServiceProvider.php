@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Support\Audit\AuditLogger;
 use App\Support\EntityContext;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\Events\Logout;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Event;
@@ -35,8 +37,8 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * Every Eloquent create / update / delete / restore, and role & permission assignments, go to the
-     * audit trail. Seeding and migrations run unaudited.
+     * Every Eloquent create / update / delete / restore, role & permission assignments, and sign-ins /
+     * sign-outs go to the audit trail. Seeding and migrations run unaudited.
      */
     private function registerAuditTrail(): void
     {
@@ -61,6 +63,17 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(RoleDetached::class, fn (RoleDetached $e) => $audit->relationEvent($e->model, 'roles', 'detached', $names($e->rolesOrIds, Role::class)));
         Event::listen(PermissionAttached::class, fn (PermissionAttached $e) => $audit->relationEvent($e->model, 'permissions', 'attached', $names($e->permissionsOrIds, Permission::class)));
         Event::listen(PermissionDetached::class, fn (PermissionDetached $e) => $audit->relationEvent($e->model, 'permissions', 'detached', $names($e->permissionsOrIds, Permission::class)));
+
+        // Sign-ins and sign-outs, with how the user signed in.
+        Event::listen(Login::class, function (Login $e) use ($audit) {
+            $how = match (request()->route()?->getName()) {
+                'login.store' => 'Signed in with password',
+                'two-factor.login.store' => 'Signed in with two-factor authentication',
+                default => $e->remember ? 'Signed in from a remembered session' : 'Signed in',
+            };
+            $audit->authEvent('login', $e->user, $how);
+        });
+        Event::listen(Logout::class, fn (Logout $e) => $e->user && $audit->authEvent('logout', $e->user, 'Signed out'));
 
         // Each console command is its own batch; bulk setup commands are not user activity.
         Event::listen(CommandStarting::class, function (CommandStarting $e) use ($audit) {

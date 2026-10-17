@@ -3,6 +3,7 @@ import { CalendarCheck, Crosshair, Loader2, MapPin } from 'lucide-react';
 import * as React from 'react';
 import InputError from '@/components/input-error';
 import { RichTextEditor } from '@/components/rich-text-editor';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -147,12 +148,21 @@ function ManualEntryForm({ target, employees, today, onDone }: { target: ManualE
     });
     const { data, setData, errors, processing } = form;
     const employee = employees.find((e) => String(e.id) === data.employee_id) ?? entry?.employee;
+    const confirm = useConfirm();
 
     return (
         <form
             className="space-y-4"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
                 e.preventDefault();
+                if (!isEdit) {
+                    const ok = await confirm({
+                        title: 'Add this time record?',
+                        description: `A manual time record for ${employee ? fullName(employee) : 'the employee'} on ${fmtDate(data.work_date, { weekday: 'short', month: 'short', day: 'numeric' })} is added. Manual entries are kept in the audit trail.`,
+                        confirmLabel: 'Add record',
+                    });
+                    if (!ok) return;
+                }
                 form.post(`${ATTENDANCE_URL}/punch`, { preserveScroll: true, onSuccess: onDone });
             }}
         >
@@ -281,9 +291,17 @@ function RequestForm({
         reason: '',
     });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
-    const submit = (e: React.FormEvent) => {
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const person = employees.find((p) => String(p.id) === data.employee_id);
+        const ok = await confirm({
+            title: 'File this time correction?',
+            description: `A correction request for ${person ? fullName(person) : 'the employee'} on ${fmtDate(data.work_date, { weekday: 'short', month: 'short', day: 'numeric' })} is sent for review.`,
+            confirmLabel: 'File request',
+        });
+        if (!ok) return;
         form.transform((d) => {
             // Only send the times that actually change, so approval doesn't overwrite good punches.
             const keys = ['time_in', 'break_out', 'break_in', 'time_out'] as const;
@@ -581,7 +599,8 @@ function GeofenceForm({ branch, onDone }: { branch: BranchLocation; onDone: () =
         latitude: String(branch.latitude),
         longitude: String(branch.longitude),
         geofence_radius: String(branch.geofence_radius),
-        geofence_enforced: branch.geofence_enforced,
+        // The branch's own setting; the system-wide switch can override it.
+        geofence_enforced: branch.branch_geofence_enforced ?? branch.geofence_enforced,
     });
     const { data, setData, errors } = form;
 
@@ -641,6 +660,12 @@ function GeofenceForm({ branch, onDone }: { branch: BranchLocation; onDone: () =
                 </div>
                 <Switch checked={data.geofence_enforced} onCheckedChange={(v) => setData('geofence_enforced', v)} />
             </div>
+            {branch.geofence_system_enabled === false && (
+                <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                    Geofencing is turned off for the whole system (ATTENDANCE_GEOFENCE_ENABLED=false), so no one is blocked from clocking in. This branch setting
+                    applies once it is turned back on.
+                </p>
+            )}
             <DialogFooter>
                 <Button type="button" variant="outline" onClick={onDone}>
                     Cancel

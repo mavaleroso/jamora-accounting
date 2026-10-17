@@ -176,6 +176,24 @@ class AttendanceCalculator
             $schedOut->addDay();
         }
 
+        // Half-day leave: only the other half of the shift is expected, so lateness and undertime
+        // are measured against that half (AM leave -> afternoon, PM leave -> morning).
+        $scheduledBreak = $schedule->breakMinutes;
+        $halfDay = $dtr->leave_request_id
+            ? LeaveRequest::query()->withoutEntityScope()->whereKey($dtr->leave_request_id)->value('half_day')
+            : null;
+        if ($halfDay && $isWorkingDay && $schedIn && $schedOut) {
+            $halfNet = intdiv(max(0, (int) $schedIn->diffInMinutes($schedOut) - $scheduledBreak), 2);
+            if ($halfDay === 'am') {
+                $schedIn = $schedOut->copy()->subMinutes($halfNet);
+            } else {
+                $schedOut = $schedIn->copy()->addMinutes($halfNet);
+            }
+            $scheduledBreak = 0;
+            $dtr->scheduled_in = $schedIn->format('H:i:s');
+            $dtr->scheduled_out = $schedOut->format('H:i:s');
+        }
+
         if ($hasIn && ! $hasOut) {
             if ($isWorkingDay && $schedIn) {
                 $in = Carbon::parse($dateStr.' '.$this->normalizeTime($dtr->time_in));
@@ -206,14 +224,14 @@ class AttendanceCalculator
         }
 
         $spanMinutes = $in->diffInMinutes($out);
-        [$breakMinutes, $breakStart, $breakEnd] = $this->breakWindow($dtr, $dateStr, $in, $spanMinutes, $schedule->breakMinutes);
+        [$breakMinutes, $breakStart, $breakEnd] = $this->breakWindow($dtr, $dateStr, $in, $spanMinutes, $scheduledBreak);
         $workedMinutes = max(0, $spanMinutes - $breakMinutes);
         $regularCap = (int) config('people.timekeeping.regular_hours_per_day', 8) * 60;
 
         if ($isWorkingDay && $schedIn && $schedOut) {
             $tardiness = $this->lateMinutes($in, $schedIn, $schedule->graceMinutes);
             $undertime = $out->lt($schedOut) ? (int) $out->diffInMinutes($schedOut) : 0;
-            $scheduledNet = max(0, $schedIn->diffInMinutes($schedOut) - $schedule->breakMinutes);
+            $scheduledNet = max(0, $schedIn->diffInMinutes($schedOut) - $scheduledBreak);
             $regularMinutes = min($workedMinutes, $scheduledNet ?: $regularCap, $regularCap);
 
             $otStart = $in->gt($schedOut) ? $in : $schedOut;
@@ -291,6 +309,32 @@ class AttendanceCalculator
         $dtr->notes = trim(($dtr->notes ?? '')." [Official business: {$ob->destination}]");
 
         return $this->compute($dtr, $employee);
+    }
+
+    /**
+     * Yesterday's record when it is a shift still running past midnight (checked in, not out, and
+     * within the longest plausible shift). Breaks and the check-out after midnight belong to it.
+     */
+    public function openOvernightShift(int $employeeId, CarbonInterface $at): ?DtrEntry
+    {
+        $yesterday = $at->copy()->subDay()->toDateString();
+
+        $dtr = DtrEntry::query()
+            ->withoutEntityScope()
+            ->where('employee_id', $employeeId)
+            ->whereDate('work_date', $yesterday)
+            ->whereNotNull('time_in')
+            ->whereNull('time_out')
+            ->first();
+
+        if (! $dtr) {
+            return null;
+        }
+
+        $started = Carbon::parse($yesterday.' '.$this->normalizeTime($dtr->time_in));
+        $maxHours = (int) config('people.timekeeping.max_shift_hours', 18);
+
+        return $started->diffInMinutes($at) <= $maxHours * 60 ? $dtr : null;
     }
 
     public function approvedOfficialBusiness(int $employeeId, CarbonInterface|string $date): ?AttendanceRequest
@@ -530,4 +574,3 @@ class AttendanceCalculator
         return Carbon::parse($time)->format('H:i:s');
     }
 }
-

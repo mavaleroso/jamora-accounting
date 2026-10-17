@@ -7,11 +7,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Storage;
 
 class Employee extends Model
 {
-    use SoftDeletes, BelongsToEntity;
+    use BelongsToEntity, SoftDeletes;
 
     protected $fillable = [
         'entity_id', 'user_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar',
@@ -20,7 +19,7 @@ class Employee extends Model
         'default_shift_template_id', 'rest_days', 'leave_type_ids',
         'hire_date', 'regularization_date', 'separation_date', 'employment_status', 'employment_type',
         'pay_type', 'basic_pay',
-        'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'bank_name',
+        'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'contribution_settings', 'bank_name',
         'bank_account_no', 'leave_credits', 'vacation_leave_credits', 'sick_leave_credits',
         'is_active',
     ];
@@ -39,8 +38,27 @@ class Employee extends Model
             'sick_leave_credits' => 'decimal:2',
             'rest_days' => 'array',
             'leave_type_ids' => 'array',
+            'contribution_settings' => 'array',
             'is_active' => 'boolean',
         ];
+    }
+
+    /** Government contributions that can be set per employee. */
+    public const CONTRIBUTIONS = ['sss', 'philhealth', 'pagibig'];
+
+    /** auto = computed from the contribution table on the salary; none = not deducted (not covered). */
+    public const CONTRIBUTION_MODES = ['auto', 'none'];
+
+    /**
+     * Whether a government contribution is deducted. Amounts are always computed from the
+     * contribution table on the salary; anything else stored is treated as automatic.
+     *
+     * @param  'sss'|'philhealth'|'pagibig'  $agency
+     * @return 'auto'|'none'
+     */
+    public function contributionMode(string $agency): string
+    {
+        return ($this->contribution_settings[$agency]['mode'] ?? null) === 'none' ? 'none' : 'auto';
     }
 
     public function getNameAttribute(): string

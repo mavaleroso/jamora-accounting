@@ -1,6 +1,6 @@
-import * as React from 'react';
 import { AnimatedAvatar } from '@/components/animated-avatar';
 import { cn } from '@/lib/utils';
+import * as React from 'react';
 import { fullName, type Employee } from '../lib';
 
 type Props = {
@@ -25,10 +25,7 @@ export function EmployeeAvatar({ employee, src, className }: Props) {
 
     return (
         <div
-            className={cn(
-                'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold',
-                className,
-            )}
+            className={cn('bg-muted flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs font-semibold', className)}
         >
             {url && !failed ? (
                 <img src={url} alt="" className="size-full object-cover" onError={() => setFailed(true)} />

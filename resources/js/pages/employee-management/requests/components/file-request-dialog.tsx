@@ -1,4 +1,5 @@
 import InputError from '@/components/input-error';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -165,8 +166,15 @@ function RequestForm({
     const span = daysBetween(data.start_date, data.end_date);
     const singleDay = span === 1;
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const ok = await confirm({
+            title: `File this ${KINDS[kind].label.toLowerCase()} request?`,
+            description: `${forSelf || !person ? 'Your request' : `The request for ${fullName(person)}`} is sent for approval${kind === 'leave' && span > 0 ? ` (${span} day${span === 1 ? '' : 's'})` : ''}. You can cancel it while it is pending.`,
+            confirmLabel: 'File request',
+        });
+        if (!ok) return;
         const keep = new Set(['kind', 'reason', ...(canPick ? ['employee_id'] : []), ...FIELDS[kind]]);
         form.transform((d) => {
             const out = Object.fromEntries(Object.entries(d).filter(([k, v]) => keep.has(k) && v !== '' && v !== null));

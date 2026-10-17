@@ -227,6 +227,10 @@ class AttendanceRequestService
                 }
                 $dtr->source = $dtr->source ?: 'correction';
                 $dtr->notes = trim(($dtr->notes ?? '')." [Correction approved: {$request->reason}]");
+                // Changed punches are reviewed again before payroll, as with a manual edit.
+                if ($dtr->status === DtrEntry::STATUS_APPROVED) {
+                    $dtr->fill(['status' => DtrEntry::STATUS_OPEN, 'approved_by' => null, 'approved_at' => null]);
+                }
                 $this->attendanceCalculator->compute($dtr, $employee)->save();
                 $request->update(['dtr_entry_id' => $request->dtr_entry_id ?? $dtr->id]);
                 break;

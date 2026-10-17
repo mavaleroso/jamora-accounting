@@ -1,3 +1,4 @@
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
 import { FilterBar } from '@/components/finance/filter-bar';
 import { daysPastDue, formatAmount, formatDate } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
@@ -5,8 +6,6 @@ import { Paginator, type Paginated } from '@/components/finance/paginator';
 import { StatusBadge } from '@/components/finance/status-badge';
 import { StatCard, StatGrid } from '@/components/stat-card';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
 import { hasPermission } from '@/lib/permissions';
@@ -42,6 +41,11 @@ type Props = {
         draftCount: number;
     };
 };
+
+/** Days past due for open bills (negative = days left); null when not open. */
+function dueIn(b: BillRow): number | null {
+    return ['posted', 'partially_paid'].includes(b.status) ? daysPastDue(b.due_date) : null;
+}
 
 export default function BillsPage({ bills, filters, summary }: Props) {
     const { auth } = usePage<{ auth: Auth }>().props;
@@ -92,97 +96,88 @@ export default function BillsPage({ bills, filters, summary }: Props) {
                     <StatCard title="Paid this month" value={formatPhpCurrency(summary.paidMtd)} icon={SendIcon} tone="success" />
                 </StatGrid>
 
-                <FilterBar
-                    url="/ap/bills"
-                    filters={filters}
-                    searchPlaceholder="Bill no., supplier invoice no. or supplier"
-                    selects={[
-                        {
-                            key: 'status',
-                            label: 'Statuses',
-                            options: [
-                                { value: 'draft', label: 'Draft' },
-                                { value: 'posted', label: 'Posted' },
-                                { value: 'partially_paid', label: 'Partially paid' },
-                                { value: 'paid', label: 'Paid' },
-                            ],
-                        },
-                        {
-                            key: 'due',
-                            label: 'Due',
-                            options: [
-                                { value: 'overdue', label: 'Overdue' },
-                                { value: 'week', label: 'Due in 7 days' },
-                            ],
-                        },
-                    ]}
-                    dateRange={{ from: 'date_from', to: 'date_to' }}
-                />
-
-                <TableShell>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Bill</TableHead>
-                                <TableHead>Supplier</TableHead>
-                                <TableHead>Bill date</TableHead>
-                                <TableHead>Due</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
-                                <TableHead className="text-right">Balance</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {bills.data.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={7} className="text-muted-foreground h-32 text-center">
-                                        No bills match these filters.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                bills.data.map((b) => {
-                                    const open = ['posted', 'partially_paid'].includes(b.status);
-                                    const days = open ? daysPastDue(b.due_date) : 0;
+                <TableCard>
+                    <FilterBar
+                        url="/ap/bills"
+                        filters={filters}
+                        searchPlaceholder="Bill no., supplier invoice no. or supplier"
+                        selects={[
+                            {
+                                key: 'status',
+                                label: 'Statuses',
+                                options: [
+                                    { value: 'draft', label: 'Draft' },
+                                    { value: 'posted', label: 'Posted' },
+                                    { value: 'partially_paid', label: 'Partially paid' },
+                                    { value: 'paid', label: 'Paid' },
+                                ],
+                            },
+                            {
+                                key: 'due',
+                                label: 'Due',
+                                options: [
+                                    { value: 'overdue', label: 'Overdue' },
+                                    { value: 'week', label: 'Due in 7 days' },
+                                ],
+                            },
+                        ]}
+                        dateRange={{ from: 'date_from', to: 'date_to' }}
+                    />
+                    <ListTable
+                        rows={bills.data}
+                        rowKey={(b) => b.id}
+                        sequenceStart={bills.from ?? 1}
+                        onRowClick={(b) => router.visit(`/ap/bills/${b.id}`)}
+                        rowAccent={(b) => (dueIn(b) !== null && dueIn(b)! > 0 ? 'bg-red-500' : 'bg-primary')}
+                        columns={[
+                            {
+                                id: 'bill',
+                                header: 'Bill',
+                                cell: (b) => (
+                                    <>
+                                        <div className="font-mono text-sm font-medium">{b.bill_no}</div>
+                                        <div className="font-mono text-xs text-muted-foreground">{b.vendor_invoice_no ? `Supplier inv. ${b.vendor_invoice_no}` : ''}</div>
+                                    </>
+                                ),
+                            },
+                            { id: 'supplier', header: 'Supplier', className: 'font-medium', cell: (b) => b.vendor?.name ?? '—' },
+                            { id: 'date', header: 'Bill date', minScreen: 'lg', className: 'whitespace-nowrap', cell: (b) => formatDate(b.bill_date) },
+                            {
+                                id: 'due',
+                                header: 'Due',
+                                className: 'whitespace-nowrap',
+                                cell: (b) => {
+                                    const days = dueIn(b);
                                     return (
-                                        <TableRow
-                                            key={b.id}
-                                            className="hover:bg-muted/40 cursor-pointer"
-                                            onClick={() => router.visit(`/ap/bills/${b.id}`)}
-                                        >
-                                            <TableCell>
-                                                <div className="font-mono text-sm font-medium">{b.bill_no}</div>
-                                                <div className="text-muted-foreground font-mono text-xs">
-                                                    {b.vendor_invoice_no ? `Supplier inv. ${b.vendor_invoice_no}` : ''}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="font-medium">{b.vendor?.name ?? '—'}</TableCell>
-                                            <TableCell className="whitespace-nowrap">{formatDate(b.bill_date)}</TableCell>
-                                            <TableCell className="whitespace-nowrap">
-                                                {formatDate(b.due_date)}
-                                                {open && days > 0 && (
-                                                    <div className="text-xs font-medium text-red-600 dark:text-red-400">{days} days overdue</div>
-                                                )}
-                                                {open && days <= 0 && days > -8 && (
-                                                    <div className="text-xs text-amber-600 dark:text-amber-400">
-                                                        {days === 0 ? 'Due today' : `Due in ${-days} days`}
-                                                    </div>
-                                                )}
-                                            </TableCell>
-                                            <TableCell>
-                                                <StatusBadge status={days > 0 ? 'overdue' : b.status} />
-                                            </TableCell>
-                                            <TableCell className="text-right font-mono tabular-nums">{formatAmount(b.total_amount)}</TableCell>
-                                            <TableCell className="text-right font-mono font-medium tabular-nums">
-                                                {formatAmount(b.balance_due)}
-                                            </TableCell>
-                                        </TableRow>
+                                        <>
+                                            {formatDate(b.due_date)}
+                                            {days !== null && days > 0 && <div className="text-xs font-medium text-red-600 dark:text-red-400">{days} days overdue</div>}
+                                            {days !== null && days <= 0 && days > -8 && <div className="text-xs text-amber-600 dark:text-amber-400">{days === 0 ? 'Due today' : `Due in ${-days} days`}</div>}
+                                        </>
                                     );
-                                })
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableShell>
-                <Paginator page={bills} noun="bills" />
+                                },
+                            },
+                            { id: 'status', header: 'Status', cell: (b) => <StatusBadge status={(dueIn(b) ?? 0) > 0 ? 'overdue' : b.status} /> },
+                            { id: 'total', header: 'Total', align: 'right', className: 'font-mono tabular-nums', cell: (b) => formatAmount(b.total_amount) },
+                            { id: 'balance', header: 'Balance', align: 'right', className: 'font-mono font-medium tabular-nums', cell: (b) => formatAmount(b.balance_due) },
+                        ]}
+                        mobileRow={(b) => (
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate font-mono text-sm font-medium">{b.bill_no}</span>
+                                    <span className="font-mono text-sm font-medium tabular-nums">{formatAmount(b.balance_due)}</span>
+                                </div>
+                                <div className="truncate text-sm">{b.vendor?.name ?? '—'}</div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                    <StatusBadge status={(dueIn(b) ?? 0) > 0 ? 'overdue' : b.status} />
+                                    <span>Due {formatDate(b.due_date)}</span>
+                                </div>
+                            </div>
+                        )}
+                        empty={<TableEmpty icon={SendIcon} title="No bills match these filters" description="Try a different search, status or date range." />}
+                    />
+                    <Paginator page={bills} />
+                </TableCard>
             </PageBody>
         </AppLayout>
     );

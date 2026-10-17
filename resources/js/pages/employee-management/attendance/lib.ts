@@ -187,7 +187,12 @@ export type BranchLocation = {
     latitude: number;
     longitude: number;
     geofence_radius: number;
+    /** Effective: what check-in enforces (system switch AND branch setting). */
     geofence_enforced: boolean;
+    /** The branch's own setting. */
+    branch_geofence_enforced?: boolean;
+    /** ATTENDANCE_GEOFENCE_ENABLED: the system-wide master switch. */
+    geofence_system_enabled?: boolean;
 };
 
 export type Perspective = { canManage: boolean; canViewTeam: boolean; hasSelf: boolean };
@@ -198,7 +203,12 @@ export type Filters = {
     date_to: string;
     status: string;
     request_status: string;
+    requests_per_page: number;
+    requests_search: string;
 };
+
+/** A filter change; `requests_page` applies to that one visit only. */
+export type FilterChange = Partial<Filters> & { requests_page?: number };
 
 export type Approval = { open: number; approved: number; rejected: number; locked: number; readyToApprove: number; corrections: number };
 

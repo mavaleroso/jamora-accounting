@@ -7,7 +7,6 @@ import { DataTableColumnHeader } from '@/components/data-table/data-table-column
 import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import AppLayout from '@/layouts/app-layout';
 import type { BreadcrumbItem, SyncDocument } from '@/types';
 
@@ -122,27 +121,21 @@ export default function OpticalExceptionsPage({
                     description="Failed Optical sync documents that need attention."
                 />
 
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Failed Documents</CardTitle>
-                        <CardDescription>
-                            {totalDocuments} failed document{totalDocuments === 1 ? '' : 's'} total.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <DataTable
-                            columns={columns}
-                            data={documents}
-                            initialSorting={[{ id: 'updated_at', desc: true }]}
-                            serverSidePagination={{
-                                totalRowCount: totalDocuments,
-                                pageIndex: currentPage - 1,
-                                pageSize,
-                                onPaginationChange: handlePaginationChange,
-                            }}
-                        />
-                    </CardContent>
-                </Card>
+                <DataTable
+                    title="Failed Documents"
+                    description={`${totalDocuments} failed document${totalDocuments === 1 ? '' : 's'} total.`}
+                    columns={columns}
+                    data={documents}
+                    initialSorting={[{ id: 'updated_at', desc: true }]}
+                    emptyTitle="No failed documents"
+                    emptyDescription="Everything synced cleanly."
+                    serverSidePagination={{
+                        totalRowCount: totalDocuments,
+                        pageIndex: currentPage - 1,
+                        pageSize,
+                        onPaginationChange: handlePaginationChange,
+                    }}
+                />
             </div>
         </AppLayout>
     );

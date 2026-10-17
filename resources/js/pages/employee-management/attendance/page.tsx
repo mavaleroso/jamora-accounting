@@ -30,6 +30,7 @@ import {
     type Board,
     type BranchLocation,
     type DtrRow,
+    type FilterChange,
     type Filters,
     type MyDay,
     type Paginated,
@@ -92,7 +93,7 @@ export default function AttendancePage(props: Props) {
     const [geoOpen, setGeoOpen] = React.useState(false);
 
     const navigate = React.useCallback(
-        (changes: Partial<Filters> & { view?: View }) => {
+        (changes: FilterChange & { view?: View }) => {
             const next = { view, ...filters, ...changes };
             const params = Object.fromEntries(
                 Object.entries(next).filter(([, v]) => v !== '' && v !== null && v !== undefined),

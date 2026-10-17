@@ -1,6 +1,7 @@
 import InputError from '@/components/input-error';
 import { richTextClass, RichTextEditor } from '@/components/rich-text-editor';
 import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -201,12 +202,17 @@ function Row({ row: r, onEdit }: { row: AccomplishmentRow; onEdit: () => void })
 function EditForm({ row, onDone }: { row: AccomplishmentRow; onDone: () => void }) {
     const form = useForm({ work_date: row.date, accomplishment: row.accomplishment ?? '' });
     const errors = form.errors as Record<string, string | undefined>;
+    const confirm = useConfirm();
 
     return (
         <form
             className="space-y-4"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
                 e.preventDefault();
+                if (!row.accomplishment) {
+                    const ok = await confirm({ title: 'Save this accomplishment?', description: 'It is added to your timesheet for the day and visible to your approver.', confirmLabel: 'Save' });
+                    if (!ok) return;
+                }
                 form.post(`${ATTENDANCE_URL}/accomplishments`, { preserveScroll: true, onSuccess: onDone });
             }}
         >

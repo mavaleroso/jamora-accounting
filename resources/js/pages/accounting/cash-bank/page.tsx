@@ -1,3 +1,4 @@
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
 import { FilterBar } from '@/components/finance/filter-bar';
 import { formatAmount, formatDate, paymentMethodLabels, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
@@ -12,11 +13,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
+import { useConfirm } from '@/components/confirm-dialog';
 import { hasAnyPermission } from '@/lib/permissions';
 import type { Auth, BreadcrumbItem } from '@/types';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
@@ -128,96 +128,104 @@ export default function CashBankPage({
                     />
                 </StatGrid>
 
-                <FilterBar
-                    url="/accounting/cash-bank-records"
-                    filters={filters}
-                    searchPlaceholder="Description, reference or entry no."
-                    selects={[
-                        {
-                            key: 'account_id',
-                            label: 'Accounts',
-                            options: cashAccounts.map((a) => ({ value: String(a.id), label: `${a.code} · ${a.name}` })),
-                        },
-                        {
-                            key: 'direction',
-                            label: 'Directions',
-                            options: [
-                                { value: 'in', label: 'Receipts' },
-                                { value: 'out', label: 'Payments' },
-                            ],
-                        },
-                        {
-                            key: 'status',
-                            label: 'Ledger',
-                            options: [
-                                { value: 'posted', label: 'Posted' },
-                                { value: 'draft', label: 'Draft' },
-                            ],
-                        },
-                    ]}
-                    dateRange={{ from: 'date_from', to: 'date_to' }}
-                />
-
-                <TableShell>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Description</TableHead>
-                                <TableHead>Account</TableHead>
-                                <TableHead>Source</TableHead>
-                                <TableHead>Ledger</TableHead>
-                                <TableHead className="text-right">Receipt</TableHead>
-                                <TableHead className="text-right">Payment</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {transactions.data.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={7} className="text-muted-foreground h-32 text-center">
-                                        No cash movements in this period.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                transactions.data.map((t) => (
-                                    <TableRow key={t.id}>
-                                        <TableCell className="whitespace-nowrap">{formatDate(t.entry_date)}</TableCell>
-                                        <TableCell>
-                                            <div className="max-w-80 truncate font-medium">{t.memo || '—'}</div>
-                                            <div className="text-muted-foreground font-mono text-xs">
-                                                {t.entry_no}
-                                                {t.reference && ` · ${t.reference}`}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="text-sm">{t.account ? `${t.account.code} · ${t.account.name}` : '—'}</TableCell>
-                                        <TableCell className="text-sm">
-                                            {t.source_url ? (
-                                                <Link href={t.source_url} className="text-primary hover:underline">
-                                                    {sourceLabel[t.source_type] ?? t.source_type}
-                                                </Link>
-                                            ) : (
-                                                <span className="text-muted-foreground">{sourceLabel[t.source_type] ?? t.source_type}</span>
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            <div className="flex flex-wrap gap-1">
-                                                <StatusBadge status={t.status} />
-                                                {t.is_cleared === true && <StatusBadge status="cleared" />}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono text-emerald-600 tabular-nums dark:text-emerald-400">
-                                            {t.direction === 'in' ? formatAmount(t.amount) : ''}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono tabular-nums">
-                                            {t.direction === 'out' ? formatAmount(t.amount) : ''}
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableShell>
-                <Paginator page={transactions} noun="movements" />
+                <TableCard>
+                    <FilterBar
+                        url="/accounting/cash-bank-records"
+                        filters={filters}
+                        searchPlaceholder="Description, reference or entry no."
+                        selects={[
+                            {
+                                key: 'account_id',
+                                label: 'Accounts',
+                                options: cashAccounts.map((a) => ({ value: String(a.id), label: `${a.code} · ${a.name}` })),
+                            },
+                            {
+                                key: 'direction',
+                                label: 'Directions',
+                                options: [
+                                    { value: 'in', label: 'Receipts' },
+                                    { value: 'out', label: 'Payments' },
+                                ],
+                            },
+                            {
+                                key: 'status',
+                                label: 'Ledger',
+                                options: [
+                                    { value: 'posted', label: 'Posted' },
+                                    { value: 'draft', label: 'Draft' },
+                                ],
+                            },
+                        ]}
+                        dateRange={{ from: 'date_from', to: 'date_to' }}
+                    />
+                    <ListTable
+                        rows={transactions.data}
+                        rowKey={(t) => t.id}
+                        sequenceStart={transactions.from ?? 1}
+                        rowAccent={(t) => (t.direction === 'in' ? 'bg-emerald-500' : 'bg-amber-500')}
+                        columns={[
+                            { id: 'date', header: 'Date', className: 'whitespace-nowrap', cell: (t) => formatDate(t.entry_date) },
+                            {
+                                id: 'description',
+                                header: 'Description',
+                                cell: (t) => (
+                                    <>
+                                        <div className="max-w-80 truncate font-medium">{t.memo || '—'}</div>
+                                        <div className="font-mono text-xs text-muted-foreground">
+                                            {t.entry_no}
+                                            {t.reference && ` · ${t.reference}`}
+                                        </div>
+                                    </>
+                                ),
+                            },
+                            { id: 'account', header: 'Account', minScreen: 'lg', className: 'text-sm', cell: (t) => (t.account ? `${t.account.code} · ${t.account.name}` : '—') },
+                            {
+                                id: 'source',
+                                header: 'Source',
+                                minScreen: 'xl',
+                                className: 'text-sm',
+                                cell: (t) =>
+                                    t.source_url ? (
+                                        <Link href={t.source_url} className="text-primary hover:underline">
+                                            {sourceLabel[t.source_type] ?? t.source_type}
+                                        </Link>
+                                    ) : (
+                                        <span className="text-muted-foreground">{sourceLabel[t.source_type] ?? t.source_type}</span>
+                                    ),
+                            },
+                            {
+                                id: 'ledger',
+                                header: 'Ledger',
+                                cell: (t) => (
+                                    <div className="flex flex-wrap gap-1">
+                                        <StatusBadge status={t.status} />
+                                        {t.is_cleared === true && <StatusBadge status="cleared" />}
+                                    </div>
+                                ),
+                            },
+                            { id: 'in', header: 'Receipt', align: 'right', className: 'font-mono text-emerald-600 tabular-nums dark:text-emerald-400', cell: (t) => (t.direction === 'in' ? formatAmount(t.amount) : '') },
+                            { id: 'out', header: 'Payment', align: 'right', className: 'font-mono tabular-nums', cell: (t) => (t.direction === 'out' ? formatAmount(t.amount) : '') },
+                        ]}
+                        mobileRow={(t) => (
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-sm font-medium">{t.memo || t.entry_no}</span>
+                                    <span className={`font-mono text-sm tabular-nums ${t.direction === 'in' ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
+                                        {t.direction === 'in' ? '+' : '−'}
+                                        {formatAmount(t.amount)}
+                                    </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                    <StatusBadge status={t.status} />
+                                    <span>{formatDate(t.entry_date)}</span>
+                                    {t.account && <span>· {t.account.code}</span>}
+                                </div>
+                            </div>
+                        )}
+                        empty={<TableEmpty title="No cash movements in this period" description="Try another account, direction or date range." />}
+                    />
+                    <Paginator page={transactions} />
+                </TableCard>
             </PageBody>
 
             {kind && (
@@ -263,6 +271,7 @@ function RecordDialog({
     });
     const { data, setData, errors, processing } = form;
     const viaBank = ['check', 'bank_transfer'].includes(data.payment_method);
+    const confirm = useConfirm();
 
     // Suggest the natural side first: income/liability/equity for receipts, expense/asset for payments.
     const preferred = receipt ? ['revenue', 'liability', 'equity'] : ['expense', 'asset'];
@@ -275,8 +284,14 @@ function RecordDialog({
             <DialogContent className="sm:max-w-lg">
                 <form
                     className="grid gap-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: receipt ? 'Record this receipt?' : 'Record this payment?',
+                            description: `${formatPhpCurrency(Number(data.amount) || 0)} will be posted to the books right away. A posted record cannot be edited.`,
+                            confirmLabel: receipt ? 'Record receipt' : 'Record payment',
+                        });
+                        if (!ok) return;
                         form.transform((d) => ({ ...d, bank_account_id: viaBank ? d.bank_account_id : null }));
                         form.post('/accounting/cash-bank-records', { preserveScroll: true, onSuccess: onClose });
                     }}

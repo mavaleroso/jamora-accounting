@@ -3,6 +3,7 @@ import { PageBody, PageHeader } from '@/components/finance/page-header';
 import InputError from '@/components/input-error';
 import { StatCard, StatGrid } from '@/components/stat-card';
 import { Badge } from '@/components/ui/badge';
+import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -216,8 +217,17 @@ function AccountDialog({
     const { data, setData, errors, processing } = form;
     const toggleEntity = (id: number, on: boolean) => setData('entity_ids', on ? [...data.entity_ids, id] : data.entity_ids.filter((x) => x !== id));
 
-    const submit = (e: React.FormEvent) => {
+    const confirm = useConfirm();
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!account) {
+            const ok = await confirm({
+                title: 'Add this bank account?',
+                description: `${data.name || 'The new account'}${data.bank_name ? ` (${data.bank_name})` : ''} is added and can be used for receipts, payments and reconciliations in the selected entities.`,
+                confirmLabel: 'Add bank account',
+            });
+            if (!ok) return;
+        }
         form.transform((d) => ({ ...d, gl_account_id: d.gl_account_id || null }));
         const options = { preserveScroll: true, onSuccess: onClose };
         if (account) form.put(`/banks/accounts/${account.id}`, options);

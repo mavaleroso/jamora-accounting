@@ -33,6 +33,7 @@ class JournalEntryResource extends JsonResource
             'total_credit' => (float) $this->total_credit,
             'source_system' => $this->source_system,
             'prepared_by' => $this->prepared_by,
+            'approved_by' => $this->approved_by,
             'posted_by' => $this->posted_by,
             'posted_at' => $this->posted_at
                 ?->copy()
@@ -47,6 +48,12 @@ class JournalEntryResource extends JsonResource
                 return [
                     'id' => $this->preparedByUser?->id,
                     'name' => $this->preparedByUser?->name ?? $this->preparedByUser?->username,
+                ];
+            }),
+            'approved_by_user' => $this->whenLoaded('approvedByUser', function () {
+                return [
+                    'id' => $this->approvedByUser?->id,
+                    'name' => $this->approvedByUser?->name ?? $this->approvedByUser?->username,
                 ];
             }),
             'posted_by_user' => $this->whenLoaded('postedByUser', function () {

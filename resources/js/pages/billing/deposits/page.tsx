@@ -1,3 +1,4 @@
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
 import { FilterBar } from '@/components/finance/filter-bar';
 import { formatAmount, formatDate, paymentMethodLabels, todayIso } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
@@ -12,12 +13,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import AppLayout from '@/layouts/app-layout';
 import { formatPhpCurrency } from '@/lib/currency';
+import { useConfirm } from '@/components/confirm-dialog';
 import { hasAnyPermission } from '@/lib/permissions';
 import type { Auth, BreadcrumbItem } from '@/types';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
@@ -97,90 +97,86 @@ export default function DepositsPage({ deposits, filters, summary, partners, ban
                     />
                 </StatGrid>
 
-                <FilterBar
-                    url="/billing/deposits"
-                    filters={filters}
-                    searchPlaceholder="Customer or reference"
-                    selects={[
-                        {
-                            key: 'status',
-                            label: 'Statuses',
-                            options: [
-                                { value: 'open', label: 'Open' },
-                                { value: 'applied', label: 'Applied' },
-                                { value: 'refunded', label: 'Refunded' },
-                            ],
-                        },
-                    ]}
-                    dateRange={{ from: 'date_from', to: 'date_to' }}
-                />
-
-                <TableShell>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Customer</TableHead>
-                                <TableHead>Received via</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Applied to</TableHead>
-                                <TableHead className="w-40">Usage</TableHead>
-                                <TableHead className="text-right">Amount</TableHead>
-                                <TableHead className="text-right">Remaining</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {deposits.data.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={8} className="text-muted-foreground h-32 text-center">
-                                        No deposits match these filters.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                deposits.data.map((d) => {
-                                    const remaining = Number(d.amount) - Number(d.applied_amount);
-                                    const pct = Number(d.amount) > 0 ? (Number(d.applied_amount) / Number(d.amount)) * 100 : 0;
-                                    return (
-                                        <TableRow key={d.id}>
-                                            <TableCell className="whitespace-nowrap">{formatDate(d.deposit_date)}</TableCell>
-                                            <TableCell>
-                                                <div className="font-medium">{d.partner?.name ?? '—'}</div>
-                                                {d.notes && <div className="text-muted-foreground max-w-56 truncate text-xs">{d.notes}</div>}
-                                            </TableCell>
-                                            <TableCell>
-                                                <div>{paymentMethodLabels[d.payment_method ?? ''] ?? d.payment_method ?? '—'}</div>
-                                                <div className="text-muted-foreground font-mono text-xs">
-                                                    {d.bank_account ? d.bank_account.code : d.reference || ''}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <StatusBadge status={d.status} />
-                                            </TableCell>
-                                            <TableCell>
-                                                {d.invoice ? (
-                                                    <Link
-                                                        href={`/billing/invoices/${d.invoice.id}`}
-                                                        className="text-primary font-mono text-sm hover:underline"
-                                                    >
-                                                        {d.invoice.invoice_no}
-                                                    </Link>
-                                                ) : (
-                                                    <span className="text-muted-foreground text-xs">Apply from the invoice</span>
-                                                )}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Progress value={pct} />
-                                            </TableCell>
-                                            <TableCell className="text-right font-mono tabular-nums">{formatAmount(d.amount)}</TableCell>
-                                            <TableCell className="text-right font-mono font-medium tabular-nums">{formatAmount(remaining)}</TableCell>
-                                        </TableRow>
-                                    );
-                                })
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableShell>
-                <Paginator page={deposits} noun="deposits" />
+                <TableCard>
+                    <FilterBar
+                        url="/billing/deposits"
+                        filters={filters}
+                        searchPlaceholder="Customer or reference"
+                        selects={[
+                            {
+                                key: 'status',
+                                label: 'Statuses',
+                                options: [
+                                    { value: 'open', label: 'Open' },
+                                    { value: 'applied', label: 'Applied' },
+                                    { value: 'refunded', label: 'Refunded' },
+                                ],
+                            },
+                        ]}
+                        dateRange={{ from: 'date_from', to: 'date_to' }}
+                    />
+                    <ListTable
+                        rows={deposits.data}
+                        rowKey={(d) => d.id}
+                        sequenceStart={deposits.from ?? 1}
+                        columns={[
+                            { id: 'date', header: 'Date', className: 'whitespace-nowrap', cell: (d) => formatDate(d.deposit_date) },
+                            {
+                                id: 'customer',
+                                header: 'Customer',
+                                cell: (d) => (
+                                    <>
+                                        <div className="font-medium">{d.partner?.name ?? '—'}</div>
+                                        {d.notes && <div className="max-w-56 truncate text-xs text-muted-foreground">{d.notes}</div>}
+                                    </>
+                                ),
+                            },
+                            {
+                                id: 'via',
+                                header: 'Received via',
+                                minScreen: 'lg',
+                                cell: (d) => (
+                                    <>
+                                        <div>{paymentMethodLabels[d.payment_method ?? ''] ?? d.payment_method ?? '—'}</div>
+                                        <div className="font-mono text-xs text-muted-foreground">{d.bank_account ? d.bank_account.code : d.reference || ''}</div>
+                                    </>
+                                ),
+                            },
+                            { id: 'status', header: 'Status', cell: (d) => <StatusBadge status={d.status} /> },
+                            {
+                                id: 'applied',
+                                header: 'Applied to',
+                                minScreen: 'lg',
+                                cell: (d) =>
+                                    d.invoice ? (
+                                        <Link href={`/billing/invoices/${d.invoice.id}`} className="font-mono text-sm text-primary hover:underline">
+                                            {d.invoice.invoice_no}
+                                        </Link>
+                                    ) : (
+                                        <span className="text-xs text-muted-foreground">Apply from the invoice</span>
+                                    ),
+                            },
+                            { id: 'usage', header: 'Usage', minScreen: 'xl', headerClassName: 'w-40', cell: (d) => <Progress value={Number(d.amount) > 0 ? (Number(d.applied_amount) / Number(d.amount)) * 100 : 0} /> },
+                            { id: 'amount', header: 'Amount', align: 'right', className: 'font-mono tabular-nums', cell: (d) => formatAmount(d.amount) },
+                            { id: 'remaining', header: 'Remaining', align: 'right', className: 'font-mono font-medium tabular-nums', cell: (d) => formatAmount(Number(d.amount) - Number(d.applied_amount)) },
+                        ]}
+                        mobileRow={(d) => (
+                            <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-sm font-medium">{d.partner?.name ?? '—'}</span>
+                                    <span className="font-mono text-sm font-medium tabular-nums">{formatAmount(d.amount)}</span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                    <StatusBadge status={d.status} />
+                                    <span>{formatDate(d.deposit_date)}</span>
+                                    <span>· {formatAmount(Number(d.amount) - Number(d.applied_amount))} left</span>
+                                </div>
+                            </div>
+                        )}
+                        empty={<TableEmpty icon={PiggyBankIcon} title="No deposits match these filters" description="Try a different search, status or date range." />}
+                    />
+                    <Paginator page={deposits} />
+                </TableCard>
             </PageBody>
 
             <ReceiveDepositDialog open={open} onOpenChange={setOpen} partners={partners} bankAccounts={bankAccounts} methods={paymentMethods} />
@@ -212,14 +208,21 @@ function ReceiveDepositDialog({
     });
     const { data, setData, errors, processing } = form;
     const needsBank = ['check', 'bank_transfer'].includes(data.payment_method);
+    const confirm = useConfirm();
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-lg">
                 <form
                     className="grid gap-4"
-                    onSubmit={(e) => {
+                    onSubmit={async (e) => {
                         e.preventDefault();
+                        const ok = await confirm({
+                            title: 'Record this deposit?',
+                            description: `${formatPhpCurrency(Number(data.amount) || 0)} will be posted as received and held as the customer's deposit.`,
+                            confirmLabel: 'Record deposit',
+                        });
+                        if (!ok) return;
                         form.transform((d) => ({ ...d, bank_account_id: needsBank ? d.bank_account_id : null }));
                         form.post('/billing/deposits', {
                             preserveScroll: true,

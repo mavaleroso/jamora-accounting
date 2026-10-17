@@ -11,6 +11,7 @@ use App\Models\Payslip;
 use App\Models\User;
 use App\Services\Payroll\PayrollCalculator;
 use Carbon\Carbon;
+use Carbon\CarbonPeriod;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -66,6 +67,18 @@ function dtr(Employee $e, string $date, array $attrs = []): DtrEntry
     ]);
 }
 
+/** Approval needs every working day of the cut-off recorded and approved: fill the days not set up by a test. */
+function fillCutoff(Employee ...$employees): void
+{
+    foreach ($employees as $e) {
+        foreach (CarbonPeriod::create('2026-10-01', '2026-10-15') as $day) {
+            if (! $day->isSunday() && ! DtrEntry::where('employee_id', $e->id)->whereDate('work_date', $day)->exists()) {
+                dtr($e, $day->toDateString());
+            }
+        }
+    }
+}
+
 test('semi-monthly pay follows PH statutory tables', function () {
     dtr($this->monthly, '2026-10-06', ['time_in' => null, 'time_out' => null, 'regular_hours' => 0, 'attendance_status' => 'absent', 'is_absent' => true]);
     dtr($this->daily, '2026-10-05');
@@ -110,6 +123,7 @@ test('BIR withholding table brackets', function () {
 
 test('draft, adjust, approve, post, release — end to end', function () {
     dtr($this->daily, '2026-10-05');
+    fillCutoff($this->monthly, $this->daily);
     ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute");
     $run = PayrollRun::firstOrFail();
 
@@ -181,6 +195,7 @@ test('benefit enrollments flow into payslips and the payroll journal entry', fun
         ->assertInertia(fn (Assert $page) => $page->component('employee-management/benefits/page')->has('enrollments', 4)->has('programs', 4));
 
     dtr($this->daily, '2026-10-05');
+    fillCutoff($this->monthly, $this->daily);
     ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
     $run = PayrollRun::firstOrFail();
 
@@ -211,6 +226,7 @@ test('benefit enrollments flow into payslips and the payroll journal entry', fun
 
 test('approval is blocked by negative net pay and returning to draft unlocks the cut-off', function () {
     dtr($this->monthly, '2026-10-02');
+    fillCutoff($this->monthly, $this->daily);
     ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute");
     $run = PayrollRun::firstOrFail();
 
@@ -220,11 +236,11 @@ test('approval is blocked by negative net pay and returning to draft unlocks the
     $adjustment = $run->adjustments()->firstOrFail();
     ($this->as)()->delete("/payroll/runs/{$run->id}/adjustments/{$adjustment->id}")->assertSessionHasNoErrors();
     ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasNoErrors();
-    expect(DtrEntry::firstOrFail()->status)->toBe(DtrEntry::STATUS_LOCKED);
+    expect(DtrEntry::where('status', '!=', DtrEntry::STATUS_LOCKED)->exists())->toBeFalse();
 
     ($this->as)()->post("/payroll/runs/{$run->id}/reopen")->assertSessionHasNoErrors();
     expect($run->fresh()->status)->toBe('draft')
-        ->and(DtrEntry::firstOrFail()->status)->toBe(DtrEntry::STATUS_APPROVED);
+        ->and(DtrEntry::where('status', '!=', DtrEntry::STATUS_APPROVED)->exists())->toBeFalse();
 
     // Recomputing keeps a single run for the period.
     ($this->as)()->post("/payroll/runs/{$run->id}/recompute")->assertSessionHasNoErrors();
@@ -234,6 +250,28 @@ test('approval is blocked by negative net pay and returning to draft unlocks the
     ($this->as)()->post("/payroll/runs/{$run->id}/void")->assertRedirect();
     ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute");
     expect(PayrollRun::where('status', 'draft')->value('run_no'))->toBe('PR-PP-2026-10-1-2');
+});
+
+test('approval is blocked until every working day is recorded, complete and approved, on fresh payslips', function () {
+    dtr($this->monthly, '2026-10-02', ['status' => DtrEntry::STATUS_OPEN]);
+    dtr($this->daily, '2026-10-02', ['time_out' => null, 'attendance_status' => 'incomplete']);
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute");
+    $run = PayrollRun::firstOrFail();
+
+    ($this->as)()->get("/payroll/runs/{$run->id}")->assertInertia(fn (Assert $page) => $page
+        ->where('checks', fn ($checks) => collect($checks)->where('level', 'error')->pluck('key')->sort()->values()->all() === ['incomplete', 'no_record_days', 'open_records']));
+    ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasErrors('status');
+
+    // Fixed in Time & Attendance, but the payslips were computed before the fix.
+    $this->travel(1)->minutes();
+    DtrEntry::where('employee_id', $this->monthly->id)->update(['status' => DtrEntry::STATUS_APPROVED]);
+    DtrEntry::where('employee_id', $this->daily->id)->update(['time_out' => '18:00:00', 'attendance_status' => 'present']);
+    fillCutoff($this->monthly, $this->daily);
+    ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasErrors('status');
+
+    ($this->as)()->post("/payroll/runs/{$run->id}/recompute")->assertSessionHasNoErrors();
+    ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasNoErrors();
+    expect($run->fresh()->status)->toBe('approved');
 });
 
 test('periods are generated per month and the overview lists them', function () {
@@ -261,4 +299,28 @@ test('the overview renders for a branch with no pay periods yet', function () {
 
     ($this->as)()->get('/payroll/runs')->assertOk()
         ->assertInertia(fn (Assert $page) => $page->has('periods', 0)->where('years', [2026])->where('next', null));
+});
+
+test('contributions are always computed from the table, unless set to not deducted', function () {
+    $this->monthly->update(['sss_number' => null, 'contribution_settings' => [
+        'sss' => ['mode' => 'none'],
+        'pagibig' => ['mode' => 'fixed', 'employee' => 500, 'employer' => 300],   // an older stored amount is ignored
+    ]]);
+
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
+
+    $m = Payslip::where('employee_id', $this->monthly->id)->firstOrFail();
+    expect((float) $m->sss)->toBe(0.0)
+        ->and((float) $m->sss_er)->toBe(0.0)
+        ->and((float) $m->sss_ec)->toBe(0.0)
+        ->and((float) $m->philhealth)->toBe(375.0)          // table: 30,000 x 5% / 2 / 2
+        ->and((float) $m->philhealth_er)->toBe(375.0)
+        ->and((float) $m->pagibig)->toBe(100.0)             // table, not the stored 500
+        ->and((float) $m->pagibig_er)->toBe(100.0)
+        ->and($m->meta['contribution_modes'])->toBe(['sss' => 'none'])
+        // No SSS number is needed when SSS is not deducted.
+        ->and(collect($m->meta['warnings'])->contains('No SSS number on file.'))->toBeFalse();
+
+    $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
+    expect($d->meta['contribution_modes'])->toBe([]);
 });

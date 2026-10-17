@@ -1,4 +1,5 @@
-import { ConfirmDialog } from '@/components/confirm-dialog';
+import { ListTable, TableCard, TableEmpty } from '@/components/data-table';
+import { ConfirmDialog, useConfirm } from '@/components/confirm-dialog';
 import { FilterBar, type FilterSelect } from '@/components/finance/filter-bar';
 import { formatAmount } from '@/components/finance/format';
 import { PageBody, PageHeader } from '@/components/finance/page-header';
@@ -13,8 +14,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { TableShell } from '@/components/ui/table-shell';
 import { Textarea } from '@/components/ui/textarea';
 import { formatPhpCurrency } from '@/lib/currency';
 import { Link, router, useForm } from '@inertiajs/react';
@@ -101,90 +100,120 @@ export function PartyDirectory({ config, parties, filters, summary }: Props) {
                 />
             </StatGrid>
 
-            <FilterBar url={config.baseUrl} filters={filters} searchPlaceholder="Name, code or TIN" selects={selects} />
-
-            <TableShell>
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Name</TableHead>
-                            {config.types && <TableHead>Type</TableHead>}
-                            <TableHead>TIN</TableHead>
-                            <TableHead>Contact</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">{config.balanceLabel}</TableHead>
-                            <TableHead className="w-10" />
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {parties.data.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={7} className="text-muted-foreground h-32 text-center">
-                                    No {config.noun}s match these filters.
-                                </TableCell>
-                            </TableRow>
-                        ) : (
-                            parties.data.map((p) => (
-                                <TableRow key={p.id} className={p.is_active ? '' : 'opacity-60'}>
-                                    <TableCell>
-                                        <div className="font-medium">{p.name}</div>
-                                        <div className="text-muted-foreground font-mono text-xs">{p.code}</div>
-                                    </TableCell>
-                                    {config.types && (
-                                        <TableCell>
-                                            <Badge variant="outline" className="font-normal">
-                                                {typeLabel(p.type)}
-                                            </Badge>
-                                        </TableCell>
+            <TableCard>
+                <FilterBar url={config.baseUrl} filters={filters} searchPlaceholder="Name, code or TIN" selects={selects} />
+                <ListTable
+                    rows={parties.data}
+                    rowKey={(p) => p.id}
+                    sequenceStart={parties.from ?? 1}
+                    onRowClick={(p) => setEditing(p)}
+                    rowClassName={(p) => (p.is_active ? undefined : 'opacity-60')}
+                    actions={(p) => (
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${p.name}`}>
+                                    <MoreHorizontalIcon className="size-4" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                                <DropdownMenuItem onClick={() => setEditing(p)}>Edit</DropdownMenuItem>
+                                <DropdownMenuItem asChild>
+                                    <Link href={config.documentsUrl(p)}>View {config.documentNoun}s</Link>
+                                </DropdownMenuItem>
+                                <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(p)}>
+                                    Delete
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    )}
+                    columns={[
+                        {
+                            id: 'name',
+                            header: 'Name',
+                            cell: (p) => (
+                                <>
+                                    <div className="font-medium">{p.name}</div>
+                                    <div className="font-mono text-xs text-muted-foreground">{p.code}</div>
+                                </>
+                            ),
+                        },
+                        ...(config.types
+                            ? [
+                                  {
+                                      id: 'type',
+                                      header: 'Type',
+                                      cell: (p: Party) => (
+                                          <Badge variant="outline" className="font-normal">
+                                              {typeLabel(p.type)}
+                                          </Badge>
+                                      ),
+                                  },
+                              ]
+                            : []),
+                        { id: 'tin', header: 'TIN', minScreen: 'lg', className: 'font-mono text-xs', cell: (p) => p.tin || '—' },
+                        {
+                            id: 'contact',
+                            header: 'Contact',
+                            minScreen: 'lg',
+                            className: 'text-sm',
+                            cell: (p) => (
+                                <>
+                                    <div>{p.phone || '—'}</div>
+                                    {p.email && <div className="text-xs text-muted-foreground">{p.email}</div>}
+                                </>
+                            ),
+                        },
+                        { id: 'status', header: 'Status', cell: (p) => <Badge variant={p.is_active ? 'secondary' : 'outline'}>{p.is_active ? 'Active' : 'Inactive'}</Badge> },
+                        {
+                            id: 'balance',
+                            header: config.balanceLabel,
+                            align: 'right',
+                            cell: (p) => (
+                                <>
+                                    {Number(p.open_balance) > 0 ? (
+                                        <Link href={config.documentsUrl(p)} onClick={(e) => e.stopPropagation()} className="font-mono tabular-nums hover:text-primary hover:underline">
+                                            {formatAmount(p.open_balance)}
+                                        </Link>
+                                    ) : (
+                                        <span className="font-mono text-muted-foreground tabular-nums">0.00</span>
                                     )}
-                                    <TableCell className="font-mono text-xs">{p.tin || '—'}</TableCell>
-                                    <TableCell className="text-sm">
-                                        <div>{p.phone || '—'}</div>
-                                        {p.email && <div className="text-muted-foreground text-xs">{p.email}</div>}
-                                    </TableCell>
-                                    <TableCell>
-                                        <Badge variant={p.is_active ? 'secondary' : 'outline'}>{p.is_active ? 'Active' : 'Inactive'}</Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                        {Number(p.open_balance) > 0 ? (
-                                            <Link href={config.documentsUrl(p)} className="hover:text-primary font-mono tabular-nums hover:underline">
-                                                {formatAmount(p.open_balance)}
-                                            </Link>
-                                        ) : (
-                                            <span className="text-muted-foreground font-mono tabular-nums">0.00</span>
-                                        )}
-                                        {p.open_invoices > 0 && (
-                                            <div className="text-muted-foreground text-xs">
-                                                {p.open_invoices} open {config.documentNoun}
-                                                {p.open_invoices === 1 ? '' : 's'}
-                                            </div>
-                                        )}
-                                    </TableCell>
-                                    <TableCell>
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" size="icon" aria-label={`Actions for ${p.name}`}>
-                                                    <MoreHorizontalIcon className="size-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem onClick={() => setEditing(p)}>Edit</DropdownMenuItem>
-                                                <DropdownMenuItem asChild>
-                                                    <Link href={config.documentsUrl(p)}>View {config.documentNoun}s</Link>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem className="text-destructive" onClick={() => setDeleting(p)}>
-                                                    Delete
-                                                </DropdownMenuItem>
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-                                    </TableCell>
-                                </TableRow>
-                            ))
-                        )}
-                    </TableBody>
-                </Table>
-            </TableShell>
-            <Paginator page={parties} noun={`${config.noun}s`} />
+                                    {p.open_invoices > 0 && (
+                                        <div className="text-xs text-muted-foreground">
+                                            {p.open_invoices} open {config.documentNoun}
+                                            {p.open_invoices === 1 ? '' : 's'}
+                                        </div>
+                                    )}
+                                </>
+                            ),
+                        },
+                    ]}
+                    mobileRow={(p) => (
+                        <div className="space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="truncate text-sm font-medium">{p.name}</span>
+                                <span className="font-mono text-sm tabular-nums">{formatAmount(p.open_balance ?? 0)}</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                <span className="font-mono">{p.code}</span>
+                                <Badge variant={p.is_active ? 'secondary' : 'outline'}>{p.is_active ? 'Active' : 'Inactive'}</Badge>
+                            </div>
+                        </div>
+                    )}
+                    empty={
+                        <TableEmpty
+                            icon={UsersIcon}
+                            title={`No ${config.noun}s match these filters`}
+                            description="Try a different search or status."
+                            action={
+                                <Button size="sm" onClick={() => setEditing('new')}>
+                                    <PlusIcon className="size-4" /> Add {config.noun}
+                                </Button>
+                            }
+                        />
+                    }
+                />
+                <Paginator page={parties} />
+            </TableCard>
 
             {editing && <PartyDialog config={config} party={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
             <ConfirmDialog
@@ -214,9 +243,18 @@ function PartyDialog({ config, party, onClose }: { config: Config; party: Party 
         is_active: party?.is_active ?? true,
     });
     const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
 
-    const submit = (e: React.FormEvent) => {
+    const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!party) {
+            const ok = await confirm({
+                title: `Add this ${config.noun.toLowerCase()}?`,
+                description: `${data.name || `The new ${config.noun.toLowerCase()}`} will be added to the directory.`,
+                confirmLabel: `Add ${config.noun.toLowerCase()}`,
+            });
+            if (!ok) return;
+        }
         const options = { preserveScroll: true, onSuccess: onClose };
         if (party) form.put(`${config.baseUrl}/${party.id}`, options);
         else form.post(config.baseUrl, options);
