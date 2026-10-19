@@ -130,15 +130,10 @@ class BillsController extends Controller
             'payments.bankAccount:id,code,name',
             'journalEntry:id,entry_no,status',
         ]);
-        $entityId = app(EntityContext::class)->id();
 
         return Inertia::render('ap/bills/show/page', [
             'bill' => $bill,
-            'bankAccounts' => BankAccount::query()
-                ->where('is_active', true)
-                ->when($entityId, fn ($q) => $q->whereHas('entities', fn ($e) => $e->where('entities.id', $entityId)))
-                ->orderBy('code')
-                ->get(['id', 'code', 'name', 'bank_name', 'is_shared']),
+            'bankAccounts' => BankAccount::query()->active()->orderBy('code')->get(['id', 'code', 'name', 'bank_name']),
             'paymentMethods' => BillService::PAYMENT_METHODS,
             'entityName' => app(EntityContext::class)->current()?->name,
         ]);

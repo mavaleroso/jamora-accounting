@@ -35,11 +35,12 @@ type Deposit = {
     payment_method: string | null;
     reference: string | null;
     notes: string | null;
+    source_system?: string | null;
     partner?: { id: number; code: string; name: string } | null;
     invoice?: { id: number; invoice_no: string } | null;
     bank_account?: { id: number; code: string; name: string } | null;
 };
-type Option = { id: number; code: string; name: string; is_shared?: boolean };
+type Option = { id: number; code: string; name: string };
 
 type Props = {
     deposits: Paginated<Deposit>;
@@ -110,6 +111,15 @@ export default function DepositsPage({ deposits, filters, summary, partners, ban
                                     { value: 'open', label: 'Open' },
                                     { value: 'applied', label: 'Applied' },
                                     { value: 'refunded', label: 'Refunded' },
+                                    { value: 'void', label: 'Void' },
+                                ],
+                            },
+                            {
+                                key: 'source',
+                                label: 'Sources',
+                                options: [
+                                    { value: 'optical', label: 'Optical POS' },
+                                    { value: 'manual', label: 'Recorded here' },
                                 ],
                             },
                         ]}
@@ -126,7 +136,12 @@ export default function DepositsPage({ deposits, filters, summary, partners, ban
                                 header: 'Customer',
                                 cell: (d) => (
                                     <>
-                                        <div className="font-medium">{d.partner?.name ?? '—'}</div>
+                                        <div className="flex items-center gap-1.5 font-medium">
+                                            {d.partner?.name ?? '—'}
+                                            {d.source_system === 'optical' && (
+                                                <span className="rounded border px-1 text-[10px] font-normal text-muted-foreground">Optical POS</span>
+                                            )}
+                                        </div>
                                         {d.notes && <div className="max-w-56 truncate text-xs text-muted-foreground">{d.notes}</div>}
                                     </>
                                 ),

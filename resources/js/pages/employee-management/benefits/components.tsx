@@ -20,6 +20,7 @@ import {
     defaultShares,
     fmtDate,
     isOpen,
+    isPerDay,
     MODE,
     peso,
     programAmounts,
@@ -65,7 +66,8 @@ function PayrollEffect({ program }: { program: Program }) {
                 </p>
                 <p className="opacity-90">
                     {m.effect}
-                    {program.payroll_mode !== 'none' && ' Semi-monthly payrolls apply half the monthly amount per cut-off.'}
+                    {program.payroll_mode !== 'none' &&
+                        (isPerDay(program) ? ' Paid for each day worked in the cut-off.' : ' Semi-monthly payrolls apply half the monthly amount per cut-off.')}
                 </p>
             </div>
         </div>
@@ -142,6 +144,7 @@ function EnrollForm({
 
     const program = programs.find((p) => String(p.id) === data.benefit_program_id);
     const isEarning = program?.payroll_mode === 'earning';
+    const perDay = isPerDay(program);
     const enrolled = React.useMemo(
         () => new Set(enrollments.filter((e) => String(e.program_id) === data.benefit_program_id && isOpen(e)).map((e) => e.employee_id)),
         [enrollments, data.benefit_program_id],
@@ -149,7 +152,7 @@ function EnrollForm({
 
     const shown = employees.filter((e) => {
         const q = query.trim().toLowerCase();
-        return !q || [e.name, e.employee_code, e.position, e.department].some((v) => v?.toLowerCase().includes(q));
+        return !q || [e.name, e.employee_code, e.position].some((v) => v?.toLowerCase().includes(q));
     });
     const selectable = shown.filter((e) => !enrolled.has(e.id));
     const allShownSelected = selectable.length > 0 && selectable.every((e) => data.employee_ids.includes(e.id));
@@ -236,7 +239,7 @@ function EnrollForm({
                         <Checkbox checked={allShownSelected} disabled={selectable.length === 0} onCheckedChange={(v) => toggleAll(v === true)} aria-label="Select all shown" />
                         <div className="relative flex-1">
                             <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, code, position, department" className="h-8 pl-7 text-sm" />
+                            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, code, position" className="h-8 pl-7 text-sm" />
                         </div>
                     </div>
                     <ul className="max-h-64 divide-y overflow-y-auto">
@@ -254,7 +257,6 @@ function EnrollForm({
                                             <span className="block truncate text-sm font-medium">{e.name}</span>
                                             <span className="block truncate text-[11px] text-muted-foreground">
                                                 {e.employee_code} · {e.position ?? '—'}
-                                                {e.department && ` · ${e.department}`}
                                             </span>
                                         </span>
                                         {already ? (
@@ -280,7 +282,7 @@ function EnrollForm({
             <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                 <div className="flex items-start justify-between gap-3">
                     <div>
-                        <p className="text-sm font-medium">{isEarning ? 'Monthly allowance' : 'Monthly shares'}</p>
+                        <p className="text-sm font-medium">{perDay ? 'Allowance per day worked' : isEarning ? 'Monthly allowance' : 'Monthly shares'}</p>
                         <p className="text-[11px] text-muted-foreground">
                             {data.custom
                                 ? 'The same amount for every selected employee.'
@@ -302,7 +304,7 @@ function EnrollForm({
                             </Field>
                         )}
                         <Field label={isEarning ? 'Allowance' : 'Employer share'} htmlFor="er" error={errors.employer_share} hint={isEarning ? 'Paid on the payslip' : 'Company-paid premium'}>
-                            <MoneyInput id="er" value={data.employer_share} onChange={(v) => setData('employer_share', v)} />
+                            <MoneyInput id="er" value={data.employer_share} onChange={(v) => setData('employer_share', v)} suffix={perDay ? '/ day' : undefined} />
                         </Field>
                     </div>
                 )}
@@ -427,7 +429,7 @@ function EnrollmentForm({ enrollment, program, employee, onDone }: { enrollment:
                     </Field>
                 )}
                 <Field label={isEarning ? 'Allowance' : 'Employer share'} htmlFor="er" error={errors.employer_share} hint={`Default ${peso(defaults.employer)}`}>
-                    <MoneyInput id="er" value={data.employer_share} onChange={(v) => setData('employer_share', v)} />
+                    <MoneyInput id="er" value={data.employer_share} onChange={(v) => setData('employer_share', v)} suffix={isPerDay(program) ? '/ day' : undefined} />
                 </Field>
             </div>
 
@@ -517,6 +519,8 @@ export function ProgramDialog({ open, program, categories, onClose }: { open: bo
     );
 }
 
+type Basis = 'fixed' | 'percent_of_basic' | 'per_day';
+
 const MODE_CHOICES: { mode: Exclude<PayrollMode, 'statutory'>; title: string; example: string }[] = [
     { mode: 'earning', title: 'Allowance', example: 'Meal, transport, rice subsidy' },
     { mode: 'contribution', title: 'Contribution', example: 'HMO, group life, retirement plan' },
@@ -529,7 +533,7 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
         code: program?.code ?? '',
         category: program?.category && program.category !== 'statutory' ? program.category : 'allowance',
         payroll_mode: (program?.payroll_mode !== 'statutory' ? program?.payroll_mode : undefined) ?? 'earning',
-        contribution_basis: program?.contribution_basis === 'percent_of_basic' ? 'percent_of_basic' : 'fixed',
+        contribution_basis: (program?.contribution_basis === 'percent_of_basic' || program?.contribution_basis === 'per_day' ? program.contribution_basis : 'fixed') as Basis,
         default_employee_share: String(program?.default_employee_share ?? ''),
         default_employer_share: String(program?.default_employer_share ?? ''),
         employee_rate: String(program?.employee_rate ?? ''),
@@ -540,6 +544,7 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
     const { data, setData, errors, processing } = form;
     const isEarning = data.payroll_mode === 'earning';
     const percent = data.contribution_basis === 'percent_of_basic';
+    const perDay = data.contribution_basis === 'per_day';
     const codeTouched = React.useRef(Boolean(program));
 
     const setName = (name: string) =>
@@ -631,7 +636,8 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
                                 type="button"
                                 role="radio"
                                 aria-checked={active}
-                                onClick={() => setData('payroll_mode', c.mode)}
+                                // Only an allowance can be paid per day worked.
+                                onClick={() => setData((d) => ({ ...d, payroll_mode: c.mode, contribution_basis: c.mode !== 'earning' && d.contribution_basis === 'per_day' ? 'fixed' : d.contribution_basis }))}
                                 className={cn(
                                     'rounded-lg border-2 p-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
                                     active ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40',
@@ -650,13 +656,14 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
             <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-medium">{isEarning ? 'Default allowance' : 'Default monthly shares'}</p>
-                    <Select value={data.contribution_basis} onValueChange={(v) => setData('contribution_basis', v as 'fixed' | 'percent_of_basic')}>
+                    <Select value={data.contribution_basis} onValueChange={(v) => setData('contribution_basis', v as Basis)}>
                         <SelectTrigger className="h-8 w-auto text-xs">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                             <SelectItem value="fixed">Fixed amount</SelectItem>
                             <SelectItem value="percent_of_basic">% of monthly rate</SelectItem>
+                            {isEarning && <SelectItem value="per_day">Per day worked</SelectItem>}
                         </SelectContent>
                     </Select>
                 </div>
@@ -667,7 +674,11 @@ function ProgramForm({ program, categories, onDone }: { program: Program | null;
                         </Field>
                     )}
                     <Field label={isEarning ? 'Allowance' : 'Employer share'} htmlFor="er" error={percent ? errors.employer_rate : errors.default_employer_share}>
-                        {percent ? rateInput('employer_rate', 'er') : <MoneyInput id="er" value={data.default_employer_share} onChange={(v) => setData('default_employer_share', v)} />}
+                        {percent ? (
+                            rateInput('employer_rate', 'er')
+                        ) : (
+                            <MoneyInput id="er" value={data.default_employer_share} onChange={(v) => setData('default_employer_share', v)} suffix={perDay ? '/ day' : undefined} />
+                        )}
                     </Field>
                 </div>
                 {isEarning && (

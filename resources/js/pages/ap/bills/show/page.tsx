@@ -48,7 +48,7 @@ type Bill = {
     }[];
     journal_entry?: { id: number; entry_no: string; status: string } | null;
 };
-type BankAccount = { id: number; code: string; name: string; bank_name: string; is_shared: boolean };
+type BankAccount = { id: number; code: string; name: string; bank_name: string };
 type Props = { bill: Bill; bankAccounts: BankAccount[]; paymentMethods: string[]; entityName: string | null };
 
 const vatLabel: Record<string, string> = { exclusive: 'VAT-exclusive', inclusive: 'VAT-inclusive', non_vat: 'Non-VAT supplier' };
@@ -365,7 +365,7 @@ function PayDialog({
                                 <SelectContent>
                                     {bankAccounts.map((b) => (
                                         <SelectItem key={b.id} value={String(b.id)}>
-                                            {b.code} · {b.name} {b.is_shared ? '(shared)' : '(dedicated)'}
+                                            {b.code} · {b.name} ({b.bank_name})
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -403,9 +403,7 @@ function PayDialog({
                         <Building2Icon className="size-4" />
                         <AlertDescription className="text-xs">
                             Charged to <strong>{entityName ?? 'the current entity'}</strong>
-                            {fromBank && bank?.is_shared
-                                ? ` — this disbursement is tagged to ${entityName ?? 'this entity'} on the shared account so each entity's expenses stay separate.`
-                                : '.'}
+                            {fromBank ? ' and paid from its own bank account.' : '.'}
                         </AlertDescription>
                     </Alert>
                     <DialogFooter>

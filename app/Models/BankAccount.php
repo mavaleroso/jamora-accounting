@@ -2,28 +2,29 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToEntity;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * A bank account owned by exactly one entity. Its receipts and disbursements post to its own Cash in Bank
+ * sub-account in that entity's chart (see ChartOfAccounts::ensureBankLedger).
+ */
 class BankAccount extends Model
 {
+    use BelongsToEntity;
+
     protected $fillable = [
-        'code', 'name', 'bank_name', 'account_number', 'is_shared', 'gl_account_id', 'is_active',
+        'entity_id', 'code', 'name', 'bank_name', 'account_number', 'gl_account_id', 'is_active',
     ];
 
     protected function casts(): array
     {
         return [
-            'is_shared' => 'boolean',
             'is_active' => 'boolean',
         ];
-    }
-
-    public function entities(): BelongsToMany
-    {
-        return $this->belongsToMany(Entity::class, 'bank_account_entity')->withTimestamps();
     }
 
     public function glAccount(): BelongsTo
@@ -36,8 +37,12 @@ class BankAccount extends Model
         return $this->hasMany(BankTransaction::class);
     }
 
-    public function allowsEntity(int $entityId): bool
+    /**
+     * @param  Builder<BankAccount>  $query
+     * @return Builder<BankAccount>
+     */
+    public function scopeActive(Builder $query): Builder
     {
-        return $this->entities()->where('entities.id', $entityId)->exists();
+        return $query->where('is_active', true);
     }
 }

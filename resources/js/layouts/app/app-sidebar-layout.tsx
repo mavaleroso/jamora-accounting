@@ -16,7 +16,9 @@ export default function AppSidebarLayout({ children, breadcrumbs = [] }: AppLayo
             <AppSidebar />
             <AppContent variant="sidebar" className="overflow-x-hidden">
                 <AppSidebarHeader breadcrumbs={breadcrumbs} />
-                <div className={cn(shellWidthClass(contentWidth), 'flex flex-1 flex-col')}>{children}</div>
+                <div data-page-content className={cn(shellWidthClass(contentWidth), 'flex flex-1 flex-col')}>
+                    {children}
+                </div>
                 <AppFooter />
             </AppContent>
         </AppShell>

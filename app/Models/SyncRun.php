@@ -2,14 +2,15 @@
 
 namespace App\Models;
 
-use App\Models\Concerns\BelongsToEntity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * One run of the optical sync. A run covers every entity (an order can post to more than one), so it is not
+ * entity-scoped; entity_id is kept for older runs.
+ */
 class SyncRun extends Model
 {
-    use BelongsToEntity;
-
     protected $fillable = [
         'entity_id',
         'started_at',

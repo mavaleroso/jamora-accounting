@@ -23,7 +23,7 @@ class PayslipPresenter
         return [
             'id' => $p->id,
             'employee' => $e ? [
-                ...$e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department', 'pay_type', 'bank_name']),
+                ...$e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'pay_type', 'bank_name']),
                 'basic_rate' => (float) $e->basic_pay,
                 'bank_account_hint' => $e->bank_account_no ? '•••• '.substr((string) $e->bank_account_no, -4) : null,
             ] : null,

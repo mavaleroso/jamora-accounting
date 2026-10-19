@@ -5,22 +5,27 @@ namespace App\Http\Controllers\Integration;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\PostingRule;
+use App\Models\SyncCursor;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
-use App\Services\Accounting\OpticalSyncService;
-use Carbon\Carbon;
+use App\Services\Optical\OpticalApiClient;
+use App\Services\Optical\OpticalSyncService;
+use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
+/**
+ * The optical POS sync: run it, see what each run did, and review the documents that failed or were flagged.
+ */
 class OpticalSyncController extends Controller
 {
     public function __construct(
         private readonly OpticalSyncService $syncService
     ) {}
 
-    public function index(Request $request): Response
+    public function index(OpticalApiClient $api): Response
     {
         $runs = SyncRun::query()
             ->with('triggeredByUser:id,firstname,lastname,username')
@@ -32,8 +37,6 @@ class OpticalSyncController extends Controller
                 'started_at' => $run->started_at?->toIso8601String(),
                 'finished_at' => $run->finished_at?->toIso8601String(),
                 'status' => $run->status,
-                'from_date' => $run->from_date?->toDateString(),
-                'to_date' => $run->to_date?->toDateString(),
                 'processed' => $run->processed,
                 'created_entries' => $run->created_entries,
                 'skipped' => $run->skipped,
@@ -42,50 +45,67 @@ class OpticalSyncController extends Controller
                 'triggered_by' => $run->triggeredByUser?->name,
             ]);
 
-        $lastRun = $runs->first();
-        $failedCount = SyncDocument::query()->where('status', 'failed')->count();
+        $documents = SyncDocument::query()->where('source_system', 'optical');
 
         return Inertia::render('integration/optical/page', [
             'runs' => $runs,
-            'lastRun' => $lastRun,
-            'failedCount' => $failedCount,
-            'syncDriver' => 'db',
+            'lastRun' => $runs->first(),
+            'failedCount' => (clone $documents)->where('status', 'failed')->count(),
+            'reviewCount' => (clone $documents)->where('status', 'review')->count(),
+            'cursors' => SyncCursor::query()
+                ->where('source_system', 'optical')
+                ->get()
+                ->keyBy('stream')
+                ->map(fn (SyncCursor $c) => $c->cursor_at?->toIso8601String()),
+            'streams' => OpticalSyncService::STREAMS,
+            'settings' => [
+                'configured' => $api->isConfigured(),
+                'base_url' => config('optical.api.base_url'),
+                'start_date' => config('optical.start_date'),
+                'product_entity' => config('optical.product_entity'),
+                'workshop_entity' => config('optical.workshop_entity'),
+                'auto_post' => (bool) config('accounting.auto_post_source_documents', true),
+            ],
         ]);
     }
 
     public function run(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'from' => ['nullable', 'date'],
-            'to' => ['nullable', 'date', 'after_or_equal:from'],
+            'full' => ['nullable', 'boolean'],
         ]);
 
-        $from = isset($validated['from']) ? Carbon::parse($validated['from'])->startOfDay() : null;
-        $to = isset($validated['to']) ? Carbon::parse($validated['to'])->endOfDay() : null;
+        try {
+            $run = $this->syncService->run($request->user(), ['full' => (bool) ($validated['full'] ?? false)]);
+        } catch (\RuntimeException $e) {
+            return redirect()->back()->with('error', $e->getMessage());
+        }
 
-        $run = $this->syncService->sync($from, $to, $request->user());
-
-        $message = "Sync finished: {$run->created_entries} entries created, {$run->skipped} skipped, {$run->failed} failed.";
-
-        return redirect()->back()->with('status', $message);
+        return redirect()->back()->with(
+            $run->status === 'failed' ? 'error' : 'status',
+            "Sync {$run->status}: {$run->processed} read, {$run->created_entries} booked, {$run->failed} failed."
+        );
     }
 
     public function exceptions(Request $request): Response
     {
         $pageSize = max(1, min(100, (int) $request->get('per_page', 15)));
-        $page = max(1, (int) $request->get('page', 1));
+        $status = in_array($request->get('status'), ['failed', 'review'], true) ? $request->get('status') : null;
 
         $paginator = SyncDocument::query()
             ->with('journalEntry:id,entry_no,status')
-            ->where('status', 'failed')
+            ->where('source_system', 'optical')
+            ->when($status, fn ($q) => $q->where('status', $status), fn ($q) => $q->whereIn('status', ['failed', 'review']))
+            ->orderByRaw("case when status = 'failed' then 0 else 1 end")
             ->orderByDesc('updated_at')
-            ->paginate($pageSize, ['*'], 'page', $page);
+            ->paginate($pageSize)
+            ->withQueryString();
 
         $documents = collect($paginator->items())->map(fn (SyncDocument $doc) => [
             'id' => $doc->id,
             'source_type' => $doc->source_type,
             'source_id' => $doc->source_id,
-            'payload_hash' => $doc->payload_hash,
+            'reference' => $this->reference($doc),
             'status' => $doc->status,
             'error' => $doc->error,
             'synced_at' => $doc->synced_at?->toIso8601String(),
@@ -102,14 +122,28 @@ class OpticalSyncController extends Controller
             'totalDocuments' => $paginator->total(),
             'pageSize' => $pageSize,
             'currentPage' => $paginator->currentPage(),
+            'status' => $status,
         ]);
     }
 
-    public function retry(SyncDocument $syncDocument): RedirectResponse
+    public function retry(Request $request, SyncDocument $syncDocument): RedirectResponse
     {
-        $this->syncService->retrySyncDocument($syncDocument, request()->user());
+        // Route binding runs before the entity is set, so check it here.
+        $entityId = app(EntityContext::class)->id();
+        abort_unless($syncDocument->source_system === 'optical' && ($entityId === null || (int) $syncDocument->entity_id === (int) $entityId), 404);
 
-        return redirect()->back()->with('status', 'Retry completed.');
+        try {
+            $run = $this->syncService->retry($syncDocument, $request->user());
+        } catch (\RuntimeException $e) {
+            return redirect()->back()->with('error', $e->getMessage());
+        }
+
+        $doc = $syncDocument->fresh();
+
+        return redirect()->back()->with(
+            $doc?->status === 'failed' ? 'error' : 'status',
+            $doc?->status === 'failed' ? 'Still failing: '.$doc->error : "Retried ({$run->created_entries} booked)."
+        );
     }
 
     public function rules(): Response
@@ -161,5 +195,19 @@ class OpticalSyncController extends Controller
         $postingRule->update($validated);
 
         return redirect()->back()->with('status', 'Posting rule updated.');
+    }
+
+    /** A readable reference for the document (order TS no., delivery receipt, stock code). */
+    protected function reference(SyncDocument $doc): string
+    {
+        $p = $doc->payload ?? [];
+
+        return match ($doc->source_type) {
+            'sale' => 'Order '.($p['ts_no'] ?? $doc->source_id),
+            'payment' => 'Payment #'.$doc->source_id.(isset($p['order']['ts_no']) ? ' · order '.$p['order']['ts_no'] : ''),
+            'stock_receipt' => 'Delivery '.($p['delivery_receipt'] ?? '—').(isset($p['supplier']) ? ' · '.$p['supplier'] : ''),
+            'stock_movement' => ucfirst((string) ($p['event_type'] ?? 'movement')).' · '.($p['code'] ?? $doc->source_id),
+            default => $doc->source_type.' '.$doc->source_id,
+        };
     }
 }

@@ -16,13 +16,16 @@ import * as React from 'react';
 import { generatePassword } from '../../../admin/users/lib';
 import {
     addMonths,
+    age,
     CIVIL_STATUSES,
     CONTRIBUTION_MODES,
     CONTRIBUTIONS,
+    EMERGENCY_RELATIONSHIPS,
     EMPLOYMENT_STATUSES,
     EMPLOYMENT_TYPES,
     formatDate,
     fullName,
+    MIN_WORKING_AGE,
     PAY_TYPES,
     payEquivalents,
     PRESET_POSITIONS,
@@ -32,6 +35,7 @@ import {
     statutoryEstimate,
     toDateInput,
     WEEKDAYS,
+    type Company,
     type ContributionAgency,
     type ContributionMode,
     type Employee,
@@ -43,21 +47,28 @@ import {
 import { EmployeeAvatar } from './employee-avatar';
 
 type FormData = {
+    /** The company (employer); chosen when the employee is added and fixed after. */
+    entity_id: string;
     employee_code: string;
     firstname: string;
     middlename: string;
     lastname: string;
     gender: string;
     civil_status: string;
+    birth_date: string;
+    dependents: string;
     email: string;
     phone: string;
+    address: string;
+    emergency_contact_name: string;
+    emergency_contact_relationship: string;
+    emergency_contact_phone: string;
     position: string;
     employment_type: string;
     employment_status: string;
     hire_date: string;
     regularization_date: string;
     separation_date: string;
-    biometric_id: string;
     default_shift_template_id: string;
     rest_days: number[];
     leave_type_ids: number[];
@@ -67,6 +78,7 @@ type FormData = {
     vacation_leave_credits: string;
     sick_leave_credits: string;
     bank_name: string;
+    bank_account_name: string;
     bank_account_no: string;
     sss_number: string;
     philhealth_number: string;
@@ -87,9 +99,26 @@ const TABS = [
     {
         id: 'profile',
         label: 'Profile',
-        description: 'Photo, name and contact',
+        description: 'Photo, name, contact and emergency contact',
         icon: UserRound,
-        fields: ['avatar', 'employee_code', 'firstname', 'middlename', 'lastname', 'gender', 'civil_status', 'email', 'phone'],
+        fields: [
+            'entity_id',
+            'avatar',
+            'employee_code',
+            'firstname',
+            'middlename',
+            'lastname',
+            'gender',
+            'civil_status',
+            'birth_date',
+            'dependents',
+            'email',
+            'phone',
+            'address',
+            'emergency_contact_name',
+            'emergency_contact_relationship',
+            'emergency_contact_phone',
+        ],
     },
     {
         id: 'employment',
@@ -103,7 +132,6 @@ const TABS = [
             'hire_date',
             'regularization_date',
             'separation_date',
-            'biometric_id',
             'default_shift_template_id',
             'rest_days',
             'is_active',
@@ -118,6 +146,7 @@ const TABS = [
             'pay_type',
             'basic_pay',
             'bank_name',
+            'bank_account_name',
             'bank_account_no',
             'sss_number',
             'philhealth_number',
@@ -148,23 +177,29 @@ const NONE = 'none';
 
 const PAYROLL_BANKS = ['BDO Unibank', 'BPI', 'Metrobank', 'UnionBank', 'Landbank', 'Security Bank', 'China Bank', 'RCBC', 'PNB', 'GCash', 'Maya'];
 
-function initialData(employee: Employee | null, policy: Policy, leaveTypes: LeaveTypeOption[]): FormData {
+function initialData(employee: Employee | null, policy: Policy, leaveTypes: LeaveTypeOption[], currentCompanyId: number | null): FormData {
     return {
+        entity_id: String(employee?.entity_id ?? currentCompanyId ?? ''),
         employee_code: employee?.employee_code ?? '',
         firstname: employee?.firstname ?? '',
         middlename: employee?.middlename ?? '',
         lastname: employee?.lastname ?? '',
         gender: employee?.gender ?? '',
         civil_status: employee?.civil_status ?? '',
+        birth_date: toDateInput(employee?.birth_date),
+        dependents: employee?.dependents != null ? String(employee.dependents) : '',
         email: employee?.email ?? '',
         phone: employee?.phone ?? '',
+        address: employee?.address ?? '',
+        emergency_contact_name: employee?.emergency_contact_name ?? '',
+        emergency_contact_relationship: employee?.emergency_contact_relationship ?? '',
+        emergency_contact_phone: employee?.emergency_contact_phone ?? '',
         position: employee?.position ?? '',
         employment_type: employee?.employment_type ?? 'probationary',
         employment_status: employee?.employment_status ?? 'active',
         hire_date: toDateInput(employee?.hire_date) || (employee ? '' : new Date().toISOString().slice(0, 10)),
         regularization_date: toDateInput(employee?.regularization_date),
         separation_date: toDateInput(employee?.separation_date),
-        biometric_id: employee?.biometric_id ?? '',
         default_shift_template_id: employee?.default_shift_template_id ? String(employee.default_shift_template_id) : '',
         rest_days: employee ? (employee.rest_days ?? []) : policy.defaultRestDays,
         // Default: every leave type selected.
@@ -175,6 +210,7 @@ function initialData(employee: Employee | null, policy: Policy, leaveTypes: Leav
         vacation_leave_credits: employee ? String(employee.vacation_leave_credits ?? 0) : '',
         sick_leave_credits: employee ? String(employee.sick_leave_credits ?? 0) : '',
         bank_name: employee?.bank_name ?? '',
+        bank_account_name: employee?.bank_account_name ?? '',
         bank_account_no: employee?.bank_account_no ?? '',
         sss_number: employee?.sss_number ?? '',
         philhealth_number: employee?.philhealth_number ?? '',
@@ -258,6 +294,9 @@ type Props = {
     policy: Policy;
     leaveTypes: LeaveTypeOption[];
     linkableUsers?: LinkableUser[];
+    companies?: Company[];
+    /** Where a new employee goes unless another company is picked. */
+    currentCompanyId?: number | null;
 };
 
 export function EmployeeFormDialog({ open, onOpenChange, employee, ...rest }: Props) {
@@ -278,6 +317,8 @@ function EmployeeForm({
     policy,
     leaveTypes,
     linkableUsers = [],
+    companies = [],
+    currentCompanyId = null,
 }: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
     const isEdit = employee !== null;
     const linked = employee?.user ?? null;
@@ -285,7 +326,7 @@ function EmployeeForm({
     const [copied, setCopied] = React.useState(false);
     const confirm = useConfirm();
     const [tab, setTab] = React.useState<TabId>('profile');
-    const form = useForm<FormData>(initialData(employee, policy, leaveTypes));
+    const form = useForm<FormData>(initialData(employee, policy, leaveTypes, currentCompanyId));
     const { data, setData, errors, processing } = form;
     const err = errors as Record<string, string | undefined>;
 
@@ -304,7 +345,7 @@ function EmployeeForm({
                     : `They can sign in as ${data.username || 'the new username'}.`;
             const ok = await confirm({
                 title: `Add ${name}?`,
-                description: `A new employee record${data.employee_code ? ` (${data.employee_code})` : ''} is created and included in attendance and payroll from their start date. ${login}`,
+                description: `A new employee record${data.employee_code ? ` (${data.employee_code})` : ''} is created in ${company?.name ?? 'the selected company'} and included in its attendance and payroll from their start date. ${login}`,
                 confirmLabel: 'Add employee',
             });
             if (!ok) return;
@@ -320,6 +361,7 @@ function EmployeeForm({
             ...(avatar ? { avatar } : {}),
             ...(remove_avatar && !avatar ? { remove_avatar: true } : {}),
             default_shift_template_id: d.default_shift_template_id || null,
+            dependents: d.dependents === '' ? null : d.dependents,
             vacation_leave_credits: d.vacation_leave_credits === '' ? null : d.vacation_leave_credits,
             sick_leave_credits: d.sick_leave_credits === '' ? null : d.sick_leave_credits,
         }));
@@ -341,9 +383,15 @@ function EmployeeForm({
     const amount = Number(data.basic_pay) || 0;
     const equivalents = payEquivalents(data.pay_type, amount, policy);
     const probationEnds = data.employment_type === 'probationary' ? addMonths(data.hire_date, PROBATION_MONTHS) : null;
-    const selectedShift = shiftTemplates.find((s) => String(s.id) === data.default_shift_template_id);
+    const company = companies.find((c) => String(c.id) === data.entity_id) ?? employee?.entity ?? null;
+    // Shift templates and logins are per company: offer the chosen company's.
+    const companyShifts = shiftTemplates.filter((s) => s.entity_id == null || String(s.entity_id) === data.entity_id);
+    const selectedShift = companyShifts.find((s) => String(s.id) === data.default_shift_template_id);
+    const linkable = linkableUsers.filter((u) => !(u.employee_entity_ids ?? []).includes(Number(data.entity_id)));
     const positionOptions = Array.from(new Set([...PRESET_POSITIONS, ...positions]));
     const tabIndex = TABS.findIndex((t) => t.id === tab);
+    const years = age(data.birth_date);
+    const latestBirthDate = addMonths(new Date().toISOString().slice(0, 10), -12 * MIN_WORKING_AGE) ?? undefined;
 
     const fileInput = React.useRef<HTMLInputElement>(null);
     const [dragging, setDragging] = React.useState(false);
@@ -408,7 +456,9 @@ function EmployeeForm({
             <DialogHeader className="border-b px-6 pt-6 pb-4">
                 <DialogTitle>{isEdit ? 'Edit employee' : 'Add employee'}</DialogTitle>
                 <DialogDescription>
-                    {isEdit ? `${fullName(employee)} · ${employee.employee_code}` : 'Fields marked * are required. You can complete the rest later.'}
+                    {isEdit
+                        ? [fullName(employee), employee.employee_code, employee.entity?.name].filter(Boolean).join(' · ')
+                        : 'Fields marked * are required. You can complete the rest later.'}
                 </DialogDescription>
             </DialogHeader>
 
@@ -453,9 +503,37 @@ function EmployeeForm({
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                     {tab === 'profile' && (
                         <div className="space-y-8">
+                            <FormSection title="Company" description="The employer. The employee is rostered, given leave and paid in this company.">
+                                <Field
+                                    label="Company"
+                                    required
+                                    error={err.entity_id}
+                                    hint={isEdit ? 'Can’t be changed once the employee is created.' : undefined}
+                                    className="sm:w-80"
+                                >
+                                    <Select
+                                        value={data.entity_id}
+                                        disabled={isEdit}
+                                        onValueChange={(v) =>
+                                            setData((d) => ({ ...d, entity_id: v, default_shift_template_id: '', link_user_id: '' }))
+                                        }
+                                    >
+                                        <SelectTrigger aria-label="Company">
+                                            <SelectValue placeholder="Choose a company" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {companies.map((c) => (
+                                                <SelectItem key={c.id} value={String(c.id)}>
+                                                    {c.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </Field>
+                            </FormSection>
                             <FormSection
                                 title="Photo & employee code"
-                                description="The code identifies the employee on payslips, reports and the time clock."
+                                description="The code identifies the employee on payslips, reports and attendance imports."
                             >
                                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
                                     <div
@@ -573,12 +651,7 @@ function EmployeeForm({
                                             </SelectContent>
                                         </Select>
                                     </Field>
-                                    <Field
-                                        label="Civil status"
-                                        error={err.civil_status}
-                                        hint="Solo parents qualify for RA 11861 leave."
-                                        className="sm:col-span-3"
-                                    >
+                                    <Field label="Civil status" error={err.civil_status} className="sm:col-span-3">
                                         <Select value={data.civil_status || NONE} onValueChange={(v) => setData('civil_status', v === NONE ? '' : v)}>
                                             <SelectTrigger>
                                                 <SelectValue />
@@ -592,6 +665,39 @@ function EmployeeForm({
                                                 ))}
                                             </SelectContent>
                                         </Select>
+                                    </Field>
+                                    <Field
+                                        label="Date of birth"
+                                        htmlFor="birth_date"
+                                        error={err.birth_date}
+                                        hint={years !== null ? `${years} years old` : undefined}
+                                        className="sm:col-span-3"
+                                    >
+                                        <Input
+                                            id="birth_date"
+                                            type="date"
+                                            value={data.birth_date}
+                                            max={latestBirthDate}
+                                            onChange={(e) => setData('birth_date', e.target.value)}
+                                        />
+                                    </Field>
+                                    <Field
+                                        label="Number of dependents"
+                                        htmlFor="dependents"
+                                        error={err.dependents}
+                                        hint="For HR records. Dependents no longer change withholding tax (TRAIN law)."
+                                        className="sm:col-span-3"
+                                    >
+                                        <Input
+                                            id="dependents"
+                                            type="number"
+                                            inputMode="numeric"
+                                            min="0"
+                                            max="30"
+                                            step="1"
+                                            value={data.dependents}
+                                            onChange={(e) => setData('dependents', e.target.value)}
+                                        />
                                     </Field>
                                 </div>
                             </FormSection>
@@ -612,6 +718,54 @@ function EmployeeForm({
                                             type="tel"
                                             value={data.phone}
                                             onChange={(e) => setData('phone', e.target.value)}
+                                            placeholder="+63 917 123 4567"
+                                        />
+                                    </Field>
+                                    <Field label="Home address" htmlFor="address" error={err.address} className="sm:col-span-6">
+                                        <Input
+                                            id="address"
+                                            value={data.address}
+                                            onChange={(e) => setData('address', e.target.value)}
+                                            placeholder="House no., street, barangay, city"
+                                        />
+                                    </Field>
+                                </div>
+                            </FormSection>
+                            <FormSection title="Emergency contact" description="Who to call if something happens to the employee at work.">
+                                <div className="grid gap-4 sm:grid-cols-6">
+                                    <Field label="Name" htmlFor="emergency_contact_name" error={err.emergency_contact_name} className="sm:col-span-2">
+                                        <Input
+                                            id="emergency_contact_name"
+                                            value={data.emergency_contact_name}
+                                            onChange={(e) => setData('emergency_contact_name', e.target.value)}
+                                        />
+                                    </Field>
+                                    <Field
+                                        label="Relationship"
+                                        htmlFor="emergency_contact_relationship"
+                                        error={err.emergency_contact_relationship}
+                                        className="sm:col-span-2"
+                                    >
+                                        <TextCombobox
+                                            id="emergency_contact_relationship"
+                                            value={data.emergency_contact_relationship}
+                                            onValueChange={(v) => setData('emergency_contact_relationship', v)}
+                                            options={EMERGENCY_RELATIONSHIPS}
+                                            placeholder="Select or type"
+                                            aria-invalid={!!err.emergency_contact_relationship}
+                                        />
+                                    </Field>
+                                    <Field
+                                        label="Mobile"
+                                        htmlFor="emergency_contact_phone"
+                                        error={err.emergency_contact_phone}
+                                        className="sm:col-span-2"
+                                    >
+                                        <Input
+                                            id="emergency_contact_phone"
+                                            type="tel"
+                                            value={data.emergency_contact_phone}
+                                            onChange={(e) => setData('emergency_contact_phone', e.target.value)}
                                             placeholder="+63 917 123 4567"
                                         />
                                     </Field>
@@ -723,23 +877,9 @@ function EmployeeForm({
                                     )}
                                 </div>
                             </FormSection>
-                            <FormSection title="Schedule & time clock" description="Used by attendance, the roster and the biometric time clock.">
+                            <FormSection title="Schedule" description="Used by attendance and the roster.">
                                 <div className="space-y-5">
                                     <div className="grid gap-4 sm:grid-cols-2">
-                                        <Field
-                                            label="Biometric ID"
-                                            htmlFor="biometric_id"
-                                            error={err.biometric_id}
-                                            hint="Must match the user ID enrolled on the time clock."
-                                        >
-                                            <Input
-                                                id="biometric_id"
-                                                value={data.biometric_id}
-                                                onChange={(e) => setData('biometric_id', e.target.value)}
-                                                placeholder="e.g. 101"
-                                                className="font-mono"
-                                            />
-                                        </Field>
                                         <Field
                                             label="Default shift"
                                             error={err.default_shift_template_id}
@@ -758,7 +898,7 @@ function EmployeeForm({
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value={NONE}>Company default shift</SelectItem>
-                                                    {shiftTemplates.map((s) => (
+                                                    {companyShifts.map((s) => (
                                                         <SelectItem key={s.id} value={String(s.id)}>
                                                             {s.name} ({shiftRange(s)})
                                                         </SelectItem>
@@ -898,7 +1038,7 @@ function EmployeeForm({
                                 </div>
                             </FormSection>
                             <FormSection title="Payroll bank" description="Where net pay is credited. Leave blank for cash or cheque.">
-                                <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="grid gap-4 sm:grid-cols-3">
                                     <Field label="Payroll bank" htmlFor="bank_name" error={err.bank_name}>
                                         <TextCombobox
                                             id="bank_name"
@@ -907,6 +1047,18 @@ function EmployeeForm({
                                             options={PAYROLL_BANKS}
                                             placeholder="Cash or cheque (no bank)"
                                             aria-invalid={!!err.bank_name}
+                                        />
+                                    </Field>
+                                    <Field
+                                        label="Account name"
+                                        htmlFor="bank_account_name"
+                                        error={err.bank_account_name}
+                                        hint="As the bank has it, e.g. Juan S. Dela Cruz."
+                                    >
+                                        <Input
+                                            id="bank_account_name"
+                                            value={data.bank_account_name}
+                                            onChange={(e) => setData('bank_account_name', e.target.value)}
                                         />
                                     </Field>
                                     <Field label="Account number" htmlFor="bank_account_no" error={err.bank_account_no}>
@@ -1296,11 +1448,11 @@ function EmployeeForm({
                                             label="User"
                                             required
                                             error={err.link_user_id}
-                                            hint="Their role stays the same; they also get access to this branch."
+                                            hint="Their role stays the same; they also get access to this company."
                                         >
-                                            {linkableUsers.length === 0 ? (
+                                            {linkable.length === 0 ? (
                                                 <p className="text-muted-foreground rounded-lg border border-dashed p-3 text-sm">
-                                                    Every user is already linked to an employee in this branch.
+                                                    Every user is already linked to an employee in this company.
                                                 </p>
                                             ) : (
                                                 <Select
@@ -1314,7 +1466,7 @@ function EmployeeForm({
                                                         <SelectItem value={NONE} disabled>
                                                             Choose a user
                                                         </SelectItem>
-                                                        {linkableUsers.map((u) => (
+                                                        {linkable.map((u) => (
                                                             <SelectItem key={u.id} value={String(u.id)}>
                                                                 {u.name}
                                                                 {u.username ? ` (@${u.username})` : ''}

@@ -80,7 +80,10 @@ class JournalPostingService
         });
     }
 
-    public function post(JournalEntry $entry, User $user): JournalEntry
+    /**
+     * Post an entry to the ledger. A null user means the system posted it (a synced or source document).
+     */
+    public function post(JournalEntry $entry, ?User $user = null): JournalEntry
     {
         if (! in_array($entry->status, ['draft', 'pending'], true)) {
             throw new AccountingException('Only draft or pending journal entries can be posted.');
@@ -105,7 +108,7 @@ class JournalPostingService
 
             $entry->update([
                 'status' => 'posted',
-                'posted_by' => $user->id,
+                'posted_by' => $user?->id,
                 'posted_at' => now(),
             ]);
 
@@ -125,7 +128,10 @@ class JournalPostingService
         });
     }
 
-    public function void(JournalEntry $entry, User $user, ?string $memo = null): JournalEntry
+    /**
+     * Reverse a posted entry with a posted mirror entry dated today. A null user means the system reversed it.
+     */
+    public function void(JournalEntry $entry, ?User $user = null, ?string $memo = null): JournalEntry
     {
         if ($entry->status !== 'posted') {
             throw new AccountingException('Only posted journal entries can be voided.');
@@ -154,7 +160,7 @@ class JournalPostingService
 
             $reversingEntry = $this->create([
                 'journal_id' => $entry->journal_id,
-                'entry_date' => now()->toDateString(),
+                'entry_date' => now('Asia/Manila')->toDateString(),
                 'reference' => $entry->entry_no,
                 'memo' => $memo ?? "Void of {$entry->entry_no}",
                 'source_system' => $entry->source_system,
@@ -167,7 +173,7 @@ class JournalPostingService
 
             $entry->update([
                 'status' => 'void',
-                'voided_by' => $user->id,
+                'voided_by' => $user?->id,
                 'voided_at' => now(),
             ]);
 

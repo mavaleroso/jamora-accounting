@@ -95,7 +95,7 @@ class TeamBoard
             }
 
             return [
-                'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'avatar_url']) + ['name' => $employee->name],
+                'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'avatar_url']) + ['name' => $employee->name],
                 'status' => $status,
                 'late_by' => $lateBy,
                 'tardiness_minutes' => (int) ($dtr?->tardiness_minutes ?? 0),

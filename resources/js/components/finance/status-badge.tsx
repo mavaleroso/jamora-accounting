@@ -29,6 +29,8 @@ const statusMap: Record<string, { label: string; tone: Tone }> = {
     overdue: { label: 'Overdue', tone: 'danger' },
     matched: { label: 'Matched', tone: 'success' },
     needs_review: { label: 'Needs review', tone: 'warning' },
+    reviewed: { label: 'Reviewed', tone: 'info' },
+    reversed: { label: 'Reversed', tone: 'muted' },
     unmatched: { label: 'Unmatched', tone: 'danger' },
     cleared: { label: 'Cleared', tone: 'success' },
     uncleared: { label: 'Uncleared', tone: 'warning' },

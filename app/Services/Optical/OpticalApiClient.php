@@ -2,54 +2,113 @@
 
 namespace App\Services\Optical;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 
+/**
+ * Read-only client for optical-new's accounting API (/api/v1/accounting/*), authenticated with the shared
+ * bearer token. Lists are paginated; each() walks every page.
+ */
 class OpticalApiClient
 {
     protected function client(): PendingRequest
     {
-        $base = rtrim((string) config('services.optical_api.base_url'), '/');
-        $token = (string) config('services.optical_api.token');
+        $base = rtrim((string) config('optical.api.base_url'), '/');
 
-        return Http::baseUrl($base)
-            ->withToken($token)
+        return Http::baseUrl($base.'/api/v1/accounting')
+            ->withToken((string) config('optical.api.token'))
             ->acceptJson()
-            ->timeout(60);
+            ->timeout((int) config('optical.api.timeout', 60))
+            // Retry dropped connections and server errors; a bad token or request fails at once.
+            ->retry(2, 500, fn (\Throwable $e) => $e instanceof ConnectionException
+                || ($e instanceof RequestException && $e->response->serverError()), throw: false);
     }
 
-    public function orders(array $query = []): array
+    /**
+     * Whether the password is the optical-new user's (users copied from optical-new sign in with it), or null when
+     * optical-new can't answer. Quick and without retries, since someone is waiting at the sign-in screen.
+     */
+    public function checkPassword(int $opticalUserId, string $password): ?bool
     {
-        return $this->client()->get('/api/v1/accounting/orders', $query)->throw()->json();
+        if (! $this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $response = Http::baseUrl(rtrim((string) config('optical.api.base_url'), '/').'/api/v1/accounting')
+                ->withToken((string) config('optical.api.token'))
+                ->acceptJson()
+                ->timeout(5)
+                ->post("users/{$opticalUserId}/check-password", ['password' => $password]);
+        } catch (ConnectionException) {
+            return null;
+        }
+
+        return $response->successful() ? (bool) $response->json('valid') : null;
     }
 
-    public function order(int $id): array
+    public function isConfigured(): bool
     {
-        return $this->client()->get("/api/v1/accounting/orders/{$id}")->throw()->json();
+        return filled(config('optical.api.base_url')) && filled(config('optical.api.token'));
     }
 
-    public function payments(array $query = []): array
+    /**
+     * @return array<string, mixed>
+     */
+    public function get(string $path, array $query = []): array
     {
-        return $this->client()->get('/api/v1/accounting/payments', $query)->throw()->json();
+        return $this->client()->get(ltrim($path, '/'), array_filter($query, fn ($v) => $v !== null && $v !== ''))->throw()->json() ?? [];
     }
 
-    public function inventoryMovements(array $query = []): array
+    /**
+     * Call $callback for every record of a paginated list, page by page.
+     *
+     * @param  callable(array<string, mixed>): void  $callback
+     */
+    public function each(string $path, array $query, callable $callback): int
     {
-        return $this->client()->get('/api/v1/accounting/inventory/movements', $query)->throw()->json();
+        $page = 1;
+        $count = 0;
+        $query['page_size'] = $query['page_size'] ?? (int) config('optical.api.page_size', 100);
+
+        do {
+            $response = $this->get($path, [...$query, 'page' => $page]);
+
+            foreach ($response['data'] ?? [] as $record) {
+                $callback($record);
+                $count++;
+            }
+
+            $lastPage = (int) ($response['meta']['last_page'] ?? $page);
+            $page++;
+        } while ($page <= $lastPage);
+
+        return $count;
     }
 
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function ordersById(array $ids): array
+    {
+        return $this->get('orders', ['ids' => implode(',', $ids), 'include_open' => 1, 'with_deleted' => 1, 'page_size' => 100])['data'] ?? [];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function paymentsById(array $ids): array
+    {
+        return $this->get('payments', ['ids' => implode(',', $ids), 'include_open' => 1, 'with_deleted' => 1, 'page_size' => 100])['data'] ?? [];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     public function stockSummary(array $query = []): array
     {
-        return $this->client()->get('/api/v1/accounting/inventory/stock-summary', $query)->throw()->json();
-    }
-
-    public function clients(array $query = []): array
-    {
-        return $this->client()->get('/api/v1/accounting/clients', $query)->throw()->json();
-    }
-
-    public function suppliers(array $query = []): array
-    {
-        return $this->client()->get('/api/v1/accounting/suppliers', $query)->throw()->json();
+        return $this->get('inventory/stock-summary', $query)['data'] ?? [];
     }
 }

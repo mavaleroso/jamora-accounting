@@ -35,6 +35,7 @@ import {
     BENEFITS_URL,
     CATEGORY_LABEL,
     fmtDate,
+    isPerDay,
     MODE,
     peso,
     programAmounts,
@@ -100,10 +101,13 @@ export default function BenefitsAdministrationPage({ today, programs, enrollment
     const companyPrograms = programs.filter((p) => p.payroll_mode !== 'statutory');
     const statutoryPrograms = programs.filter((p) => p.payroll_mode === 'statutory');
 
-    // Monthly figures for enrollments in force today.
+    // Monthly figures for enrollments in force today. Per-day allowances depend on days worked, so they are left out.
     const active = enrollments.filter((e) => e.status === 'active');
     const sumBy = (rows: Enrollment[], mode: string, key: 'employee_share' | 'employer_share') =>
-        rows.filter((e) => programById.get(e.program_id)?.payroll_mode === mode).reduce((a, e) => a + e[key], 0);
+        rows
+            .filter((e) => programById.get(e.program_id)?.payroll_mode === mode && !isPerDay(programById.get(e.program_id)))
+            .reduce((a, e) => a + e[key], 0);
+    const perDayActive = active.filter((e) => isPerDay(programById.get(e.program_id))).length;
     const kpi = {
         allowances: sumBy(active, 'earning', 'employer_share'),
         employeeShare: sumBy(active, 'contribution', 'employee_share'),
@@ -162,7 +166,15 @@ export default function BenefitsAdministrationPage({ today, programs, enrollment
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    <Tile label="Allowances / month" value={peso(kpi.allowances)} hint="Paid on payslips" />
+                    <Tile
+                        label="Allowances / month"
+                        value={peso(kpi.allowances)}
+                        hint={
+                            perDayActive > 0
+                                ? `Paid on payslips, plus ${perDayActive} per-day allowance${perDayActive === 1 ? '' : 's'}`
+                                : 'Paid on payslips'
+                        }
+                    />
                     <Tile label="Employee contributions / month" value={peso(kpi.employeeShare)} hint="Deducted from pay" />
                     <Tile label="Employer premiums / month" value={peso(kpi.employerShare)} hint="Company-paid, booked to 6020" />
                     <Tile
@@ -366,7 +378,7 @@ function EnrollmentsView({
     const rows = enrollments.filter((e) => {
         const emp = employeeById.get(e.employee_id);
         const q = query.trim().toLowerCase();
-        if (q && ![emp?.name, emp?.employee_code, emp?.department].some((v) => v?.toLowerCase().includes(q))) return false;
+        if (q && ![emp?.name, emp?.employee_code, emp?.position].some((v) => v?.toLowerCase().includes(q))) return false;
         if (programFilter !== 'all' && String(e.program_id) !== programFilter) return false;
         if (status === 'current') return e.status === 'active' || e.status === 'scheduled';
         return status === 'all' || e.status === status;
@@ -375,8 +387,10 @@ function EnrollmentsView({
     const num = 'text-right font-mono text-sm tabular-nums';
     const totals = rows.reduce(
         (a, e) => {
-            const earning = programById.get(e.program_id)?.payroll_mode === 'earning';
-            return { employee: a.employee + (earning ? 0 : e.employee_share), employer: a.employer + e.employer_share };
+            const prog = programById.get(e.program_id);
+            const earning = prog?.payroll_mode === 'earning';
+            // A per-day rate is not a monthly amount.
+            return { employee: a.employee + (earning ? 0 : e.employee_share), employer: a.employer + (isPerDay(prog) ? 0 : e.employer_share) };
         },
         { employee: 0, employer: 0 },
     );
@@ -387,12 +401,7 @@ function EnrollmentsView({
                 <div className="flex flex-1 flex-wrap items-center gap-2">
                     <div className="relative w-full sm:w-64">
                         <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-                        <Input
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Search employee or department"
-                            className="pl-8"
-                        />
+                        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search employee or position" className="pl-8" />
                     </div>
                     <Select value={programFilter} onValueChange={onProgramFilter}>
                         <SelectTrigger className="w-full sm:w-56">
@@ -497,7 +506,11 @@ function EnrollmentsView({
                                         </TableCell>
                                         <TableCell className={num}>
                                             {peso(e.employer_share)}
-                                            {earning && <span className="text-muted-foreground block text-[10px]">allowance</span>}
+                                            {earning && (
+                                                <span className="text-muted-foreground block text-[10px]">
+                                                    {isPerDay(prog) ? 'per day worked' : 'allowance'}
+                                                </span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-sm whitespace-nowrap">
                                             {coverage(e)}
@@ -692,7 +705,7 @@ function ProgramsView({
                                 <dd className="font-medium">{p.enrolled}</dd>
                             </div>
                             <div>
-                                <dt className="text-muted-foreground">Monthly cost</dt>
+                                <dt className="text-muted-foreground">{isPerDay(p) ? 'Per day, all enrolled' : 'Monthly cost'}</dt>
                                 <dd className="font-mono font-medium">{peso(p.monthly_employer)}</dd>
                             </div>
                         </dl>

@@ -527,7 +527,7 @@ test('timesheets open on the current pay period and the overtime tab lists only 
     PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => 'PP-2026-10-1', 'frequency' => 'semi_monthly', 'start_date' => '2026-10-01', 'end_date' => '2026-10-15', 'status' => 'open']);
 
     ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'overtime', 'work_date' => '2026-10-16', 'reason' => 'Inventory count'])->assertSessionHasNoErrors();
-    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'correction', 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Biometric was down'])->assertSessionHasNoErrors();
+    ($this->as)($this->staffUser)->post('/employee-management/requests', ['kind' => 'correction', 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Forgot to clock in'])->assertSessionHasNoErrors();
 
     ($this->as)($this->hrUser)->get('/employee-management/attendance?view=requests')
         ->assertInertia(fn (Assert $page) => $page

@@ -19,7 +19,6 @@ type Profile = {
     employee_code: string;
     name: string;
     position: string | null;
-    department: string | null;
     pay_type: string | null;
     sss_number: string | null;
     philhealth_number: string | null;
@@ -65,7 +64,14 @@ type MonthRow = {
 
 type Enrollment = {
     id: number;
-    program: { code: string; name: string; category: string; payroll_mode: 'earning' | 'contribution' | string; is_taxable: boolean } | null;
+    program: {
+        code: string;
+        name: string;
+        category: string;
+        contribution_basis: string;
+        payroll_mode: 'earning' | 'contribution' | string;
+        is_taxable: boolean;
+    } | null;
     status: string;
     employee_share: number;
     employer_share: number;
@@ -457,7 +463,10 @@ function BenefitsTab({ benefits, adjustments }: { benefits: Enrollment[]; adjust
                                         {earning ? (
                                             <>
                                                 <p className="font-mono">
-                                                    {peso(b.employer_share)} <span className="text-xs text-muted-foreground">/ month</span>
+                                                    {peso(b.employer_share)}{' '}
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {b.program?.contribution_basis === 'per_day' ? '/ day worked' : '/ month'}
+                                                    </span>
                                                 </p>
                                                 <p className="text-[11px] text-muted-foreground">
                                                     {b.program?.is_taxable ? 'Taxable' : 'Non-taxable'} · received {peso(b.year_to_date.earning)} this year

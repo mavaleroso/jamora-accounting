@@ -4,7 +4,6 @@ import { PageBody, PageHeader } from '@/components/finance/page-header';
 import { Paginator, type Paginated } from '@/components/finance/paginator';
 import { StatusBadge } from '@/components/finance/status-badge';
 import InputError from '@/components/input-error';
-import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,7 +24,6 @@ type AccountBoard = {
     code: string;
     name: string;
     bank_name: string;
-    is_shared: boolean;
     last_reconciled_date: string | null;
     last_reconciled_balance: number | null;
     open_reconciliation_id: number | null;
@@ -69,7 +67,6 @@ export default function ReconciliationsPage({ reconciliations, accounts, filters
                                         {a.code} · {a.bank_name}
                                     </p>
                                 </div>
-                                <Badge variant={a.is_shared ? 'default' : 'secondary'}>{a.is_shared ? 'Shared' : 'Dedicated'}</Badge>
                             </CardHeader>
                             <CardContent className="flex flex-col gap-3 text-sm">
                                 <div className="grid grid-cols-2 gap-2">

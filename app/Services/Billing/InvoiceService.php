@@ -28,7 +28,9 @@ class InvoiceService
     public function create(array $data, array $lines, int $userId): Invoice
     {
         return DB::transaction(function () use ($data, $lines, $userId) {
-            $totals = $this->computeTotals($lines, (bool) ($data['is_vat_exempt'] ?? false), (bool) ($data['is_senior_pwd'] ?? false));
+            // A non-VAT entity charges no output VAT on any sale.
+            $vatExempt = (bool) ($data['is_vat_exempt'] ?? false) || ! (app(EntityContext::class)->current()?->vatRegistered() ?? true);
+            $totals = $this->computeTotals($lines, $vatExempt, (bool) ($data['is_senior_pwd'] ?? false));
 
             $invoice = Invoice::query()->create([
                 ...$data,
@@ -71,7 +73,8 @@ class InvoiceService
         return DB::transaction(function () use ($invoice, $userId) {
             $invoice->loadMissing('lines');
             $ar = $this->account('1100');
-            $discounts = $this->account('4100');
+            // Statutory senior/PWD discounts are kept apart from ordinary sales discounts.
+            $discounts = ($invoice->is_senior_pwd ? Account::query()->where('code', '4110')->first() : null) ?? $this->account('4100');
             $vat = $this->account('2100');
             $journal = Journal::query()->where('code', 'SJ')->firstOrFail();
 
@@ -94,8 +97,13 @@ class InvoiceService
             }
 
             foreach ($this->revenueSplit($invoice) as $code => $amount) {
+                // Wholesale product sales go to Sales Revenue – Wholesale where the entity has it.
+                $account = $code === '4000' && $invoice->pricing_type === 'wholesale'
+                    ? (Account::query()->where('code', '4005')->first() ?? $this->account('4000'))
+                    : $this->account($code);
+
                 $lines[] = [
-                    'account_id' => $this->account($code)->id,
+                    'account_id' => $account->id,
                     'debit' => 0,
                     'credit' => $amount,
                     'memo' => ($code === '4010' ? 'Service revenue ' : 'Sales ').$invoice->invoice_no,
@@ -200,7 +208,7 @@ class InvoiceService
     /**
      * Apply an open customer deposit to the invoice: Dr Customer Deposits (liability), Cr AR.
      */
-    public function applyDeposit(Invoice $invoice, CustomerDeposit $deposit, float $amount, string $date, int $userId): InvoicePayment
+    public function applyDeposit(Invoice $invoice, CustomerDeposit $deposit, float $amount, string $date, ?int $userId): InvoicePayment
     {
         $amount = round($amount, 2);
         $this->assertCollectible($invoice, $amount);
@@ -343,6 +351,15 @@ class InvoiceService
                 'amount' => 'Amount must be between 0.01 and the balance due ('.number_format((float) $invoice->balance_due, 2).').',
             ]);
         }
+    }
+
+    /**
+     * Record a settlement that is journalized elsewhere (e.g. a related entity that collected the money): update
+     * the invoice's paid amount, balance and status and the customer's open balance.
+     */
+    public function recordSettlement(Invoice $invoice, float $amount): void
+    {
+        $this->applyToInvoice($invoice, round($amount, 2));
     }
 
     protected function applyToInvoice(Invoice $invoice, float $amount): void

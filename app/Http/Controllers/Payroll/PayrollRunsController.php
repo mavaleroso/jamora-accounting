@@ -96,7 +96,7 @@ class PayrollRunsController extends Controller
         ]);
 
         $payslips = $run->payslips()
-            ->with('employee:id,employee_code,firstname,middlename,lastname,avatar,position,department,pay_type,basic_pay,bank_name,bank_account_no,tin,sss_number,philhealth_number,pagibig_number')
+            ->with('employee:id,employee_code,firstname,middlename,lastname,avatar,position,pay_type,basic_pay,bank_name,bank_account_no,tin,sss_number,philhealth_number,pagibig_number')
             ->get()
             ->sortBy(fn (Payslip $p) => $p->employee?->lastname.' '.$p->employee?->firstname)
             ->values();

@@ -120,9 +120,8 @@ class BillService
     }
 
     /**
-     * Pay a posted bill: Dr Accounts Payable, Cr the paying cash/bank account. Disbursements from a bank
-     * account are written to its register tagged with the current entity, so shared accounts keep each
-     * entity's expenses separate.
+     * Pay a posted bill: Dr Accounts Payable, Cr the paying cash/bank account. A bank disbursement must come from
+     * one of this entity's own bank accounts and is written to that account's register.
      */
     public function pay(Bill $bill, array $payment, int $userId): BillPayment
     {

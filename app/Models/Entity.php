@@ -39,6 +39,15 @@ class Entity extends Model
         return (bool) config('attendance.geofence_enabled', true) && ($this->geofence_enforced ?? true);
     }
 
+    /**
+     * Whether the entity is VAT-registered and charges 12% output VAT on its sales. Set settings.vat_registered to
+     * false for a non-VAT (percentage-tax) entity; its sales then carry no output VAT.
+     */
+    public function vatRegistered(): bool
+    {
+        return (bool) data_get($this->settings, 'vat_registered', true);
+    }
+
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)

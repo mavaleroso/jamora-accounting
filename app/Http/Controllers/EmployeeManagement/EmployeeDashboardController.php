@@ -14,6 +14,7 @@ use App\Services\People\EmployeeRequestFeed;
 use App\Services\People\PeopleAnalytics;
 use App\Services\People\TeamBoard;
 use App\Support\EntityContext;
+use App\Support\MissingValue;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -70,7 +71,7 @@ class EmployeeDashboardController extends Controller
         $counts = $board['counts'];
         $off = ($counts['rest_day'] ?? 0) + ($counts['holiday'] ?? 0);
         $person = fn (array $row) => [
-            ...collect($row['employee'])->only(['id', 'employee_code', 'name', 'position', 'department', 'avatar_url'])->all(),
+            ...collect($row['employee'])->only(['id', 'employee_code', 'name', 'position', 'avatar_url'])->all(),
             'status' => $row['status'],
             'late_by' => $row['late_by'] ?? null,
             'tardiness_minutes' => $row['tardiness_minutes'],
@@ -196,7 +197,7 @@ class EmployeeDashboardController extends Controller
     private function people(int $entityId, Carbon $today): array
     {
         $active = Employee::query()->where('entity_id', $entityId)->where('is_active', true)->where('employment_status', 'active')->get();
-        $card = fn (Employee $e) => $e->only(['id', 'employee_code', 'name', 'position', 'department', 'avatar_url']);
+        $card = fn (Employee $e) => $e->only(['id', 'employee_code', 'name', 'position', 'avatar_url']);
 
         return [
             'active' => $active->count(),
@@ -211,7 +212,7 @@ class EmployeeDashboardController extends Controller
                 ->sortBy(fn (Employee $e) => $e->hire_date->day)
                 ->map(fn (Employee $e) => $card($e) + ['date' => $e->hire_date->copy()->year($today->year)->toDateString(), 'years' => $today->year - $e->hire_date->year])
                 ->values(),
-            'missingIds' => $active->filter(fn (Employee $e) => blank($e->sss_number) || blank($e->philhealth_number) || blank($e->pagibig_number) || blank($e->tin))->count(),
+            'missingIds' => $active->filter(fn (Employee $e) => MissingValue::is($e->sss_number) || MissingValue::is($e->philhealth_number) || MissingValue::is($e->pagibig_number) || MissingValue::is($e->tin))->count(),
             'noBank' => $active->filter(fn (Employee $e) => blank($e->bank_account_no))->count(),
         ];
     }

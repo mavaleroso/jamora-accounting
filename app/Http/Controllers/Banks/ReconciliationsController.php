@@ -18,8 +18,7 @@ use Inertia\Response;
 /**
  * Manual bank reconciliation, one statement at a time per bank account.
  *
- * Reconciliation is per account, not per entity: a shared account's statement covers every entity that uses
- * it, so the workspace lists all of that account's register lines (tagged with their entity).
+ * Each bank account belongs to one entity, so a statement reconciles that entity's register for the account.
  *
  *   cleared balance = beginning balance (previous statement's ending balance) + cleared receipts − cleared payments
  *   difference      = statement ending balance − cleared balance   → must be 0.00 to complete
@@ -28,7 +27,7 @@ class ReconciliationsController extends Controller
 {
     public function index(Request $request): Response
     {
-        $accounts = $this->accessibleAccounts()->get(['id', 'code', 'name', 'bank_name', 'account_number', 'is_shared']);
+        $accounts = $this->accessibleAccounts()->get(['id', 'code', 'name', 'bank_name', 'account_number']);
         $accountIds = $accounts->pluck('id');
         $accountFilter = $request->integer('bank_account_id') ?: null;
 
@@ -50,7 +49,6 @@ class ReconciliationsController extends Controller
                 'code' => $account->code,
                 'name' => $account->name,
                 'bank_name' => $account->bank_name,
-                'is_shared' => $account->is_shared,
                 'last_reconciled_date' => $last?->statement_date?->toDateString(),
                 'last_reconciled_balance' => $last ? (float) $last->statement_ending_balance : null,
                 'open_reconciliation_id' => $open?->id,
@@ -105,10 +103,9 @@ class ReconciliationsController extends Controller
     public function show(BankReconciliation $bankReconciliation): Response
     {
         $this->authorizeAccount($bankReconciliation->bank_account_id);
-        $bankReconciliation->load(['bankAccount:id,code,name,bank_name,account_number,is_shared', 'reconciledBy:id,name']);
+        $bankReconciliation->load(['bankAccount:id,code,name,bank_name,account_number', 'reconciledBy:id,name']);
 
         $items = $this->registerQuery($bankReconciliation->bank_account_id)
-            ->with('entity:id,code,name')
             ->where(function (Builder $q) use ($bankReconciliation) {
                 $q->where('bank_reconciliation_id', $bankReconciliation->id);
                 // An open statement also offers every still-uncleared item dated on or before its statement date.
@@ -118,7 +115,7 @@ class ReconciliationsController extends Controller
             })
             ->orderBy('txn_date')
             ->orderBy('id')
-            ->get(['id', 'entity_id', 'txn_date', 'description', 'reference', 'direction', 'amount', 'is_cleared', 'bank_reconciliation_id', 'source_type']);
+            ->get(['id', 'txn_date', 'description', 'reference', 'direction', 'amount', 'is_cleared', 'bank_reconciliation_id', 'source_type']);
 
         return Inertia::render('banks/reconciliations/show/page', [
             'reconciliation' => $bankReconciliation,
@@ -221,7 +218,7 @@ class ReconciliationsController extends Controller
         ]);
     }
 
-    /** Register lines for an account across every entity that shares it. */
+    /** Register lines for an account (the account's own entity's lines). */
     protected function registerQuery(int $bankAccountId): Builder
     {
         return BankTransaction::query()->withoutGlobalScope('entity')->where('bank_account_id', $bankAccountId);
@@ -229,12 +226,7 @@ class ReconciliationsController extends Controller
 
     protected function accessibleAccounts(): Builder
     {
-        $entityId = app(EntityContext::class)->id();
-
-        return BankAccount::query()
-            ->where('is_active', true)
-            ->when($entityId, fn ($q) => $q->whereHas('entities', fn ($e) => $e->where('entities.id', $entityId)))
-            ->orderBy('code');
+        return BankAccount::query()->active()->orderBy('code');
     }
 
     protected function authorizeAccount(int $bankAccountId): void

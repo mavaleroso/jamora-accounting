@@ -13,7 +13,8 @@ export type Program = {
     code: string;
     name: string;
     category: string;
-    contribution_basis: 'fixed' | 'percent_of_basic' | 'statutory_sss' | 'statutory_philhealth' | 'statutory_pagibig';
+    /** per_day: an allowance paid for each day worked. */
+    contribution_basis: 'fixed' | 'percent_of_basic' | 'per_day' | 'statutory_sss' | 'statutory_philhealth' | 'statutory_pagibig';
     payroll_mode: PayrollMode;
     description: string | null;
     is_taxable: boolean;
@@ -59,7 +60,6 @@ export type EmployeeRow = {
     name: string;
     avatar_url: string | null;
     position: string | null;
-    department: string | null;
     pay_type: 'monthly' | 'daily' | 'hourly';
     basic_pay: number;
     monthly_rate: number;
@@ -97,6 +97,9 @@ export const CATEGORY_LABEL: Record<string, string> = {
 
 export const peso = (n: number | string | null | undefined) => formatPhpCurrency(Number(n ?? 0));
 
+/** An allowance paid for each day worked rather than each month. */
+export const isPerDay = (program?: Pick<Program, 'contribution_basis'> | null) => program?.contribution_basis === 'per_day';
+
 /** What an employee would get by default — mirrors BenefitCalculator::computeShares for company programs. */
 export function defaultShares(program: Program, employee: Pick<EmployeeRow, 'monthly_rate'>): Share {
     if (program.contribution_basis === 'percent_of_basic') {
@@ -109,8 +112,9 @@ export function defaultShares(program: Program, employee: Pick<EmployeeRow, 'mon
     return { employee: program.default_employee_share, employer: program.default_employer_share };
 }
 
-/** "₱1,500.00 / mo allowance", "EE ₱300.00 · ER ₱1,200.00 / mo", "EE 2% · ER 3% of monthly rate" */
+/** "₱1,500.00 / month", "₱50.00 / day worked", "EE ₱300.00 · ER ₱1,200.00 / month", "EE 2% · ER 3% of monthly rate" */
 export function programAmounts(p: Program): string {
+    if (isPerDay(p)) return `${peso(p.default_employer_share)} / day worked`;
     const percent = p.contribution_basis === 'percent_of_basic';
     const amount = (fixed: number, rate: number) => (percent ? `${rate}%` : peso(fixed));
     if (p.payroll_mode === 'earning') {

@@ -2,66 +2,41 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Entity;
-use App\Services\Accounting\OpticalSyncService;
-use App\Support\EntityContext;
-use Carbon\Carbon;
+use App\Services\Optical\OpticalSyncService;
 use Illuminate\Console\Command;
 
 class SyncOpticalCommand extends Command
 {
-    protected $signature = 'accounting:sync-optical {--from=} {--to=} {--entity=}';
+    protected $signature = 'accounting:sync-optical
+        {--full : Ignore the saved cursors and read every stream from the start (documents already booked are skipped)}
+        {--stream=* : Only these streams (users, clients, suppliers, payments, orders, receipts, movements)}
+        {--no-retry : Do not retry previously failed documents first}';
 
-    protected $description = 'Sync Optical orders and payments from the optical database into accounting journal entries';
+    protected $description = 'Sync optical-new staff and book its payments, completed orders and stock events into accounting through the optical accounting API';
 
-    public function handle(EntityContext $entityContext, OpticalSyncService $syncService): int
+    public function handle(OpticalSyncService $sync): int
     {
-        $from = $this->option('from') ? Carbon::parse($this->option('from'))->startOfDay() : null;
-        $to = $this->option('to') ? Carbon::parse($this->option('to'))->endOfDay() : null;
-
-        $entities = $this->option('entity')
-            ? Entity::query()->where('code', $this->option('entity'))->get()
-            : Entity::query()->where('is_active', true)->orderBy('id')->get();
-
-        if ($entities->isEmpty()) {
-            $this->error('No entities found to sync.');
+        try {
+            $run = $sync->run(null, [
+                'full' => (bool) $this->option('full'),
+                'streams' => $this->option('stream') ?: OpticalSyncService::STREAMS,
+                'retry_failed' => ! $this->option('no-retry'),
+            ]);
+        } catch (\Throwable $e) {
+            $this->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        $exit = self::SUCCESS;
+        $this->table(['Metric', 'Value'], [
+            ['Status', $run->status],
+            ['Read', $run->processed],
+            ['Booked', $run->created_entries],
+            ['Skipped', $run->skipped],
+            ['Failed', $run->failed],
+        ]);
+        $this->line($run->message ?? '');
 
-        foreach ($entities as $entity) {
-            $entityContext->set($entity);
-            $this->info("Syncing entity {$entity->code} from optical database...");
-
-            try {
-                $run = $syncService->sync($from, $to);
-
-                $this->table(
-                    ['Metric', 'Value'],
-                    [
-                        ['Entity', $entity->code],
-                        ['Status', $run->status],
-                        ['Processed', $run->processed],
-                        ['Created Entries', $run->created_entries],
-                        ['Skipped', $run->skipped],
-                        ['Failed', $run->failed],
-                        ['Message', $run->message ?? '—'],
-                    ]
-                );
-
-                if ($run->status === 'failed') {
-                    $exit = self::FAILURE;
-                }
-            } catch (\Throwable $e) {
-                $this->error("Optical sync failed for {$entity->code}: ".$e->getMessage());
-                $exit = self::FAILURE;
-            }
-        }
-
-        $entityContext->clear();
-
-        return $exit;
+        return $run->status === 'failed' ? self::FAILURE : self::SUCCESS;
     }
 }

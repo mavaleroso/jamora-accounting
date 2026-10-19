@@ -72,32 +72,6 @@ export function AttendanceSection({ data }: { data: Attendance }) {
                 </section>
             </div>
 
-            <ChartCard
-                title="By department"
-                description="Ranked by attendance rate"
-                table={
-                    <MiniTable
-                        head={['Department', 'Rate', 'Absences', 'Lates', 'OT approved']}
-                        rows={data.byDepartment.map((d) => [d.department, pct(d.rate), d.absences, d.lateCount, `${num(d.otApproved, 2)}h`])}
-                    />
-                }
-            >
-                <ul className="divide-y">
-                    {[...data.byDepartment]
-                        .sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0))
-                        .map((d) => (
-                            <li key={d.department} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[12rem_minmax(0,1fr)_auto]">
-                                <span className="truncate text-sm font-medium">{d.department}</span>
-                                <div className="col-span-2 row-start-2 h-2 rounded-full bg-muted sm:col-span-1 sm:row-start-auto" title={`${d.department}: ${pct(d.rate)}`}>
-                                    <div className="h-full rounded-full bg-[var(--viz-1)]" style={{ width: `${d.rate ?? 0}%` }} />
-                                </div>
-                                <span className="text-right text-xs text-muted-foreground tabular-nums">
-                                    <span className="font-mono font-semibold text-foreground">{pct(d.rate)}</span> · {d.absences} abs · {d.lateCount} late
-                                </span>
-                            </li>
-                        ))}
-                </ul>
-            </ChartCard>
 
             <EmployeeTable rows={data.byEmployee} />
         </div>
@@ -123,7 +97,7 @@ function EmployeeTable({ rows }: { rows: Row[] }) {
     const shown = rows
         .filter((r) => {
             const q = query.trim().toLowerCase();
-            return !q || [r.name, r.code, r.department].some((v) => v?.toLowerCase().includes(q));
+            return !q || [r.name, r.code, r.position].some((v) => v?.toLowerCase().includes(q));
         })
         .sort((a, b) => {
             const av = sort.key === 'name' ? a.name : (a[sort.key] ?? -1);
@@ -177,7 +151,7 @@ function EmployeeTable({ rows }: { rows: Row[] }) {
                                         <div className="min-w-0">
                                             <p className="truncate font-medium">{r.name}</p>
                                             <p className="truncate text-[11px] text-muted-foreground">
-                                                {r.code} · {r.department ?? 'Unassigned'}
+                                                {[r.code, r.position].filter(Boolean).join(' · ')}
                                             </p>
                                         </div>
                                     </div>

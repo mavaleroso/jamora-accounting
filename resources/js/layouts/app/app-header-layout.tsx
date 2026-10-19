@@ -14,7 +14,9 @@ export default function AppHeaderLayout({ children, breadcrumbs }: AppLayoutProp
         <AppShell>
             <div className="bg-background flex min-h-svh w-full flex-col">
                 <AppHeader breadcrumbs={breadcrumbs} />
-                <main className={cn(shellWidthClass(contentWidth), 'flex flex-1 flex-col')}>{children}</main>
+                <main data-page-content className={cn(shellWidthClass(contentWidth), 'flex flex-1 flex-col')}>
+                    {children}
+                </main>
                 <AppFooter />
             </div>
         </AppShell>

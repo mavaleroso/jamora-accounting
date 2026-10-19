@@ -112,23 +112,6 @@ return [
             // 'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
-        'optical' => [
-            'driver' => 'mysql',
-            'url' => env('OPTICAL_DB_URL'),
-            'host' => env('OPTICAL_DB_HOST', '127.0.0.1'),
-            'port' => env('OPTICAL_DB_PORT', '3306'),
-            'database' => env('OPTICAL_DB_DATABASE', 'optical-v2'),
-            'username' => env('OPTICAL_DB_USERNAME', 'root'),
-            'password' => env('OPTICAL_DB_PASSWORD', ''),
-            'unix_socket' => env('OPTICAL_DB_SOCKET', ''),
-            'charset' => 'utf8mb4',
-            'collation' => 'utf8mb4_unicode_ci',
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'strict' => true,
-            'engine' => null,
-        ],
-
     ],
 
     /*

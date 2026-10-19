@@ -90,31 +90,29 @@ export function PayrollSection({ data }: { data: Payroll }) {
             </div>
 
             <ChartCard
-                title="Cost by department"
+                title="Cost by employee"
                 description="Gross pay plus employer contributions in this period"
                 table={
                     <MiniTable
-                        head={['Department', 'Employees', 'Gross', 'Employer', 'Net']}
-                        rows={data.byDepartment.map((d) => [d.department, d.employees, peso(d.gross), peso(d.employer), peso(d.net)])}
+                        head={['Employee', 'Position', 'Gross', 'Employer', 'Net']}
+                        rows={data.byEmployee.map((d) => [d.name, d.position ?? '—', peso(d.gross), peso(d.employer), peso(d.net)])}
                     />
                 }
             >
-                {data.byDepartment.length === 0 ? (
+                {data.byEmployee.length === 0 ? (
                     <Empty>No posted payroll in this period.</Empty>
                 ) : (
                     <ul className="divide-y">
-                        {data.byDepartment.map((d) => {
+                        {data.byEmployee.map((d) => {
                             const total = d.gross + d.employer;
                             const share = cost > 0 ? (total / cost) * 100 : 0;
                             return (
-                                <li key={d.department} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[12rem_minmax(0,1fr)_9rem]">
+                                <li key={d.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5 sm:grid-cols-[12rem_minmax(0,1fr)_9rem]">
                                     <span className="min-w-0">
-                                        <span className="block truncate text-sm font-medium">{d.department}</span>
-                                        <span className="block text-[11px] text-muted-foreground">
-                                            {d.employees} paid · {pesoShort(d.employees ? total / d.employees : 0)} each
-                                        </span>
+                                        <span className="block truncate text-sm font-medium">{d.name}</span>
+                                        <span className="block truncate text-[11px] text-muted-foreground">{[d.code, d.position].filter(Boolean).join(' · ')}</span>
                                     </span>
-                                    <div className="col-span-2 row-start-2 h-2 rounded-full bg-muted sm:col-span-1 sm:row-start-auto" title={`${d.department}: ${share.toFixed(1)}% of cost`}>
+                                    <div className="col-span-2 row-start-2 h-2 rounded-full bg-muted sm:col-span-1 sm:row-start-auto" title={`${d.name}: ${share.toFixed(1)}% of cost`}>
                                         <div className="h-full rounded-full bg-[var(--viz-1)]" style={{ width: `${Math.max(1.5, share)}%` }} />
                                     </div>
                                     <span className="text-right">

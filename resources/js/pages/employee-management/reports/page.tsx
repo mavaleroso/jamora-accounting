@@ -26,7 +26,6 @@ type Props = {
     filters: Filters;
     range: { from: string; to: string };
     presets: { key: string; label: string }[];
-    departments: string[];
     canSeePay: boolean;
     today: string;
     workforce: Workforce;
@@ -46,7 +45,7 @@ const readTab = (allowed: Tab[]): Tab => {
     }
 };
 
-export default function PeopleReportsPage({ filters, range, presets, departments, canSeePay, workforce, attendance, leave, payroll }: Props) {
+export default function PeopleReportsPage({ filters, range, presets, canSeePay, workforce, attendance, leave, payroll }: Props) {
     const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
         { key: 'workforce', label: 'Workforce', icon: Users },
         { key: 'attendance', label: 'Attendance', icon: CalendarClock },
@@ -73,7 +72,6 @@ export default function PeopleReportsPage({ filters, range, presets, departments
         return {
             preset: f.preset,
             ...(f.preset === 'custom' ? { from: f.from, to: f.to } : {}),
-            ...(f.department ? { department: f.department } : {}),
             tab,
         };
     };
@@ -95,7 +93,7 @@ export default function PeopleReportsPage({ filters, range, presets, departments
 
             <div className="people-viz flex flex-1 flex-col gap-5 p-4 sm:p-6">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <Heading title="People Reports & Analytics" description="Workforce, attendance, leave and payroll cost for the selected period and department." />
+                    <Heading title="People Reports & Analytics" description="Workforce, attendance, leave and payroll cost for the selected period." />
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <Button variant="outline">
@@ -106,7 +104,7 @@ export default function PeopleReportsPage({ filters, range, presets, departments
                             <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">CSV for the current filters</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem asChild>
-                                <a href={exportUrl('workforce')}>Headcount by department</a>
+                                <a href={exportUrl('workforce')}>Headcount by position</a>
                             </DropdownMenuItem>
                             <DropdownMenuItem asChild>
                                 <a href={exportUrl('attendance')}>Attendance by employee</a>
@@ -116,7 +114,7 @@ export default function PeopleReportsPage({ filters, range, presets, departments
                             </DropdownMenuItem>
                             {canSeePay && (
                                 <DropdownMenuItem asChild>
-                                    <a href={exportUrl('payroll')}>Payroll cost by department</a>
+                                    <a href={exportUrl('payroll')}>Payroll cost by employee</a>
                                 </DropdownMenuItem>
                             )}
                         </DropdownMenuContent>
@@ -152,25 +150,9 @@ export default function PeopleReportsPage({ filters, range, presets, departments
                             </Button>
                         </>
                     )}
-                    <Field label="Department">
-                        <Select value={filters.department ?? 'all'} onValueChange={(v) => apply({ department: v === 'all' ? null : v })}>
-                            <SelectTrigger className="h-9 w-full md:w-56">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All departments</SelectItem>
-                                {departments.map((d) => (
-                                    <SelectItem key={d} value={d}>
-                                        {d}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </Field>
                     <p className="flex items-center gap-2 text-sm text-muted-foreground md:ml-auto md:pb-2">
                         {loading && <Loader2 className="size-4 animate-spin" />}
                         <span className="font-medium text-foreground">{rangeLabel(range.from, range.to)}</span>
-                        {filters.department && <span>· {filters.department}</span>}
                     </p>
                 </div>
 

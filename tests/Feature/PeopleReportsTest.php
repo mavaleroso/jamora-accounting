@@ -30,9 +30,9 @@ beforeEach(function () {
     $this->manager = $make(['dashboard.view']);
 
     $emp = fn (array $a) => Employee::create(['entity_id' => $this->entity->id, 'is_active' => true, 'employment_status' => 'active', 'pay_type' => 'monthly', 'basic_pay' => 30000, ...$a]);
-    $this->a = $emp(['employee_code' => 'R-1', 'firstname' => 'Ana', 'lastname' => 'Cruz', 'department' => 'Clinic', 'employment_type' => 'regular', 'hire_date' => '2024-01-08']);
-    $this->b = $emp(['employee_code' => 'R-2', 'firstname' => 'Ben', 'lastname' => 'Diaz', 'department' => 'Front Desk', 'employment_type' => 'probationary', 'hire_date' => '2026-10-01']);
-    $emp(['employee_code' => 'R-3', 'firstname' => 'Cy', 'lastname' => 'Uy', 'department' => 'Clinic', 'employment_type' => 'regular', 'hire_date' => '2023-02-01',
+    $this->a = $emp(['employee_code' => 'R-1', 'firstname' => 'Ana', 'lastname' => 'Cruz', 'position' => 'Optometrist', 'employment_type' => 'regular', 'hire_date' => '2024-01-08']);
+    $this->b = $emp(['employee_code' => 'R-2', 'firstname' => 'Ben', 'lastname' => 'Diaz', 'position' => 'Receptionist', 'employment_type' => 'probationary', 'hire_date' => '2026-10-01']);
+    $emp(['employee_code' => 'R-3', 'firstname' => 'Cy', 'lastname' => 'Uy', 'position' => 'Optometrist', 'employment_type' => 'regular', 'hire_date' => '2023-02-01',
         'employment_status' => 'separated', 'separation_date' => '2026-10-05']);
 
     $dtr = fn (Employee $e, string $date, array $a = []) => DtrEntry::create([
@@ -66,9 +66,17 @@ test('the report computes workforce and attendance for the period', function () 
             ->has('workforce.trend', 12));
 });
 
-test('department filter narrows every section', function () {
-    ($this->as)($this->hr)->get('/employee-management/reports?department=Front%20Desk')->assertOk()
-        ->assertInertia(fn (Assert $page) => $page->where('filters.department', 'Front Desk')->where('workforce.active', 1)->where('attendance.absences', 0));
+test('headcount is broken down by position, attendance and payroll cost by employee', function () {
+    ($this->as)($this->hr)->get('/employee-management/reports?preset=this_month')->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('workforce.byPosition', 2)
+            ->has('attendance.byEmployee', 2)
+            ->has('payroll.byEmployee', 0)
+            ->missing('departments')
+            ->missing('filters.department'));
+
+    $csv = ($this->as)($this->hr)->get('/employee-management/reports/export?section=workforce&preset=this_month');
+    expect($csv->streamedContent())->toContain('Position')->toContain('Optometrist')->toContain('Receptionist');
 });
 
 test('pay figures are hidden without payroll access', function () {

@@ -118,8 +118,6 @@ export type SyncRun = {
     started_at: string | null;
     finished_at: string | null;
     status: string;
-    from_date: string | null;
-    to_date: string | null;
     processed: number;
     created_entries: number;
     skipped: number;
@@ -132,8 +130,8 @@ export type SyncDocument = {
     id: number;
     source_type: string;
     source_id: string;
-    payload_hash: string;
-    status: string;
+    reference: string;
+    status: 'failed' | 'review' | string;
     error: string | null;
     synced_at: string | null;
     updated_at: string | null;

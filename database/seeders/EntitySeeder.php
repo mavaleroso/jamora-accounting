@@ -79,7 +79,6 @@ class EntitySeeder extends Seeder
                         'lastname' => $employeeUser->lastname ?? 'Employee',
                         'email' => $employeeUser->email,
                         'position' => 'Optical Staff / Assistant',
-                        'department' => 'Optical',
                         'hire_date' => $employeeUser->date_started ?? '2024-01-01',
                         'employment_status' => 'active',
                         'is_active' => true,

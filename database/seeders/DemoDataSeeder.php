@@ -14,26 +14,17 @@ use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\EmployeeBenefit;
 use App\Models\Entity;
-use App\Models\FiscalYear;
 use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
 use App\Models\Invoice;
 use App\Models\InvoiceLine;
-use App\Models\InvoicePayment;
-use App\Models\Journal;
-use App\Models\JournalEntry;
-use App\Models\JournalEntryLine;
 use App\Models\LeaveRequest;
 use App\Models\Partner;
-use App\Models\PayrollPeriod;
-use App\Models\PayrollRun;
-use App\Models\Payslip;
 use App\Models\ShiftRoster;
 use App\Models\User;
 use App\Models\Vendor;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
 
 class DemoDataSeeder extends Seeder
 {
@@ -57,10 +48,11 @@ class DemoDataSeeder extends Seeder
             $employeeUser->entities()->syncWithoutDetaching([$jamOpticus->id, $aJamora->id, $alJamora->id]);
         }
 
-        $bankAccounts = BankAccount::all()->keyBy('id');
-        $bdoShared = $bankAccounts[1] ?? $bankAccounts->first();
-        $bpiShared = $bankAccounts[2] ?? $bankAccounts->first();
-        $bdoAlJamora = $bankAccounts[5] ?? $bankAccounts->first();
+        // Each entity has its own bank accounts (see BankAccountSeeder).
+        $bankAccounts = BankAccount::query()->withoutGlobalScope('entity')->get()->keyBy('code');
+        $bdoShared = $bankAccounts['JAM-BDO'] ?? $bankAccounts->first();
+        $bpiShared = $bankAccounts['AJO-BPI'] ?? $bankAccounts->first();
+        $bdoAlJamora = $bankAccounts['ALJ-BDO'] ?? $bankAccounts->first();
 
         // 1. Partners (Customers / Patients)
         $cust1 = Partner::firstOrCreate(
@@ -135,8 +127,6 @@ class DemoDataSeeder extends Seeder
                 'middlename' => 'Santos',
                 'lastname' => 'Dizon, OD',
                 'position' => 'Senior Optometrist',
-                'department' => 'Clinical Services',
-                'biometric_id' => 'BIO-001',
                 'email' => 'dr.maria@jamora.ph',
                 'phone' => '09171110001',
                 'hire_date' => '2023-03-01',
@@ -163,8 +153,6 @@ class DemoDataSeeder extends Seeder
                 'middlename' => 'Carlos',
                 'lastname' => 'Dela Cruz',
                 'position' => 'Lead Lab & Edging Technician',
-                'department' => 'Optical Laboratory',
-                'biometric_id' => 'BIO-002',
                 'email' => 'juan.lab@jamora.ph',
                 'phone' => '09172220002',
                 'hire_date' => '2023-06-15',
@@ -191,8 +179,6 @@ class DemoDataSeeder extends Seeder
                 'middlename' => 'Mae',
                 'lastname' => 'Reyes',
                 'position' => 'Front Desk & Billing Cashier',
-                'department' => 'Administration',
-                'biometric_id' => 'BIO-003',
                 'email' => 'anna.billing@jamora.ph',
                 'phone' => '09173330003',
                 'hire_date' => '2024-01-10',
@@ -219,8 +205,6 @@ class DemoDataSeeder extends Seeder
                 'middlename' => 'Anthony',
                 'lastname' => 'Bautista, OD',
                 'position' => 'Pediatric Optometry Specialist',
-                'department' => 'Pediatric Clinic',
-                'biometric_id' => 'BIO-004',
                 'email' => 'dr.mark@aljamora.ph',
                 'phone' => '09174440004',
                 'hire_date' => '2024-05-01',
@@ -248,8 +232,6 @@ class DemoDataSeeder extends Seeder
                 'middlename' => 'Rose',
                 'lastname' => 'Gomez',
                 'position' => 'Optical Sales & Dispenser',
-                'department' => 'Retail Floor',
-                'biometric_id' => 'BIO-005',
                 'email' => 'elena.sales@jamora.ph',
                 'phone' => '09175550005',
                 'hire_date' => '2024-09-01',
@@ -316,8 +298,8 @@ class DemoDataSeeder extends Seeder
                             'ot_hours' => ($idx === 0 && $d === 2) ? 1.50 : 0.00, // Optometrist 1.5 hr OT
                             'tardiness_minutes' => $tardyMinutes,
                             'is_absent' => false,
-                            'source' => 'biometric',
-                            'notes' => $tardyMinutes > 0 ? 'Heavy rain traffic in Diversion Road' : 'Normal biometric punch',
+                            'source' => 'web_geofence',
+                            'notes' => $tardyMinutes > 0 ? 'Heavy rain traffic in Diversion Road' : 'Normal punch',
                         ]
                     );
                 }
@@ -855,4 +837,3 @@ class DemoDataSeeder extends Seeder
         );
     }
 }
-

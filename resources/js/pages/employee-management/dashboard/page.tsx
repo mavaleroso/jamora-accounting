@@ -28,7 +28,7 @@ import { TrendLine, VizStyles, vizVar } from '../reports/charts';
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Employee Management', href: '/employee-management' }];
 
-type Card = { id: number; employee_code: string; name: string; position: string | null; department: string | null; avatar_url: string | null };
+type Card = { id: number; employee_code: string; name: string; position: string | null; avatar_url: string | null };
 type BoardPerson = Card & { status: string; late_by: number | null; tardiness_minutes: number; shift_start: string | null; leave: string | null };
 
 type Props = {
@@ -491,7 +491,7 @@ function OutCard({ out }: { out: NonNullable<Props['out']> }) {
                         <Person
                             key={`${l.id}-${l.start}`}
                             person={l}
-                            meta={`${l.type} · ${l.department ?? 'Unassigned'}`}
+                            meta={[l.type, l.position].filter(Boolean).join(' · ')}
                             right={
                                 l.today ? (
                                     <span className={cn('rounded-full border px-1.5 py-px text-[10px] font-medium', TONE.sky)}>Out today</span>
@@ -540,7 +540,7 @@ function PeopleCard({ people, today }: { people: NonNullable<Props['people']>; t
             {people.newThisMonth.length > 0 && (
                 <Sub title="Joined this month" icon={UserPlus}>
                     {people.newThisMonth.map((p) => (
-                        <Person key={p.id} person={p} meta={`${p.position ?? '—'} · ${p.department ?? 'Unassigned'}`} />
+                        <Person key={p.id} person={p} meta={p.position ?? '—'} />
                     ))}
                 </Sub>
             )}

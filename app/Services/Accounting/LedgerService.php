@@ -3,6 +3,7 @@
 namespace App\Services\Accounting;
 
 use App\Models\Account;
+use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -103,7 +104,9 @@ class LedgerService
         }
 
         return match ($type) {
-            'invoice', 'invoice_payment' => "/billing/invoices/{$id}",
+            'invoice', 'invoice_payment', 'optical_sale', 'optical_due_from' => "/billing/invoices/{$id}",
+            'optical_deposit', 'optical_due_to' => '/billing/deposits',
+            'optical_cogs', 'optical_stock' => '/integration/inventory',
             'bill', 'bill_payment' => "/ap/bills/{$id}",
             'customer_deposit', 'deposit_application' => '/billing/deposits',
             'payroll_run', 'payroll_payment' => "/payroll/runs/{$id}",
@@ -117,7 +120,7 @@ class LedgerService
         return JournalEntryLine::query()
             ->join('journal_entries', 'journal_entry_lines.journal_entry_id', '=', 'journal_entries.id')
             ->where('journal_entry_lines.account_id', $accountId)
-            ->where('journal_entries.status', 'posted')
+            ->whereIn('journal_entries.status', JournalEntry::LEDGER_STATUSES)
             ->whereNull('journal_entries.deleted_at');
     }
 }

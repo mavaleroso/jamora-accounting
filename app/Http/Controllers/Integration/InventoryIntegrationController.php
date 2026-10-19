@@ -4,214 +4,160 @@ namespace App\Http\Controllers\Integration;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
-use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
-use App\Models\Journal;
-use App\Models\JournalEntry;
-use App\Services\Accounting\CashMovementService;
+use App\Models\JournalEntryLine;
+use App\Services\Optical\OpticalApiClient;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
+/**
+ * Inventory as seen from accounting. Stock lives in the optical POS (the single source of truth); this screen shows
+ * the stock events the optical sync booked, low-stock alerts read from the optical API, and whether the optical
+ * stock value agrees with the Inventory ledger account.
+ */
 class InventoryIntegrationController extends Controller
 {
-    public function index(Request $request, EntityContext $entityContext): Response
-    {
-        $entityId = $entityContext->id();
-        $tab = $request->get('tab', 'movements'); // movements, alerts, valuation
-        $search = trim((string) $request->get('search', ''));
-        $reviewFilter = $request->get('review_status');
-
-        $itemsQuery = InventoryItem::query()
-            ->where('entity_id', $entityId)
-            ->where('is_active', true);
-
-        if ($search !== '') {
-            $itemsQuery->where(function ($q) use ($search) {
-                $q->where('sku', 'like', "%{$search}%")
-                    ->orWhere('name', 'like', "%{$search}%")
-                    ->orWhere('brand', 'like', "%{$search}%");
-            });
-        }
-
-        $items = $itemsQuery->orderBy('name')->get()->map(function ($item) {
-            $isOutOfStock = $item->qty_on_hand <= 0;
-            $isLowStock = ! $isOutOfStock && $item->qty_on_hand <= $item->reorder_level;
-            $status = $isOutOfStock ? 'out_of_stock' : ($isLowStock ? 'low_stock' : 'healthy');
-            $valuation = round($item->qty_on_hand * $item->unit_cost, 2);
-
-            return [
-                'id' => $item->id,
-                'sku' => $item->sku,
-                'name' => $item->name,
-                'category' => $item->category,
-                'brand' => $item->brand,
-                'unit_cost' => (float) $item->unit_cost,
-                'selling_price' => (float) $item->selling_price,
-                'qty_on_hand' => $item->qty_on_hand,
-                'reorder_level' => $item->reorder_level,
-                'status' => $status,
-                'valuation' => $valuation,
-            ];
-        });
-
-        $movementsQuery = InventoryMovement::query()
-            ->with(['inventoryItem:id,sku,name,category', 'journalEntry:id,entry_no,status'])
-            ->where('entity_id', $entityId)
-            ->orderByDesc('created_at');
-
-        if ($reviewFilter) {
-            $movementsQuery->where('review_status', $reviewFilter);
-        }
-
-        $movements = $movementsQuery->paginate(15)->withQueryString();
-
-        $totalValuation = $items->sum('valuation');
-        $lowStockCount = $items->whereIn('status', ['low_stock', 'out_of_stock'])->count();
-        $pendingReviewCount = InventoryMovement::where('entity_id', $entityId)->where('review_status', 'needs_review')->count();
-        $matchedCount = InventoryMovement::where('entity_id', $entityId)->where('review_status', 'matched')->count();
-
-        $glAccounts = Account::query()
-            ->where('is_active', true)
-            ->where('is_postable', true)
-            ->orderBy('code')
-            ->get(['id', 'code', 'name']);
-
-        return Inertia::render('integration/inventory/page', [
-            'items' => $items,
-            'movements' => $movements,
-            'glAccounts' => $glAccounts,
-            'kpis' => [
-                'totalValuation' => $totalValuation,
-                'lowStockCount' => $lowStockCount,
-                'pendingReviewCount' => $pendingReviewCount,
-                'matchedCount' => $matchedCount,
-            ],
-            'filters' => [
-                'tab' => $tab,
-                'search' => $search,
-                'review_status' => $reviewFilter,
-            ],
-        ]);
-    }
-
-    /**
-     * Movement type → GL posting. The link is derived, not chosen, so stock and the books cannot disagree:
-     *  receipt      Dr Inventory          Cr Goods received not billed (2200), cleared when the supplier bill is entered
-     *  return       Dr GRNI (2200)        Cr Inventory
-     *  sales_issue  Dr Cost of goods sold Cr Inventory
-     *  edging_loss  Dr Cost of goods sold Cr Inventory   (flagged for review)
-     *  adjustment   ± Inventory against COGS             (flagged for review)
-     */
-    public const MOVEMENTS = [
-        'receipt' => ['sign' => 1, 'link' => 'ap_receipt', 'review' => false],
-        'supplier_receipt' => ['sign' => 1, 'link' => 'ap_receipt', 'review' => false],
-        'return' => ['sign' => -1, 'link' => 'ap_receipt', 'review' => false],
-        'sales_issue' => ['sign' => -1, 'link' => 'cogs', 'review' => false],
-        'edging_loss' => ['sign' => -1, 'link' => 'inventory_loss', 'review' => true],
-        'adjustment' => ['sign' => 0, 'link' => 'adjustment', 'review' => true],
-        'transfer' => ['sign' => -1, 'link' => 'adjustment', 'review' => true],
+    public const MOVEMENT_TYPES = [
+        'receipt' => 'Supplier delivery',
+        'sales_issue' => 'Sold',
+        'write_off' => 'Write-off',
+        'return' => 'Returned to supplier',
     ];
 
-    public function recordMovement(Request $request, EntityContext $entityContext): RedirectResponse
+    public function index(Request $request, EntityContext $entityContext, OpticalApiClient $api): Response
     {
-        $entityId = $entityContext->id();
+        $entity = $entityContext->current();
+        $filters = [
+            'search' => trim((string) $request->get('search', '')),
+            'review_status' => $request->get('review_status'),
+            'movement_type' => $request->get('movement_type'),
+            'date_from' => $request->get('date_from'),
+            'date_to' => $request->get('date_to'),
+        ];
 
-        $validated = $request->validate([
-            'inventory_item_id' => ['required', 'exists:inventory_items,id'],
-            'movement_type' => ['required', Rule::in(array_keys(self::MOVEMENTS))],
-            'quantity' => ['required', 'integer', 'not_in:0'],
-            'unit_cost' => ['required', 'numeric', 'min:0'],
-            'movement_date' => ['nullable', 'date'],
-            'notes' => ['nullable', 'string', 'max:500'],
-        ]);
-
-        $item = InventoryItem::findOrFail($validated['inventory_item_id']);
-        $rule = self::MOVEMENTS[$validated['movement_type']];
-        // Receipts/issues use the quantity's magnitude; adjustments keep the sign the user entered.
-        $qty = $rule['sign'] === 0 ? (int) $validated['quantity'] : $rule['sign'] * abs((int) $validated['quantity']);
-
-        if ($qty < 0 && $item->qty_on_hand + $qty < 0) {
-            throw ValidationException::withMessages(['quantity' => "Only {$item->qty_on_hand} on hand for {$item->name}."]);
-        }
-
-        $totalCost = round(abs($qty) * (float) $validated['unit_cost'], 2);
-        $date = $validated['movement_date'] ?? now('Asia/Manila')->toDateString();
-
-        DB::transaction(function () use ($validated, $item, $totalCost, $entityId, $rule, $qty, $date, $request) {
-            $movement = InventoryMovement::create([
-                'entity_id' => $entityId,
-                'inventory_item_id' => $item->id,
-                'movement_reference' => 'MOV-'.now()->format('ymd').'-'.strtoupper(substr(uniqid(), -5)),
-                'movement_type' => $validated['movement_type'],
-                'quantity' => $qty,
-                'unit_cost' => $validated['unit_cost'],
-                'total_cost' => $totalCost,
-                'accounting_link_type' => $rule['link'],
-                'review_status' => $rule['review'] ? 'needs_review' : 'matched',
-                'notes' => $validated['notes'] ?? null,
+        $movements = InventoryMovement::query()
+            ->with('journalEntry:id,entry_no,status')
+            ->when($filters['search'] !== '', fn ($q) => $q->where(function ($q) use ($filters) {
+                $term = "%{$filters['search']}%";
+                $q->where('movement_reference', 'like', $term)
+                    ->orWhere('description', 'like', $term)
+                    ->orWhere('product_code', 'like', $term)
+                    ->orWhere('counterparty', 'like', $term);
+            }))
+            ->when(in_array($filters['review_status'], ['matched', 'needs_review', 'resolved', 'reversed'], true), fn ($q) => $q->where('review_status', $filters['review_status']))
+            ->when(array_key_exists((string) $filters['movement_type'], self::MOVEMENT_TYPES), fn ($q) => $q->where('movement_type', $filters['movement_type']))
+            ->when($filters['date_from'], fn ($q, $d) => $q->whereDate('occurred_on', '>=', $d))
+            ->when($filters['date_to'], fn ($q, $d) => $q->whereDate('occurred_on', '<=', $d))
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->paginate($this->perPage($request))
+            ->withQueryString()
+            ->through(fn (InventoryMovement $m) => [
+                'id' => $m->id,
+                'occurred_on' => $m->occurred_on?->toDateString() ?? $m->created_at?->toDateString(),
+                'movement_reference' => $m->movement_reference,
+                'movement_type' => $m->movement_type,
+                'stock_type' => $m->stock_type,
+                'product_code' => $m->product_code,
+                'description' => $m->description,
+                'counterparty' => $m->counterparty,
+                'quantity' => $m->quantity,
+                'unit_cost' => (float) $m->unit_cost,
+                'total_cost' => (float) $m->total_cost,
+                'accounting_link_type' => $m->accounting_link_type,
+                'review_status' => $m->review_status,
+                'notes' => $m->notes,
+                'journal_entry' => $m->journalEntry?->only(['id', 'entry_no', 'status']),
             ]);
 
-            $item->increment('qty_on_hand', $qty);
+        $isStockEntity = $entity?->code === config('optical.product_entity');
+        [$stock, $stockError] = $isStockEntity ? $this->stockSummary($api, $request->boolean('refresh')) : [null, null];
+        $ledgerValue = $this->inventoryLedgerBalance();
 
-            $entry = $totalCost > 0 ? $this->journalize($movement, $item, $qty, $totalCost, $date, (int) $request->user()->id) : null;
-
-            if ($entry) {
-                $movement->update(['journal_entry_id' => $entry->id]);
-            } elseif ($totalCost > 0) {
-                $movement->update([
-                    'review_status' => 'needs_review',
-                    'notes' => trim(($movement->notes ?? '').' [Account mapping missing — not posted to GL]'),
-                ]);
-            }
-        });
-
-        return redirect()->back()->with('status', 'Stock movement recorded.');
-    }
-
-    /** Post the movement's accounting entry, or null when this entity lacks the mapped accounts/journal. */
-    protected function journalize(InventoryMovement $movement, InventoryItem $item, int $qty, float $amount, string $date, int $userId): ?JournalEntry
-    {
-        $inventory = $item->gl_account_id ? Account::query()->find($item->gl_account_id) : null;
-        $inventory ??= Account::query()->where('code', '1200')->first();
-        $other = Account::query()->where('code', $movement->accounting_link_type === 'ap_receipt' ? '2200' : '5000')->first();
-        $journal = Journal::query()->where('code', 'GJ')->first();
-
-        if (! $inventory || ! $other || ! $journal) {
-            return null;
-        }
-
-        $memo = ucfirst(str_replace('_', ' ', $movement->movement_type)).' — '.$item->name.' ×'.abs($qty);
-        $increase = $qty > 0;
-
-        return app(CashMovementService::class)->journal([
-            'journal_id' => $journal->id,
-            'entry_date' => $date,
-            'reference' => $movement->movement_reference,
-            'memo' => $memo,
-            'source_system' => 'inventory',
-            'source_type' => 'inventory_movement',
-            'source_id' => $movement->id,
-        ], [
-            ['account_id' => $increase ? $inventory->id : $other->id, 'debit' => $amount, 'credit' => 0, 'memo' => $memo],
-            ['account_id' => $increase ? $other->id : $inventory->id, 'debit' => 0, 'credit' => $amount, 'memo' => $memo],
-        ], $userId);
+        return Inertia::render('integration/inventory/page', [
+            'movements' => $movements,
+            'filters' => $filters,
+            'movementTypes' => self::MOVEMENT_TYPES,
+            'isStockEntity' => $isStockEntity,
+            'stockEntityCode' => config('optical.product_entity'),
+            'stock' => $stock ? [
+                'on_hand_total' => (int) ($stock['on_hand_total'] ?? 0),
+                'on_hand_by_type' => $stock['on_hand_by_type'] ?? [],
+                'value_total' => round((float) ($stock['on_hand_value_total'] ?? 0), 2),
+                'value_by_type' => $stock['on_hand_value_by_type'] ?? [],
+                'low_stock_threshold' => (int) ($stock['low_stock_threshold'] ?? 0),
+                'low_stock' => collect($stock['groups'] ?? [])
+                    ->filter(fn (array $g) => ! empty($g['is_low_stock']))
+                    ->sortBy('on_hand_count')
+                    ->take(200)
+                    ->values(),
+                'low_stock_count' => collect($stock['groups'] ?? [])->where('is_low_stock', true)->count(),
+                'read_at' => $stock['read_at'] ?? null,
+            ] : null,
+            'stockError' => $stockError,
+            'kpis' => [
+                'ledgerValue' => $ledgerValue,
+                'needsReview' => InventoryMovement::query()->where('review_status', 'needs_review')->count(),
+                'matched' => InventoryMovement::query()->where('review_status', 'matched')->count(),
+            ],
+        ]);
     }
 
     public function markReviewed(Request $request, InventoryMovement $movement): RedirectResponse
     {
+        abort_unless((int) $movement->entity_id === (int) app(EntityContext::class)->id(), 404);
         $note = trim((string) $request->input('resolution', ''));
 
         $movement->update([
-            'review_status' => 'matched',
+            'review_status' => 'resolved',
             'notes' => trim(($movement->notes ?? '').' [Reviewed by '.$request->user()->name.($note !== '' ? ': '.$note : '').']'),
         ]);
 
-        return redirect()->back()->with('status', 'Movement '.$movement->movement_reference.' reviewed.');
+        return redirect()->back()->with('status', 'Movement '.$movement->movement_reference.' marked reviewed.');
+    }
+
+    /**
+     * Stock on hand and its value from the optical API, cached for ten minutes.
+     *
+     * @return array{0: array<string, mixed>|null, 1: string|null}
+     */
+    protected function stockSummary(OpticalApiClient $api, bool $refresh): array
+    {
+        if (! $api->isConfigured()) {
+            return [null, 'The optical API is not configured.'];
+        }
+
+        if ($refresh) {
+            Cache::forget('optical.stock-summary');
+        }
+
+        try {
+            return [Cache::remember('optical.stock-summary', 600, fn () => [...$api->stockSummary(), 'read_at' => now()->toIso8601String()]), null];
+        } catch (\Throwable $e) {
+            report($e);
+
+            return [null, 'Could not read stock from the optical POS: '.$e->getMessage()];
+        }
+    }
+
+    /** Posted balance of the Inventory account (1200) of the current entity. */
+    protected function inventoryLedgerBalance(): float
+    {
+        $account = Account::query()->where('code', '1200')->first();
+        if (! $account) {
+            return 0.0;
+        }
+
+        return round((float) JournalEntryLine::query()
+            ->join('journal_entries', 'journal_entries.id', '=', 'journal_entry_lines.journal_entry_id')
+            ->where('journal_entry_lines.account_id', $account->id)
+            ->whereIn('journal_entries.status', ['posted', 'void'])
+            ->whereNull('journal_entries.deleted_at')
+            ->sum(DB::raw('journal_entry_lines.debit - journal_entry_lines.credit')), 2);
     }
 }

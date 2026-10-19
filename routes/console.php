@@ -53,7 +53,7 @@ Artisan::command('uploads:make-private', function () {
     $this->line("Moved {$moved} file(s) to private storage.");
 })->purpose('Move leave attachments and compliance evidence uploaded before the switch off the public disk');
 
-Schedule::command('accounting:sync-optical')->hourly();
+Schedule::command('accounting:sync-optical')->hourly()->withoutOverlapping();
 // Payroll relies on these rows: without them absences go undeducted and unworked holidays unpaid.
 Schedule::command('attendance:close-day')->dailyAt('01:00')->withoutOverlapping();
 Schedule::command('compliance:generate')->monthlyOn(1, '06:00');

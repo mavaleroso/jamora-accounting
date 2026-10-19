@@ -33,13 +33,12 @@ class PeopleReportsController extends Controller
         [$from, $to, $filters] = $this->filters($request);
         $entityId = (int) $entityContext->id();
         $canSeePay = (bool) $request->user()?->can('payroll.view');
-        $analytics = new PeopleAnalytics($entityId, $from, $to, $filters['department']);
+        $analytics = new PeopleAnalytics($entityId, $from, $to);
 
         return Inertia::render('employee-management/reports/page', [
             'filters' => $filters,
             'range' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
             'presets' => collect(self::PRESETS)->map(fn ($label, $key) => ['key' => $key, 'label' => $label])->values(),
-            'departments' => PeopleAnalytics::departments($entityId),
             'canSeePay' => $canSeePay,
             'today' => Carbon::today()->toDateString(),
             'workforce' => $analytics->workforce(),
@@ -59,17 +58,17 @@ class PeopleReportsController extends Controller
         abort_if($section === 'payroll' && ! $canSeePay, 403);
 
         [$from, $to, $filters] = $this->filters($request);
-        $analytics = new PeopleAnalytics((int) $entityContext->id(), $from, $to, $filters['department']);
+        $analytics = new PeopleAnalytics((int) $entityContext->id(), $from, $to);
 
         [$header, $rows] = match ($section) {
             'workforce' => [
-                ['Department', 'Active headcount', 'Regular'],
-                collect($analytics->workforce()['byDepartment'])->map(fn ($r) => [$r['department'], $r['count'], $r['regular']]),
+                ['Position', 'Active headcount', 'Regular'],
+                collect($analytics->workforce()['byPosition'])->map(fn ($r) => [$r['position'], $r['count'], $r['regular']]),
             ],
             'attendance' => [
-                ['Employee code', 'Employee', 'Department', 'Days worked', 'Absences', 'Late (times)', 'Late (min)', 'Undertime (min)', 'OT rendered (h)', 'OT approved (h)', 'Night diff (h)', 'Leave days', 'Attendance rate %'],
+                ['Employee code', 'Employee', 'Position', 'Days worked', 'Absences', 'Late (times)', 'Late (min)', 'Undertime (min)', 'OT rendered (h)', 'OT approved (h)', 'Night diff (h)', 'Leave days', 'Attendance rate %'],
                 collect($analytics->attendance()['byEmployee'])->map(fn ($r) => [
-                    $r['code'], $r['name'], $r['department'], $r['daysWorked'], $r['absences'], $r['lateCount'], $r['lateMinutes'],
+                    $r['code'], $r['name'], $r['position'], $r['daysWorked'], $r['absences'], $r['lateCount'], $r['lateMinutes'],
                     $r['undertimeMinutes'], $r['otRendered'], $r['otApproved'], $r['nightDiffHours'], $r['leaveDays'], $r['rate'],
                 ]),
             ],
@@ -78,9 +77,9 @@ class PeopleReportsController extends Controller
                 collect($analytics->leave($canSeePay)['balances'])->map(fn ($r) => [$r['type'], $r['employees'], $r['entitled'], $r['used'], $r['available'], ...($canSeePay ? [$r['value']] : [])]),
             ],
             'payroll' => [
-                ['Department', 'Employees', 'Gross pay', 'Overtime & night diff', 'Employer contributions', 'Employee contributions', 'Withholding tax', 'Net pay', '13th month accrual'],
-                collect($analytics->payroll()['byDepartment'])->map(fn ($r) => [
-                    $r['department'], $r['employees'], $r['gross'], $r['overtime'], $r['employer'], $r['employeeContributions'], $r['tax'], $r['net'], $r['thirteenth'],
+                ['Employee code', 'Employee', 'Position', 'Gross pay', 'Overtime & night diff', 'Employer contributions', 'Employee contributions', 'Withholding tax', 'Net pay', '13th month accrual'],
+                collect($analytics->payroll()['byEmployee'])->map(fn ($r) => [
+                    $r['code'], $r['name'], $r['position'], $r['gross'], $r['overtime'], $r['employer'], $r['employeeContributions'], $r['tax'], $r['net'], $r['thirteenth'],
                 ]),
             ],
         };
@@ -98,7 +97,7 @@ class PeopleReportsController extends Controller
     }
 
     /**
-     * @return array{0: Carbon, 1: Carbon, 2: array{preset: string, from: ?string, to: ?string, department: ?string}}
+     * @return array{0: Carbon, 1: Carbon, 2: array{preset: string, from: ?string, to: ?string}}
      */
     private function filters(Request $request): array
     {
@@ -106,7 +105,6 @@ class PeopleReportsController extends Controller
             'preset' => ['nullable', Rule::in(array_keys(self::PRESETS))],
             'from' => ['nullable', 'date_format:Y-m'],
             'to' => ['nullable', 'date_format:Y-m'],
-            'department' => ['nullable', 'string', 'max:100'],
         ]);
 
         $preset = $data['preset'] ?? 'this_month';
@@ -132,7 +130,6 @@ class PeopleReportsController extends Controller
             'preset' => $preset,
             'from' => $from->format('Y-m'),
             'to' => $to->format('Y-m'),
-            'department' => $data['department'] ?? null,
         ]];
     }
 }

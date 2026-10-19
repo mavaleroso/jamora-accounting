@@ -91,6 +91,11 @@ const reportsNavItems: NavItem[] = [
     { title: 'Journal Register', href: '/reports/journal-register', icon: ListTree },
     { title: 'AR Aging', href: '/reports/ar-aging', icon: FileSpreadsheet },
     { title: 'AP Aging', href: '/reports/ap-aging', icon: FileSpreadsheet },
+    { title: 'Daily Sales', href: '/reports/operations/daily-sales', icon: Receipt },
+    { title: 'VAT Summary', href: '/reports/operations/vat-summary', icon: Calculator },
+    { title: 'Cost of Goods Sold', href: '/reports/operations/cogs', icon: Package },
+    { title: 'Collections by Method', href: '/reports/operations/collections', icon: CreditCard },
+    { title: 'Deposits Liability', href: '/reports/operations/deposits', icon: Wallet },
 ];
 
 const librariesNavItems: NavItem[] = [
@@ -175,6 +180,15 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                 return can('reports.ar-aging.view');
             case '/reports/ap-aging':
                 return can('reports.ap-aging.view');
+            case '/reports/operations/daily-sales':
+            case '/reports/operations/collections':
+                return can('reports.daily-sales.view');
+            case '/reports/operations/vat-summary':
+                return can('reports.vat-summary.view');
+            case '/reports/operations/cogs':
+                return can('reports.income-statement.view');
+            case '/reports/operations/deposits':
+                return can('reports.ar-aging.view');
             default:
                 return true;
         }

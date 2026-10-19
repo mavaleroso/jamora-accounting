@@ -1,5 +1,5 @@
 import { Head, Link, usePage } from '@inertiajs/react';
-import { ArrowRight, Banknote, CalendarDays, Clock, Fingerprint, IdCard, Inbox, Mail, Palmtree, Phone, Plus, User } from 'lucide-react';
+import { ArrowRight, Banknote, CalendarDays, Clock, IdCard, Inbox, Mail, Palmtree, Phone, Plus, User } from 'lucide-react';
 import * as React from 'react';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
@@ -24,10 +24,8 @@ type Profile = {
     name: string;
     avatar_url: string | null;
     position: string | null;
-    department: string | null;
     employment_status: string;
     employment_type: string | null;
-    biometric_id: string | null;
     email: string | null;
     phone: string | null;
     sss_number: string | null;
@@ -494,11 +492,9 @@ function RecordCard({ employee }: { employee: Profile }) {
 
     const items: [string, React.ReactNode][] = [
         ['Employee no.', employee.employee_code],
-        ['Department', employee.department],
         ['Employment', titleCase([employee.employment_type, employee.employment_status].filter(Boolean).join(' · '))],
         ['Hired', employee.hire_date && longDate(employee.hire_date)],
         ['Regularized', employee.regularization_date && longDate(employee.regularization_date)],
-        ['Biometric ID', withIcon(Fingerprint, employee.biometric_id, true)],
         ['Email', withIcon(Mail, employee.email)],
         ['Phone', withIcon(Phone, employee.phone)],
         ['SSS', employee.sss_number],

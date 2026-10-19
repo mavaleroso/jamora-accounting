@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToEntity;
+use App\Support\MissingValue;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -14,13 +16,14 @@ class Employee extends Model
 
     protected $fillable = [
         'entity_id', 'user_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar',
-        'gender', 'civil_status',
-        'position', 'department', 'biometric_id', 'email', 'phone',
+        'gender', 'civil_status', 'birth_date',
+        'position', 'email', 'phone', 'address',
+        'emergency_contact_name', 'emergency_contact_relationship', 'emergency_contact_phone', 'dependents',
         'default_shift_template_id', 'rest_days', 'leave_type_ids',
         'hire_date', 'regularization_date', 'separation_date', 'employment_status', 'employment_type',
         'pay_type', 'basic_pay',
         'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'contribution_settings', 'bank_name',
-        'bank_account_no', 'leave_credits', 'vacation_leave_credits', 'sick_leave_credits',
+        'bank_account_name', 'bank_account_no', 'leave_credits', 'vacation_leave_credits', 'sick_leave_credits',
         'is_active',
     ];
 
@@ -29,10 +32,12 @@ class Employee extends Model
     protected function casts(): array
     {
         return [
+            'birth_date' => 'date',
             'hire_date' => 'date',
             'regularization_date' => 'date',
             'separation_date' => 'date',
             'basic_pay' => 'decimal:2',
+            'dependents' => 'integer',
             'leave_credits' => 'decimal:2',
             'vacation_leave_credits' => 'decimal:2',
             'sick_leave_credits' => 'decimal:2',
@@ -42,6 +47,9 @@ class Employee extends Model
             'is_active' => 'boolean',
         ];
     }
+
+    /** No one younger may be employed (RA 9231); a later birth date is a placeholder, not a real one. */
+    public const MIN_WORKING_AGE = 15;
 
     /** Government contributions that can be set per employee. */
     public const CONTRIBUTIONS = ['sss', 'philhealth', 'pagibig'];
@@ -61,9 +69,19 @@ class Employee extends Model
         return ($this->contribution_settings[$agency]['mode'] ?? null) === 'none' ? 'none' : 'auto';
     }
 
+    /**
+     * Employees of every active company (branch) the user can open, whichever one is current. The Employee Directory
+     * lists them together.
+     */
+    public function scopeVisibleTo(Builder $query, User $user): Builder
+    {
+        return $query->withoutGlobalScope('entity')
+            ->whereIn('employees.entity_id', $user->entities()->where('entities.is_active', true)->pluck('entities.id'));
+    }
+
     public function getNameAttribute(): string
     {
-        return trim(implode(' ', array_filter([$this->firstname, $this->middlename, $this->lastname])));
+        return trim(implode(' ', array_filter([$this->firstname, $this->middlename, $this->lastname], fn ($part) => ! MissingValue::is($part))));
     }
 
     public function getAvatarUrlAttribute(): ?string

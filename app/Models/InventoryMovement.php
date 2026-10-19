@@ -22,6 +22,13 @@ class InventoryMovement extends Model
         'review_status',
         'journal_entry_id',
         'notes',
+        'source_system',
+        'source_ref',
+        'stock_type',
+        'product_code',
+        'description',
+        'counterparty',
+        'occurred_on',
     ];
 
     protected function casts(): array
@@ -30,6 +37,7 @@ class InventoryMovement extends Model
             'quantity' => 'integer',
             'unit_cost' => 'decimal:2',
             'total_cost' => 'decimal:2',
+            'occurred_on' => 'date',
         ];
     }
 
@@ -43,4 +51,3 @@ class InventoryMovement extends Model
         return $this->belongsTo(JournalEntry::class);
     }
 }
-

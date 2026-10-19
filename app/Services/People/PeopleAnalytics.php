@@ -8,11 +8,12 @@ use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\PayrollRun;
 use App\Models\Payslip;
+use App\Support\MissingValue;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
 /**
- * Figures for People Reports & Analytics, for one branch, a date range and optionally one department.
+ * Figures for People Reports & Analytics, for one branch and a date range.
  *
  * Headcount counts employment by dates (hired on or before, not separated before) so trends are
  * reproducible for past months. Payroll cost uses posted / paid runs only — the figures that are in
@@ -27,21 +28,12 @@ class PeopleAnalytics
         private int $entityId,
         private Carbon $from,
         private Carbon $to,
-        private ?string $department = null,
     ) {
         $this->employees = Employee::query()
             ->withoutEntityScope()
             ->where('entity_id', $entityId)
-            ->when($department, fn ($q) => $q->where('department', $department))
             ->orderBy('lastname')
             ->get();
-    }
-
-    /** @return array<int, string> */
-    public static function departments(int $entityId): array
-    {
-        return Employee::query()->withoutEntityScope()->where('entity_id', $entityId)
-            ->whereNotNull('department')->distinct()->orderBy('department')->pluck('department')->all();
     }
 
     // -----------------------------------------------------------------------------------------
@@ -74,8 +66,8 @@ class PeopleAnalytics
             'separations' => $separations->count(),
             'turnoverRate' => $avgHeadcount > 0 ? round($separations->count() / $avgHeadcount * 100, 1) : 0.0,
             'avgTenureYears' => $tenure->isNotEmpty() ? round($tenure->avg(), 1) : null,
-            'byDepartment' => $active->groupBy(fn (Employee $e) => $e->department ?: 'Unassigned')
-                ->map(fn ($rows, $dept) => ['department' => $dept, 'count' => $rows->count(), 'regular' => $rows->where('employment_type', 'regular')->count()])
+            'byPosition' => $active->groupBy(fn (Employee $e) => MissingValue::is($e->position) ? 'Unassigned' : $e->position)
+                ->map(fn ($rows, $position) => ['position' => $position, 'count' => $rows->count(), 'regular' => $rows->where('employment_type', 'regular')->count()])
                 ->sortByDesc('count')->values(),
             'byType' => $count($active, 'employment_type', ['regular', 'probationary', 'contractual', 'project', 'seasonal']),
             'byPayType' => $count($active, 'pay_type', ['monthly', 'daily', 'hourly']),
@@ -89,7 +81,7 @@ class PeopleAnalytics
                 'probationDue' => $active->filter(fn (Employee $e) => $e->employment_type === 'probationary' && ! $e->regularization_date && $e->hire_date
                     && $e->hire_date->copy()->addMonths(6)->lte(Carbon::today()->addDays(30)))
                     ->map(fn (Employee $e) => $this->person($e) + ['due' => $e->hire_date->copy()->addMonths(6)->toDateString()])->values(),
-                'missingIds' => $active->filter(fn (Employee $e) => blank($e->sss_number) || blank($e->philhealth_number) || blank($e->pagibig_number) || blank($e->tin))->count(),
+                'missingIds' => $active->filter(fn (Employee $e) => MissingValue::is($e->sss_number) || MissingValue::is($e->philhealth_number) || MissingValue::is($e->pagibig_number) || MissingValue::is($e->tin))->count(),
                 'noBank' => $active->filter(fn (Employee $e) => blank($e->bank_account_no))->count(),
             ],
         ];
@@ -173,9 +165,6 @@ class PeopleAnalytics
                 ->map(fn ($rows, $date) => ['date' => $date, 'rate' => $rate($rows), 'present' => $worked($rows)->count(), 'late' => $rows->where('tardiness_minutes', '>', 0)->count(), 'absent' => $absent($rows)->count()])
                 ->filter(fn ($row) => $row['rate'] !== null)
                 ->values(),
-            'byDepartment' => $dtrs->groupBy(fn (DtrEntry $d) => $names[$d->employee_id]?->department ?: 'Unassigned')
-                ->map(fn ($rows, $dept) => ['department' => $dept, ...$summary($rows)])
-                ->sortBy('department')->values(),
             'byEmployee' => $byEmployee->map(fn ($rows, $id) => [...$this->person($names[$id]), ...$summary($rows)])
                 ->sortBy([['absences', 'desc'], ['lateMinutes', 'desc']])->values(),
         ];
@@ -285,22 +274,21 @@ class PeopleAnalytics
 
                 return ['month' => $month, ...$totals($rows)];
             })->values(),
-            'byDepartment' => $slips->groupBy(fn (Payslip $p) => $names[$p->employee_id]?->department ?: 'Unassigned')
-                ->map(fn ($rows, $dept) => ['department' => $dept, ...$totals($rows)])
+            'byEmployee' => $slips->groupBy('employee_id')
+                ->map(fn ($rows, $id) => [...$this->person($names[$id] ?? null), ...$totals($rows)])
                 ->sortByDesc('gross')->values(),
         ];
     }
 
     // -----------------------------------------------------------------------------------------
 
-    /** @return array{id: int, code: string, name: string, department: ?string, position: ?string, avatarUrl: ?string} */
+    /** @return array{id: int, code: string, name: string, position: ?string, avatarUrl: ?string} */
     private function person(?Employee $e): array
     {
         return [
             'id' => $e?->id ?? 0,
             'code' => $e?->employee_code ?? '',
             'name' => $e?->name ?? '—',
-            'department' => $e?->department,
             'position' => $e?->position,
             'avatarUrl' => $e?->avatar_url,
         ];

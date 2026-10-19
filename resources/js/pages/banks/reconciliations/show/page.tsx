@@ -28,7 +28,6 @@ type Item = {
     is_cleared: boolean;
     bank_reconciliation_id: number | null;
     source_type: string | null;
-    entity: { id: number; code: string; name: string } | null;
 };
 type Reconciliation = {
     id: number;
@@ -39,7 +38,7 @@ type Reconciliation = {
     difference: string;
     status: string;
     reconciled_at: string | null;
-    bank_account: { id: number; code: string; name: string; bank_name: string; is_shared: boolean };
+    bank_account: { id: number; code: string; name: string; bank_name: string };
     reconciled_by?: { name: string } | null;
 };
 type Props = { reconciliation: Reconciliation; items: Item[]; laterUnclearedCount: number };
@@ -178,7 +177,6 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                                 <TableHead className="w-12">Cleared</TableHead>
                                 <TableHead>Date</TableHead>
                                 <TableHead>Description</TableHead>
-                                {rec.bank_account.is_shared && <TableHead>Entity</TableHead>}
                                 <TableHead className="text-right">Deposit</TableHead>
                                 <TableHead className="text-right">Payment</TableHead>
                             </TableRow>
@@ -186,7 +184,7 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                         <TableBody>
                             {visible.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={5} className="text-muted-foreground h-24 text-center">
                                         No register items up to the statement date.
                                     </TableCell>
                                 </TableRow>
@@ -212,7 +210,6 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                                                 <div className="font-medium">{i.description}</div>
                                                 {i.reference && <div className="text-muted-foreground font-mono text-xs">{i.reference}</div>}
                                             </TableCell>
-                                            {rec.bank_account.is_shared && <TableCell className="text-sm">{i.entity?.code ?? '—'}</TableCell>}
                                             <TableCell className="text-right font-mono tabular-nums">
                                                 {i.direction === 'in' ? formatAmount(i.amount) : ''}
                                             </TableCell>

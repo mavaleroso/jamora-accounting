@@ -9,6 +9,7 @@ use App\Models\Employee;
 use App\Models\EmployeeBenefit;
 use App\Services\People\BenefitCalculator;
 use App\Support\EntityContext;
+use App\Support\MissingValue;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -22,7 +23,7 @@ use Inertia\Response;
  *
  * SSS, PhilHealth and Pag-IBIG are computed by payroll for every employee — they are shown here as a
  * preview only. Company programs reach the payslip through active enrollments, per the program's
- * payroll_mode (see BenefitProgram). All amounts are per month.
+ * payroll_mode (see BenefitProgram). Amounts are per month, except per-day allowances (per day worked).
  */
 class BenefitsAdministrationController extends Controller
 {
@@ -96,7 +97,7 @@ class BenefitsAdministrationController extends Controller
                 $st = $this->benefitCalculator->statutoryFor($e, $monthly);
 
                 return [
-                    ...$e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department', 'pay_type']),
+                    ...$e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'pay_type']),
                     'basic_pay' => (float) $e->basic_pay,
                     'monthly_rate' => round($monthly, 2),
                     'statutory' => [
@@ -106,7 +107,7 @@ class BenefitsAdministrationController extends Controller
                     ],
                     // An ID is not needed for a contribution the employee does not pay.
                     'missing_ids' => collect(['sss_number' => 'SSS', 'philhealth_number' => 'PhilHealth', 'pagibig_number' => 'Pag-IBIG', 'tin' => 'TIN'])
-                        ->filter(fn ($label, $field) => blank($e->{$field}) && ($st[str_replace('_number', '', $field)]['mode'] ?? null) !== 'none')
+                        ->filter(fn ($label, $field) => MissingValue::is($e->{$field}) && ($st[str_replace('_number', '', $field)]['mode'] ?? null) !== 'none')
                         ->values(),
                 ];
             })->values(),
@@ -250,7 +251,7 @@ class BenefitsAdministrationController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'category' => ['required', Rule::in(BenefitProgram::CATEGORIES)],
             'payroll_mode' => ['required', Rule::in(BenefitProgram::PAYROLL_MODES)],
-            'contribution_basis' => ['required', Rule::in(['fixed', 'percent_of_basic'])],
+            'contribution_basis' => ['required', Rule::in([BenefitProgram::BASIS_FIXED, BenefitProgram::BASIS_PERCENT, BenefitProgram::BASIS_PER_DAY])],
             'default_employee_share' => ['nullable', 'numeric', 'min:0'],
             'default_employer_share' => ['nullable', 'numeric', 'min:0'],
             'employee_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
@@ -261,6 +262,10 @@ class BenefitsAdministrationController extends Controller
 
         // An allowance is paid by the company only.
         $earning = $data['payroll_mode'] === BenefitProgram::MODE_EARNING;
+
+        if (! $earning && $data['contribution_basis'] === BenefitProgram::BASIS_PER_DAY) {
+            throw ValidationException::withMessages(['contribution_basis' => 'Only an allowance can be paid per day worked.']);
+        }
 
         return [
             ...$data,

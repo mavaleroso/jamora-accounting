@@ -230,7 +230,15 @@ export function PayslipDialog({
                                                     >
                                                         {b.mode === 'earning' ? (b.taxable ? 'Taxable' : 'Non-taxable') : 'Contribution'}
                                                     </span>
-                                                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                                                    <span className="min-w-0 flex-1 truncate">
+                                                        {b.name}
+                                                        {b.days !== undefined && (
+                                                            <span className="text-muted-foreground">
+                                                                {' '}
+                                                                · {b.days} day{b.days === 1 ? '' : 's'} worked
+                                                            </span>
+                                                        )}
+                                                    </span>
                                                     <span className="font-mono text-xs">
                                                         {b.mode === 'earning' ? peso(b.earning) : `${peso(b.employee)} / ER ${peso(b.employer)}`}
                                                     </span>

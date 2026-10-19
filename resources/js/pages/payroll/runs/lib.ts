@@ -50,7 +50,6 @@ export type PayslipRow = {
         name: string;
         avatar_url: string | null;
         position: string | null;
-        department: string | null;
         pay_type: 'monthly' | 'daily' | 'hourly';
         basic_rate: number;
         bank_name: string | null;
@@ -149,6 +148,8 @@ export type PayslipBenefit = {
     name: string;
     mode: 'earning' | 'contribution';
     earning: number;
+    /** Per-day allowance: the days worked it was paid for. */
+    days?: number;
     taxable: boolean;
     employee: number;
     employer: number;

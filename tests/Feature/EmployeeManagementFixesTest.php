@@ -229,7 +229,7 @@ test('an approved correction sends an approved day back for review', function ()
     $dtr->fill(['status' => DtrEntry::STATUS_APPROVED, 'approved_by' => $this->hrUser->id, 'approved_at' => now()])->save();
 
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
-        'kind' => AttendanceRequest::TYPE_CORRECTION, 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Biometric lag at the door',
+        'kind' => AttendanceRequest::TYPE_CORRECTION, 'work_date' => '2026-10-13', 'requested_time_in' => '09:00', 'reason' => 'Forgot to clock in at the door',
     ])->assertSessionHasNoErrors();
     $correction = AttendanceRequest::firstOrFail();
 
@@ -256,7 +256,7 @@ test('approved overtime pays what the clock records, and a timekeeper trims it b
 
     // Shift ends 18:00; clocked out at midnight = 6 hours of overtime, all of it payable once approved.
     $entry = ['employee_id' => $this->staffEmployee->id, 'work_date' => '2026-10-14', 'time_in' => '09:00', 'break_out' => '12:00', 'break_in' => '13:00'];
-    ($this->as)($this->hrUser)->post('/employee-management/attendance/punch', [...$entry, 'time_out' => '00:00', 'notes' => 'Biometric import'])->assertSessionHasNoErrors();
+    ($this->as)($this->hrUser)->post('/employee-management/attendance/punch', [...$entry, 'time_out' => '00:00', 'notes' => 'Imported punch'])->assertSessionHasNoErrors();
     $dtr = DtrEntry::where('employee_id', $this->staffEmployee->id)->firstOrFail();
     expect((float) $dtr->ot_hours_approved)->toBe(6.0);
 
@@ -279,16 +279,16 @@ test('shared benefit programs can only be changed by roles allowed to manage the
     expect($shared->fresh()->is_active)->toBeFalse();
 });
 
-test('a new hire\'s first-year leave is pro-rated, but statutory leave is given in full', function () {
+test('a new hire\'s first-year leave is pro-rated, but a leave type set not to pro-rate is given in full', function () {
     $this->vl->update(['prorate_first_year' => true]);
-    $solo = LeaveType::create(['code' => 'SPL', 'name' => 'Solo Parent Leave', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 7, 'is_active' => true, 'sort_order' => 2]);
+    $birthday = LeaveType::create(['code' => 'BDAY', 'name' => 'Birthday Leave', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 7, 'is_active' => true, 'sort_order' => 2]);
     $service = app(LeaveService::class);
 
     // Hired Oct 10 with no opening credits typed in the Employee Directory (saved as 0):
     // October counts (by the 15th), so 3 of 12 months of 10 days = 2.5.
     $this->staffEmployee->update(['hire_date' => '2026-10-10', 'vacation_leave_credits' => 0]);
     expect($service->openingEntitlement($this->staffEmployee->fresh(), $this->vl, 2026))->toBe(2.5)
-        ->and($service->openingEntitlement($this->staffEmployee->fresh(), $solo, 2026))->toBe(7.0)
+        ->and($service->openingEntitlement($this->staffEmployee->fresh(), $birthday, 2026))->toBe(7.0)
         ->and($service->openingEntitlement($this->staffEmployee->fresh(), $this->vl, 2027))->toBe(10.0);
 
     // Hired Oct 20: October does not count, 2 months = 1.67, rounded to 1.5.

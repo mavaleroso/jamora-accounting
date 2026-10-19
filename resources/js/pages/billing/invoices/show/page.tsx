@@ -64,7 +64,7 @@ type Invoice = {
     journal_entry?: { id: number; entry_no: string; status: string } | null;
 };
 type Deposit = { id: number; deposit_date: string; amount: string; applied_amount: string; reference: string | null; payment_method: string | null };
-type BankAccount = { id: number; code: string; name: string; bank_name: string; is_shared: boolean };
+type BankAccount = { id: number; code: string; name: string; bank_name: string };
 
 type Props = { invoice: Invoice; openDeposits: Deposit[]; bankAccounts: BankAccount[]; paymentMethods: string[] };
 
@@ -470,7 +470,7 @@ function PaymentDialog({
                                 <SelectContent>
                                     {bankAccounts.map((b) => (
                                         <SelectItem key={b.id} value={String(b.id)}>
-                                            {b.code} · {b.name} {b.is_shared ? '(shared)' : ''}
+                                            {b.code} · {b.name} ({b.bank_name})
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

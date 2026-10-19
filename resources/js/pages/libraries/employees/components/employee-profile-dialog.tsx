@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatPhpCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, CalendarCheck, ClipboardList, History, LayoutGrid, Lock, Pencil, ReceiptText, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Building2, CalendarCheck, ClipboardList, History, LayoutGrid, Lock, Pencil, ReceiptText, RefreshCw } from 'lucide-react';
 import * as React from 'react';
 import {
     EMPLOYMENT_STATUSES,
@@ -97,6 +97,12 @@ export function EmployeeProfileDialog({ open, onOpenChange, employee: e, policy,
                                 <Badge variant="outline" className="font-mono">
                                     {e.employee_code}
                                 </Badge>
+                                {e.entity && (
+                                    <Badge variant="outline">
+                                        <Building2 className="size-3" />
+                                        {e.entity.name}
+                                    </Badge>
+                                )}
                                 <Badge variant="outline" className={statusBadgeClass(e.employment_status)}>
                                     {labelOf(EMPLOYMENT_STATUSES, e.employment_status)}
                                 </Badge>

@@ -10,8 +10,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * Benefit / contribution program. entity_id = null means the program is shared by all entities
  * (e.g. SSS, PhilHealth, Pag-IBIG).
  *
- * contribution_basis: fixed | percent_of_basic | statutory_sss | statutory_philhealth | statutory_pagibig
- * payroll_mode: how active enrollments reach the payslip (amounts are per month):
+ * contribution_basis: fixed | percent_of_basic | per_day | statutory_sss | statutory_philhealth | statutory_pagibig
+ *   per_day is for allowances only: the amount is paid for each day worked (e.g. transport ₱50 a day).
+ * payroll_mode: how active enrollments reach the payslip (amounts are per month, or per day worked for per_day):
  *   statutory     computed by payroll for every employee — no enrollment needed
  *   earning       allowance paid in the payslip; the employer share is the amount, taxable per is_taxable
  *   contribution  employee share deducted from pay; employer share booked as benefit expense
@@ -31,6 +32,13 @@ class BenefitProgram extends Model
     public const PAYROLL_MODES = [self::MODE_EARNING, self::MODE_CONTRIBUTION, self::MODE_NONE];
 
     public const CATEGORIES = ['allowance', 'insurance', 'savings', 'company'];
+
+    /** Bases HR can pick for a company program; per_day only for an allowance. */
+    public const BASIS_FIXED = 'fixed';
+
+    public const BASIS_PERCENT = 'percent_of_basic';
+
+    public const BASIS_PER_DAY = 'per_day';
 
     protected $fillable = [
         'entity_id',
@@ -73,6 +81,12 @@ class BenefitProgram extends Model
     public function isStatutory(): bool
     {
         return str_starts_with((string) $this->contribution_basis, 'statutory_');
+    }
+
+    /** Whether the amount is paid for each day worked rather than each month. */
+    public function isPerDay(): bool
+    {
+        return $this->contribution_basis === self::BASIS_PER_DAY;
     }
 
     /** Whether active enrollments change the payslip. */
