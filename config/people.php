@@ -104,8 +104,9 @@ return [
 
         // Statutory minimum wage (daily) of the establishment's region. Minimum wage earners are exempt from
         // withholding tax on their SMW, holiday, OT, night differential and hazard pay (RR 11-2018, Sec. 2.78.1(B)(13)).
-        // NCR non-agriculture: PHP 695.00 (Wage Order NCR-26, effective 17 July 2025). Update per wage order / region.
-        'minimum_wage_daily' => 695.00,
+        // All three entities are in Butuan City: Caraga (Region XIII), PHP 475.00 for every sector (Wage Order RXIII-20,
+        // second tranche effective 1 May 2026). Update per wage order / region.
+        'minimum_wage_daily' => 475.00,
 
         // Default pay day for each cut-off of a generated period (day of month; 0 = last day of the month).
         'pay_days' => ['first' => 15, 'second' => 0],
@@ -149,19 +150,18 @@ return [
 
     /*
     | Leave types seeded by PeopleSetupSeeder. "VL/SL/EL/BL" are company policy;
-    | the rest are statutory.
+    | the rest are statutory. SIL is the legal minimum for staff without VL/SL:
+    | 5 days a year once they have served a year, unused days paid in cash.
     */
     'leave_types' => [
         ['code' => 'VL', 'name' => 'Vacation Leave', 'legal_basis' => 'Company policy (satisfies Art. 95 SIL)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 10, 'max_carry_over' => 5, 'is_convertible' => true, 'min_notice_days' => 3, 'sort_order' => 1],
         ['code' => 'SL', 'name' => 'Sick Leave', 'legal_basis' => 'Company policy (satisfies Art. 95 SIL)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 10, 'max_carry_over' => 5, 'attachment_required_after_days' => 2, 'sort_order' => 2],
-        ['code' => 'EL', 'name' => 'Emergency Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 3, 'sort_order' => 3],
-        ['code' => 'ML', 'name' => 'Maternity Leave', 'legal_basis' => 'RA 11210 (105 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 105, 'counts_calendar_days' => true, 'gender' => 'female', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 4],
-        ['code' => 'PL', 'name' => 'Paternity Leave', 'legal_basis' => 'RA 8187 (7 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 7, 'gender' => 'male', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 5],
-        ['code' => 'SPL', 'name' => 'Solo Parent Leave', 'legal_basis' => 'RA 11861 (7 days/yr)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 7, 'min_service_months' => 6, 'attachment_required_after_days' => 0, 'sort_order' => 6],
-        ['code' => 'VAWC', 'name' => 'VAWC Leave', 'legal_basis' => 'RA 9262 (10 days/yr)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 10, 'gender' => 'female', 'attachment_required_after_days' => 0, 'sort_order' => 7],
-        ['code' => 'SLW', 'name' => 'Special Leave for Women', 'legal_basis' => 'RA 9710 Magna Carta of Women (up to 60 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 60, 'gender' => 'female', 'min_service_months' => 6, 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 8],
-        ['code' => 'BL', 'name' => 'Bereavement Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 3, 'allow_half_day' => false, 'sort_order' => 9],
-        ['code' => 'LWOP', 'name' => 'Leave Without Pay', 'legal_basis' => 'Company policy', 'is_paid' => false, 'balance_tracked' => false, 'sort_order' => 10],
+        ['code' => 'SIL', 'name' => 'Service Incentive Leave', 'legal_basis' => 'Labor Code Art. 95 (5 days/yr after 1 year of service)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 5, 'prorate_first_year' => false, 'is_convertible' => true, 'min_service_months' => 12, 'sort_order' => 3],
+        ['code' => 'EL', 'name' => 'Emergency Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 3, 'sort_order' => 4],
+        ['code' => 'ML', 'name' => 'Maternity Leave', 'legal_basis' => 'RA 11210 (105 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 105, 'counts_calendar_days' => true, 'gender' => 'female', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 5],
+        ['code' => 'PL', 'name' => 'Paternity Leave', 'legal_basis' => 'RA 8187 (7 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 7, 'gender' => 'male', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 6],
+        ['code' => 'BL', 'name' => 'Bereavement Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 3, 'allow_half_day' => false, 'sort_order' => 7],
+        ['code' => 'LWOP', 'name' => 'Leave Without Pay', 'legal_basis' => 'Company policy', 'is_paid' => false, 'balance_tracked' => false, 'sort_order' => 8],
     ],
 
     /*

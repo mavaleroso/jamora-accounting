@@ -4,6 +4,7 @@ namespace App\Services\Accounting;
 
 use App\Models\AccountingPeriod;
 use App\Models\AccountPeriodBalance;
+use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
 use Illuminate\Support\Facades\DB;
 
@@ -59,7 +60,7 @@ class TrialBalanceService
             ->join('accounts', 'journal_entry_lines.account_id', '=', 'accounts.id')
             ->join('account_types', 'accounts.account_type_id', '=', 'account_types.id')
             ->where('journal_entries.accounting_period_id', $period->id)
-            ->where('journal_entries.status', 'posted')
+            ->whereIn('journal_entries.status', JournalEntry::LEDGER_STATUSES)
             ->groupBy(
                 'journal_entry_lines.account_id',
                 'accounts.code',

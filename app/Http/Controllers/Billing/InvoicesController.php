@@ -196,13 +196,7 @@ class InvoicesController extends Controller
 
     protected function bankAccounts()
     {
-        $entityId = app(EntityContext::class)->id();
-
-        return BankAccount::query()
-            ->where('is_active', true)
-            ->when($entityId, fn ($q) => $q->whereHas('entities', fn ($e) => $e->where('entities.id', $entityId)))
-            ->orderBy('code')
-            ->get(['id', 'code', 'name', 'bank_name', 'is_shared']);
+        return BankAccount::query()->active()->orderBy('code')->get(['id', 'code', 'name', 'bank_name']);
     }
 
     protected function nextInvoiceNo(): string

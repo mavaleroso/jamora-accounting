@@ -20,7 +20,7 @@ import { useConfirm } from '@/components/confirm-dialog';
 import { hasAnyPermission } from '@/lib/permissions';
 import type { Auth, BreadcrumbItem } from '@/types';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
-import { ArrowDownLeftIcon, ArrowUpRightIcon, FileClockIcon, InfoIcon, MinusIcon, PlusIcon, ScaleIcon } from 'lucide-react';
+import { ArrowDownLeftIcon, ArrowLeftRightIcon, ArrowUpRightIcon, FileClockIcon, InfoIcon, MinusIcon, PlusIcon, ScaleIcon } from 'lucide-react';
 import { useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Cash & Bank Records', href: '/accounting/cash-bank-records' }];
@@ -41,7 +41,8 @@ type Row = {
     source_url: string | null;
     is_cleared: boolean | null | undefined;
 };
-type BankAccount = { id: number; code: string; name: string; bank_name: string; is_shared: boolean };
+type BankAccount = { id: number; code: string; name: string; bank_name: string };
+type TransferEndpoint = { value: string; label: string; kind: 'clearing' | 'bank' };
 type CounterAccount = { id: number; code: string; name: string; classification: string | null };
 
 type Props = {
@@ -50,6 +51,7 @@ type Props = {
     summary: { inflows: number; outflows: number; net: number; draftCount: number };
     cashAccounts: CashAccount[];
     bankAccounts: BankAccount[];
+    transferEndpoints: TransferEndpoint[];
     counterAccounts: CounterAccount[];
     paymentMethods: string[];
     entityName: string | null;
@@ -58,10 +60,12 @@ type Props = {
 const sourceLabel: Record<string, string> = {
     invoice_payment: 'Invoice collection',
     customer_deposit: 'Customer deposit',
+    optical_deposit: 'Optical payment',
     bill_payment: 'Bill payment',
     payroll_payment: 'Payroll release',
     cash_receipt: 'Direct receipt',
     cash_payment: 'Direct payment',
+    fund_transfer: 'Fund transfer',
     manual: 'Manual journal',
 };
 
@@ -71,6 +75,7 @@ export default function CashBankPage({
     summary,
     cashAccounts,
     bankAccounts,
+    transferEndpoints,
     counterAccounts,
     paymentMethods,
     entityName,
@@ -78,6 +83,7 @@ export default function CashBankPage({
     const { auth } = usePage<{ auth: Auth }>().props;
     const canRecord = hasAnyPermission(auth, ['banks.manage', 'journals.create']);
     const [kind, setKind] = useState<'receipt' | 'payment' | null>(null);
+    const [transferring, setTransferring] = useState(false);
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -89,6 +95,10 @@ export default function CashBankPage({
                     actions={
                         canRecord && (
                             <>
+                                <Button variant="outline" onClick={() => setTransferring(true)}>
+                                    <ArrowLeftRightIcon className="size-4" />
+                                    Transfer funds
+                                </Button>
                                 <Button variant="outline" onClick={() => setKind('payment')}>
                                     <MinusIcon className="size-4" />
                                     Record payment
@@ -238,7 +248,148 @@ export default function CashBankPage({
                     entityName={entityName}
                 />
             )}
+            {transferring && <TransferDialog endpoints={transferEndpoints} entityName={entityName} onClose={() => setTransferring(false)} />}
         </AppLayout>
+    );
+}
+
+/**
+ * Move money between this entity's own cash accounts: deposit cash on hand or a card / e-wallet settlement to the
+ * bank (the fee is booked to Bank and Merchant Fees), move funds between banks, or withdraw cash.
+ */
+function TransferDialog({ endpoints, entityName, onClose }: { endpoints: TransferEndpoint[]; entityName: string | null; onClose: () => void }) {
+    const firstBank = endpoints.find((e) => e.kind === 'bank')?.value ?? '';
+    const form = useForm({
+        kind: 'transfer',
+        txn_date: todayIso(),
+        from: 'cash_on_hand',
+        to: firstBank,
+        amount: '',
+        fee: '',
+        reference: '',
+        description: '',
+    });
+    const { data, setData, errors, processing } = form;
+    const confirm = useConfirm();
+    const label = (value: string) => endpoints.find((e) => e.value === value)?.label ?? value;
+    const received = Math.max(0, (Number(data.amount) || 0) - (Number(data.fee) || 0));
+    const settlement = data.from === 'card_clearing' || data.from === 'ewallet_clearing';
+
+    const endpointSelect = (field: 'from' | 'to', placeholder: string) => (
+        <Select value={data[field]} onValueChange={(v) => setData(field, v)}>
+            <SelectTrigger>
+                <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>
+                {endpoints.map((e) => (
+                    <SelectItem key={e.value} value={e.value}>
+                        {e.label}
+                    </SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
+    );
+
+    return (
+        <Dialog open onOpenChange={(o) => !o && onClose()}>
+            <DialogContent className="sm:max-w-lg">
+                <form
+                    className="grid gap-4"
+                    onSubmit={async (e) => {
+                        e.preventDefault();
+                        const ok = await confirm({
+                            title: 'Record this transfer?',
+                            description: `${formatPhpCurrency(Number(data.amount) || 0)} moves from ${label(data.from)} to ${label(data.to)}${
+                                Number(data.fee) > 0 ? `, less a ${formatPhpCurrency(Number(data.fee))} fee` : ''
+                            }. It posts to the books right away.`,
+                            confirmLabel: 'Record transfer',
+                        });
+                        if (!ok) return;
+                        form.post('/accounting/cash-bank-records', { preserveScroll: true, onSuccess: onClose });
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Transfer funds</DialogTitle>
+                        <DialogDescription>
+                            Deposit cash on hand to the bank, record a card or e-wallet settlement, or move money between{' '}
+                            {entityName ?? 'this entity'}'s own accounts.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="grid gap-1.5">
+                            <Label>From *</Label>
+                            {endpointSelect('from', 'Source account')}
+                            <InputError message={errors.from} />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label>To *</Label>
+                            {endpointSelect('to', 'Destination account')}
+                            <InputError message={errors.to} />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label>Date *</Label>
+                            <Input type="date" value={data.txn_date} onChange={(e) => setData('txn_date', e.target.value)} />
+                            <InputError message={errors.txn_date} />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label>Amount *</Label>
+                            <Input
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={data.amount}
+                                onChange={(e) => setData('amount', e.target.value)}
+                                className="text-right font-mono"
+                            />
+                            <InputError message={errors.amount} />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label>{settlement ? 'Merchant / bank fee' : 'Bank fee'}</Label>
+                            <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={data.fee}
+                                onChange={(e) => setData('fee', e.target.value)}
+                                className="text-right font-mono"
+                                placeholder="0.00"
+                            />
+                            <InputError message={errors.fee} />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label>Reference</Label>
+                            <Input
+                                value={data.reference}
+                                onChange={(e) => setData('reference', e.target.value)}
+                                className="font-mono"
+                                placeholder="Deposit slip / settlement ref"
+                            />
+                            <InputError message={errors.reference} />
+                        </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                        <Label>Description</Label>
+                        <Input
+                            value={data.description}
+                            onChange={(e) => setData('description', e.target.value)}
+                            placeholder="e.g. Deposit of 18 Oct cash sales"
+                        />
+                        <InputError message={errors.description} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        {label(data.to)} receives <span className="font-mono text-foreground">{formatPhpCurrency(received)}</span>.
+                    </p>
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={onClose}>
+                            Cancel
+                        </Button>
+                        <Button type="submit" disabled={processing}>
+                            Record transfer
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -354,7 +505,7 @@ function RecordDialog({
                                 <SelectContent>
                                     {bankAccounts.map((b) => (
                                         <SelectItem key={b.id} value={String(b.id)}>
-                                            {b.code} · {b.name} {b.is_shared ? '(shared)' : ''}
+                                            {b.code} · {b.name} ({b.bank_name})
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

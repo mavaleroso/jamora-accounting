@@ -118,7 +118,7 @@ export function LeaveSection({ data, canSeePay, year }: { data: Leave; canSeePay
                                 <span className="min-w-0 flex-1">
                                     <span className="block truncate text-sm font-medium">{u.name}</span>
                                     <span className="block truncate text-xs text-muted-foreground">
-                                        {u.type} · {u.department ?? 'Unassigned'}
+                                        {[u.type, u.position].filter(Boolean).join(' · ')}
                                     </span>
                                 </span>
                                 <span className="text-right text-xs">

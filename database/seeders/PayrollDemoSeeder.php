@@ -230,7 +230,7 @@ class PayrollDemoSeeder extends Seeder
                     'break_out' => $breakOut->format('H:i:s'),
                     'break_in' => $breakIn->format('H:i:s'),
                     'time_out' => $out->format('H:i:s'),
-                    'source' => $i % 3 === 0 ? 'biometric' : 'web_geofence',
+                    'source' => 'web_geofence',
                     'location_status' => 'verified',
                     'distance_meters' => mt_rand(5, 120),
                     'status' => DtrEntry::STATUS_OPEN,

@@ -47,7 +47,9 @@ use App\Http\Controllers\Reports\BalanceSheetController;
 use App\Http\Controllers\Reports\CashFlowController;
 use App\Http\Controllers\Reports\IncomeStatementController;
 use App\Http\Controllers\Reports\JournalRegisterController;
+use App\Http\Controllers\Reports\OperationalReportsController;
 use App\Http\Controllers\Reports\TrialBalanceController;
+use App\Services\Reports\OperationalReportService;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -161,6 +163,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('data', 'data')->name('data')->middleware('permission:reports.ap-aging.view');
             Route::get('export', 'export')->name('export')->middleware('permission:reports.ap-aging.view');
         });
+
+        // Daily sales, VAT summary, COGS, collections by method, deposits liability (each checks its own permission).
+        Route::controller(OperationalReportsController::class)->prefix('operations')->name('operations.')->group(function () {
+            Route::get('{report}', 'show')->name('show')->whereIn('report', array_keys(OperationalReportService::REPORTS));
+            Route::get('{report}/export', 'export')->name('export')->whereIn('report', array_keys(OperationalReportService::REPORTS));
+        });
     });
 
     Route::prefix('libraries')->group(function () {
@@ -203,9 +211,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index');
             Route::post('/', 'store')->name('store');
             // Profile view: balances, payroll, requests, time records and activity, loaded on open.
-            Route::get('{employee}/overview', EmployeeOverviewController::class)->name('overview');
-            Route::put('{employee}', 'update')->name('update');
-            Route::delete('{employee}', 'destroy')->name('destroy');
+            // Employees of any company the user can open, not just the current one (resolved in the controllers).
+            Route::get('{employee}/overview', EmployeeOverviewController::class)->name('overview')->whereNumber('employee');
+            Route::put('{employee}', 'update')->name('update')->whereNumber('employee');
+            Route::delete('{employee}', 'destroy')->name('destroy')->whereNumber('employee');
         });
 
         Route::controller(VendorsController::class)->prefix('vendors')->name('vendors.')->middleware('permission:libraries.vendors.manage')->group(function () {
@@ -330,7 +339,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(InventoryIntegrationController::class)->group(function () {
             // Same gates as the sidebar link: integration staff, or accounting/billing who reconcile stock to the books.
             Route::get('/', 'index')->name('index')->middleware('permission:integration.optical.view|journals.view|billing.view');
-            Route::post('movements', 'recordMovement')->name('movements.store')->middleware('permission:integration.optical.sync|journals.create');
+            // Stock is recorded in the optical POS; accounting only reviews what the sync booked.
             Route::post('movements/{movement}/review', 'markReviewed')->name('movements.review')->middleware('permission:integration.optical.sync|journals.post|journals.create');
         });
     });

@@ -11,6 +11,7 @@ use App\Models\PayrollAdjustment;
 use App\Models\PayrollPeriod;
 use App\Services\People\AttendanceCalculator;
 use App\Services\People\BenefitCalculator;
+use App\Support\MissingValue;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
@@ -37,8 +38,8 @@ use Illuminate\Support\Collection;
  *  - Withholding tax from the BIR table for the period frequency on taxable compensation (gross less
  *    non-taxable benefits and employee contributions). Minimum wage earners: only income other than the
  *    SMW, holiday, OT and night differential is taxable.
- *  - Benefit enrollments (Benefits Administration): monthly amounts spread over the month's cut-offs.
- *    Allowance programs are earnings (taxable per program); contribution programs deduct the employee share
+ *  - Benefit enrollments (Benefits Administration): monthly amounts spread over the month's cut-offs;
+ *    per-day allowances are paid for each day worked in the cut-off. Allowance programs are earnings (taxable per program); contribution programs deduct the employee share
  *    and book the employer share as employer cost. Skipped when there is no basic pay for the cut-off.
  *  - 13th month accrual = basic salary actually earned / 12 (PD 851).
  */
@@ -237,7 +238,7 @@ class PayrollCalculator
 
         $basicEarned = $basic - $basicDeductions;
 
-        // Benefit enrollments, at the monthly amount / cut-offs in the month.
+        // Benefit enrollments, at the monthly amount / cut-offs in the month (per-day allowances: x days worked).
         $benefitLines = [];
         $benefitDeductions = 0.0;
         $employerBenefits = 0.0;
@@ -251,7 +252,10 @@ class PayrollCalculator
 
                 $line = ['id' => $enrollment->id, 'code' => $program->code, 'name' => $program->name, 'mode' => $program->payroll_mode, 'earning' => 0.0, 'taxable' => (bool) $program->is_taxable, 'employee' => 0.0, 'employer' => 0.0];
                 if ($program->payroll_mode === BenefitProgram::MODE_EARNING) {
-                    $line['earning'] = round((float) $enrollment->employer_share * $perPeriod, 2);
+                    if ($program->isPerDay()) {
+                        $line['days'] = $days['worked'];
+                    }
+                    $line['earning'] = round((float) $enrollment->employer_share * ($program->isPerDay() ? $days['worked'] : $perPeriod), 2);
                     if ($program->is_taxable) {
                         $taxableAllowances += $line['earning'];
                     } else {
@@ -318,7 +322,7 @@ class PayrollCalculator
         foreach (['sss_number' => 'SSS', 'philhealth_number' => 'PhilHealth', 'pagibig_number' => 'Pag-IBIG', 'tin' => 'TIN'] as $field => $label) {
             // No ID is needed for a contribution the employee does not pay.
             $notDeducted = isset($idFor[$field]) && $employee->contributionMode($idFor[$field]) === 'none';
-            if (! $notDeducted && blank($employee->{$field})) {
+            if (! $notDeducted && MissingValue::is($employee->{$field})) {
                 $warnings[] = "No {$label} number on file.";
             }
         }

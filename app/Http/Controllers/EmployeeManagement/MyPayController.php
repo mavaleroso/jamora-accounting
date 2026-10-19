@@ -68,7 +68,7 @@ class MyPayController extends Controller
     private function profile(Employee $employee): array
     {
         return [
-            ...$employee->only(['id', 'employee_code', 'name', 'position', 'department', 'pay_type', 'sss_number', 'philhealth_number', 'pagibig_number', 'tin']),
+            ...$employee->only(['id', 'employee_code', 'name', 'position', 'pay_type', 'sss_number', 'philhealth_number', 'pagibig_number', 'tin']),
             'hire_date' => $employee->hire_date?->toDateString(),
         ];
     }
@@ -177,14 +177,14 @@ class MyPayController extends Controller
         }
 
         return EmployeeBenefit::query()
-            ->with('program:id,code,name,category,payroll_mode,is_taxable')
+            ->with('program:id,code,name,category,contribution_basis,payroll_mode,is_taxable')
             ->where('employee_id', $employee->id)
             ->orderByRaw("participation_status = 'active' desc")
             ->orderByDesc('effective_date')
             ->get()
             ->map(fn (EmployeeBenefit $b) => [
                 'id' => $b->id,
-                'program' => $b->program?->only(['code', 'name', 'category', 'payroll_mode', 'is_taxable']),
+                'program' => $b->program?->only(['code', 'name', 'category', 'contribution_basis', 'payroll_mode', 'is_taxable']),
                 'status' => $b->participation_status,
                 'employee_share' => (float) $b->employee_share,
                 'employer_share' => (float) $b->employer_share,

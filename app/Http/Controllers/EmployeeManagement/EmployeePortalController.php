@@ -81,8 +81,8 @@ class EmployeePortalController extends Controller
 
         return [
             ...$employee->only([
-                'id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department',
-                'employment_status', 'employment_type', 'biometric_id', 'email', 'phone',
+                'id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position',
+                'employment_status', 'employment_type', 'email', 'phone',
                 'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'bank_name',
             ]),
             'hire_date' => $employee->hire_date?->toDateString(),

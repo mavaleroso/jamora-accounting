@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,25 +16,21 @@ import { formatPhpCurrency } from '@/lib/currency';
 import { hasPermission } from '@/lib/permissions';
 import type { Auth, BreadcrumbItem } from '@/types';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
-import { ArrowDownLeftIcon, ArrowUpRightIcon, LandmarkIcon, PencilIcon, PlusIcon, ScaleIcon, UsersIcon } from 'lucide-react';
+import { ArrowDownLeftIcon, ArrowUpRightIcon, BookOpenIcon, LandmarkIcon, PencilIcon, PlusIcon, ScaleIcon } from 'lucide-react';
 import { useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Bank Accounts', href: '/banks/accounts' }];
 
-type Entity = { id: number; code: string; name: string };
 type Account = {
     id: number;
     code: string;
     name: string;
     bank_name: string;
     account_number: string | null;
-    is_shared: boolean;
     is_active: boolean;
     gl_account_id: number | null;
     gl_account: { id: number; code: string; name: string } | null;
-    entities: Entity[];
     book_balance: number;
-    entity_balance: number;
     inflows_mtd: number;
     outflows_mtd: number;
     uncleared_count: number;
@@ -43,12 +38,11 @@ type Account = {
 };
 type Props = {
     bankAccounts: Account[];
-    entities: Entity[];
     glAccounts: { id: number; code: string; name: string }[];
-    currentEntityId: number | null;
+    entityName: string | null;
 };
 
-export default function BankAccountsPage({ bankAccounts, entities, glAccounts, currentEntityId }: Props) {
+export default function BankAccountsPage({ bankAccounts, glAccounts, entityName }: Props) {
     const { auth } = usePage<{ auth: Auth }>().props;
     const canManage = hasPermission(auth, 'banks.manage');
     const [editing, setEditing] = useState<Account | null | 'new'>(null);
@@ -64,7 +58,7 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
             <PageBody>
                 <PageHeader
                     title="Bank Accounts"
-                    description="Cash position per account. Shared accounts show the whole balance and this entity's share of it."
+                    description={`Cash position of ${entityName ?? 'this entity'}'s own bank accounts. Each account posts to its own Cash in Bank ledger account.`}
                     actions={
                         canManage && (
                             <Button onClick={() => setEditing('new')}>
@@ -96,9 +90,7 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
 
                 {bankAccounts.length === 0 ? (
                     <Card>
-                        <CardContent className="text-muted-foreground py-12 text-center text-sm">
-                            No bank accounts are assigned to this entity yet.
-                        </CardContent>
+                        <CardContent className="text-muted-foreground py-12 text-center text-sm">This entity has no bank accounts yet.</CardContent>
                     </Card>
                 ) : (
                     <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
@@ -108,9 +100,6 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
                                     <div className="min-w-0 space-y-1">
                                         <div className="flex items-center gap-2">
                                             <CardTitle className="truncate text-base">{a.name}</CardTitle>
-                                            <Badge variant={a.is_shared ? 'default' : 'secondary'} className="shrink-0">
-                                                {a.is_shared ? 'Shared' : 'Dedicated'}
-                                            </Badge>
                                             {!a.is_active && <Badge variant="outline">Inactive</Badge>}
                                         </div>
                                         <p className="text-muted-foreground font-mono text-xs">
@@ -127,12 +116,6 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
                                     <div>
                                         <div className="text-muted-foreground text-xs">Book balance</div>
                                         <div className="font-mono text-2xl font-semibold tabular-nums">{formatPhpCurrency(a.book_balance)}</div>
-                                        {a.is_shared && (
-                                            <div className="text-muted-foreground text-xs">
-                                                This entity's share:{' '}
-                                                <span className="text-foreground font-mono">{formatAmount(a.entity_balance)}</span>
-                                            </div>
-                                        )}
                                     </div>
                                     <div className="grid grid-cols-2 gap-3 text-sm">
                                         <div>
@@ -161,8 +144,14 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
                                         </div>
                                     </div>
                                     <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                                        <UsersIcon className="size-3.5" />
-                                        {a.entities.map((e) => e.name).join(', ') || 'No entities'}
+                                        <BookOpenIcon className="size-3.5" />
+                                        {a.gl_account ? (
+                                            <span>
+                                                Ledger <span className="font-mono">{a.gl_account.code}</span> · {a.gl_account.name}
+                                            </span>
+                                        ) : (
+                                            'No ledger account linked'
+                                        )}
                                     </div>
                                     <div className="flex gap-2">
                                         <Button variant="outline" size="sm" asChild className="flex-1">
@@ -182,9 +171,8 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
             {editing && (
                 <AccountDialog
                     account={editing === 'new' ? null : editing}
-                    entities={entities}
                     glAccounts={glAccounts}
-                    currentEntityId={currentEntityId}
+                    entityName={entityName}
                     onClose={() => setEditing(null)}
                 />
             )}
@@ -194,15 +182,13 @@ export default function BankAccountsPage({ bankAccounts, entities, glAccounts, c
 
 function AccountDialog({
     account,
-    entities,
     glAccounts,
-    currentEntityId,
+    entityName,
     onClose,
 }: {
     account: Account | null;
-    entities: Entity[];
     glAccounts: { id: number; code: string; name: string }[];
-    currentEntityId: number | null;
+    entityName: string | null;
     onClose: () => void;
 }) {
     const form = useForm({
@@ -212,10 +198,9 @@ function AccountDialog({
         account_number: account?.account_number ?? '',
         gl_account_id: account?.gl_account_id ? String(account.gl_account_id) : '',
         is_active: account?.is_active ?? true,
-        entity_ids: account ? account.entities.map((e) => e.id) : currentEntityId ? [currentEntityId] : [],
     });
     const { data, setData, errors, processing } = form;
-    const toggleEntity = (id: number, on: boolean) => setData('entity_ids', on ? [...data.entity_ids, id] : data.entity_ids.filter((x) => x !== id));
+    const owner = entityName ?? 'this entity';
 
     const confirm = useConfirm();
     const submit = async (e: React.FormEvent) => {
@@ -223,7 +208,7 @@ function AccountDialog({
         if (!account) {
             const ok = await confirm({
                 title: 'Add this bank account?',
-                description: `${data.name || 'The new account'}${data.bank_name ? ` (${data.bank_name})` : ''} is added and can be used for receipts, payments and reconciliations in the selected entities.`,
+                description: `${data.name || 'The new account'}${data.bank_name ? ` (${data.bank_name})` : ''} is added to ${owner} with its own Cash in Bank ledger account, for ${owner}'s receipts, payments and reconciliations only.`,
                 confirmLabel: 'Add bank account',
             });
             if (!ok) return;
@@ -240,7 +225,7 @@ function AccountDialog({
                 <form onSubmit={submit} className="grid gap-4">
                     <DialogHeader>
                         <DialogTitle>{account ? `Edit ${account.name}` : 'Add bank account'}</DialogTitle>
-                        <DialogDescription>Accounts used by more than one entity are treated as shared.</DialogDescription>
+                        <DialogDescription>Belongs to {owner}. Bank accounts are not shared between entities.</DialogDescription>
                     </DialogHeader>
                     <div className="grid gap-4 sm:grid-cols-2">
                         <div className="grid gap-1.5">
@@ -263,10 +248,10 @@ function AccountDialog({
                             <Input value={data.account_number} onChange={(e) => setData('account_number', e.target.value)} className="font-mono" />
                         </div>
                         <div className="grid gap-1.5">
-                            <Label>GL account</Label>
+                            <Label>Ledger account</Label>
                             <Select value={data.gl_account_id} onValueChange={(v) => setData('gl_account_id', v)}>
                                 <SelectTrigger>
-                                    <SelectValue placeholder="1010 · Cash in Bank" />
+                                    <SelectValue placeholder="Create its own (101x)" />
                                 </SelectTrigger>
                                 <SelectContent>
                                     {glAccounts.map((g) => (
@@ -278,21 +263,7 @@ function AccountDialog({
                             </Select>
                         </div>
                     </div>
-                    <div className="grid gap-2">
-                        <Label>Used by *</Label>
-                        <div className="grid gap-2 rounded-lg border p-3">
-                            {entities.map((e) => (
-                                <label key={e.id} className="flex items-center gap-2 text-sm">
-                                    <Checkbox checked={data.entity_ids.includes(e.id)} onCheckedChange={(v) => toggleEntity(e.id, v === true)} />
-                                    {e.name}
-                                </label>
-                            ))}
-                        </div>
-                        <p className="text-muted-foreground text-xs">
-                            {data.entity_ids.length > 1 ? 'Shared account — every disbursement must be tagged to an entity.' : 'Dedicated account.'}
-                        </p>
-                        <InputError message={errors.entity_ids} />
-                    </div>
+                    <InputError message={errors.gl_account_id} />
                     <label className="flex items-center justify-between text-sm">
                         Active
                         <Switch checked={data.is_active} onCheckedChange={(v) => setData('is_active', v)} />

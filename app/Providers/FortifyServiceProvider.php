@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Actions\Fortify\ResetUserPassword;
 use App\Models\User;
+use App\Services\Optical\OpticalApiClient;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -59,7 +60,7 @@ class FortifyServiceProvider extends ServiceProvider
 
             $user = User::query()->where(Fortify::username(), $username)->first();
 
-            if (! $user || ! Hash::check($password, $user->password)) {
+            if (! $user || ! $this->passwordMatches($user, $password)) {
                 return null;
             }
 
@@ -77,6 +78,25 @@ class FortifyServiceProvider extends ServiceProvider
 
             return $user;
         });
+
+        Fortify::confirmPasswordsUsing(fn (User $user, ?string $password) => is_string($password) && $this->passwordMatches($user, $password));
+    }
+
+    /**
+     * Users copied from optical-new sign in with their optical-new password, which optical-new checks. Only when it
+     * can't be reached does the password kept here count.
+     */
+    private function passwordMatches(User $user, string $password): bool
+    {
+        if ($user->optical_user_id) {
+            $valid = app(OpticalApiClient::class)->checkPassword((int) $user->optical_user_id, $password);
+
+            if ($valid !== null) {
+                return $valid;
+            }
+        }
+
+        return Hash::check($password, $user->password);
     }
 
     /**

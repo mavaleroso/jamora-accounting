@@ -31,7 +31,7 @@ export function TeamBalances({
                 header: ({ column }) => <DataTableColumnHeader column={column} title="Employee" />,
                 filterFn: (row, _id, value: string) => {
                     const e = row.original.employee;
-                    return `${fullName(e)} ${e.employee_code} ${e.position ?? ''} ${e.department ?? ''}`.toLowerCase().includes(value.toLowerCase());
+                    return `${fullName(e)} ${e.employee_code} ${e.position ?? ''}`.toLowerCase().includes(value.toLowerCase());
                 },
                 enableHiding: false,
                 cell: ({ row: { original: r } }) => (

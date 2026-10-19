@@ -46,7 +46,7 @@ beforeEach(function () {
     $this->monthly = $make(['employee_code' => 'E-001', 'firstname' => 'Maria', 'lastname' => 'Santos', 'pay_type' => 'monthly', 'basic_pay' => 30000,
         'sss_number' => '34-0000001-1', 'philhealth_number' => '01-000000001-1', 'pagibig_number' => '1210-0000-0001', 'tin' => '100-000-001-000',
         'bank_name' => 'BDO', 'bank_account_no' => '001100220033']);
-    $this->daily = $make(['employee_code' => 'E-002', 'firstname' => 'Jun', 'lastname' => 'Reyes', 'pay_type' => 'daily', 'basic_pay' => 600]);
+    $this->daily = $make(['employee_code' => 'E-002', 'firstname' => 'Jun', 'lastname' => 'Reyes', 'pay_type' => 'daily', 'basic_pay' => 475]);
 
     $this->period = PayrollPeriod::create([
         'entity_id' => $this->entity->id, 'code' => 'PP-2026-10-1', 'frequency' => 'semi_monthly',
@@ -107,10 +107,22 @@ test('semi-monthly pay follows PH statutory tables', function () {
 
     // Daily-paid at or below the minimum wage: "no work, no pay" and no withholding tax.
     $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
-    expect((float) $d->basic_pay)->toBe(1200.0)
+    expect((float) $d->basic_pay)->toBe(950.0)
         ->and($d->is_mwe)->toBeTrue()
         ->and((float) $d->withholding_tax)->toBe(0.0)
         ->and(collect($d->meta['warnings'])->contains('No TIN number on file.'))->toBeTrue();
+});
+
+test('a daily rate above the regional minimum wage is not a minimum wage earner', function () {
+    $this->daily->update(['basic_pay' => 540]); // Caraga minimum wage: 475
+    dtr($this->daily, '2026-10-05');
+
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
+
+    $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
+    expect($d->is_mwe)->toBeFalse()
+        ->and((float) $d->taxable_income)->toBeGreaterThan(0)
+        ->and((float) $d->withholding_tax)->toBe(0.0); // still under the first BIR bracket
 });
 
 test('BIR withholding table brackets', function () {
@@ -222,6 +234,31 @@ test('benefit enrollments flow into payslips and the payroll journal entry', fun
 
     ($this->as)()->get("/payroll/runs/{$run->id}")->assertOk()
         ->assertInertia(fn (Assert $page) => $page->has('remittances', 5)->where('totals.employer_benefits', 600));
+});
+
+test('a per-day allowance is paid for the days worked in the cut-off', function () {
+    ($this->as)()->post('/employee-management/benefits/programs', [
+        'code' => 'TRANSPORT', 'name' => 'Transportation Allowance', 'category' => 'allowance', 'payroll_mode' => 'earning',
+        'contribution_basis' => 'per_day', 'default_employer_share' => 50, 'is_taxable' => true,
+    ])->assertSessionHasNoErrors();
+    $transport = BenefitProgram::where('code', 'TRANSPORT')->sole();
+
+    // Only an allowance can be paid per day.
+    ($this->as)()->post('/employee-management/benefits/programs', [
+        'code' => 'HMO', 'name' => 'HMO', 'category' => 'insurance', 'payroll_mode' => 'contribution', 'contribution_basis' => 'per_day', 'default_employee_share' => 10,
+    ])->assertSessionHasErrors('contribution_basis');
+
+    ($this->as)()->post('/employee-management/benefits/enroll', ['employee_ids' => [$this->daily->id], 'benefit_program_id' => $transport->id, 'effective_date' => '2026-09-01'])
+        ->assertSessionHasNoErrors();
+
+    dtr($this->daily, '2026-10-05');
+    dtr($this->daily, '2026-10-06');
+    dtr($this->daily, '2026-10-07', ['time_in' => null, 'time_out' => null, 'regular_hours' => 0, 'attendance_status' => 'absent', 'is_absent' => true]);
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
+
+    $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
+    expect((float) $d->taxable_allowances)->toBe(100.0) // 2 days worked x ₱50; the absence earns none
+        ->and($d->meta['benefits'][0])->toMatchArray(['code' => 'TRANSPORT', 'earning' => 100, 'days' => 2]);
 });
 
 test('approval is blocked by negative net pay and returning to draft unlocks the cut-off', function () {

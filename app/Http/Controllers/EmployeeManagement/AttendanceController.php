@@ -40,7 +40,7 @@ class AttendanceController extends Controller
 
     private const PAGE_SIZES = [10, 25, 50, 100];
 
-    private const EMPLOYEE_COLUMNS = 'employee:id,employee_code,firstname,middlename,lastname,avatar,position,department,biometric_id';
+    private const EMPLOYEE_COLUMNS = 'employee:id,employee_code,firstname,middlename,lastname,avatar,position';
 
     public function __construct(
         protected AttendanceCalculator $attendanceCalculator,
@@ -183,7 +183,7 @@ class AttendanceController extends Controller
                 ->where('entity_id', $entityId)
                 ->where('is_active', true)
                 ->orderBy('lastname')
-                ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'biometric_id', 'position', 'department'])
+                ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position'])
             : collect($self ? [$self] : []);
 
         return Inertia::render('employee-management/attendance/page', [
@@ -807,7 +807,7 @@ class AttendanceController extends Controller
         }
 
         return [
-            'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'avatar_url']) + ['name' => $employee->name],
+            'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'avatar_url']) + ['name' => $employee->name],
             'schedule' => $schedule->toArray(),
             'holiday' => $holiday?->only(['name', 'type']),
             'officialBusiness' => $this->attendanceCalculator->approvedOfficialBusiness($employee->id, $today)?->only(['destination']),

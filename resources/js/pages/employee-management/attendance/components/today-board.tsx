@@ -63,7 +63,7 @@ function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canMa
             filterFn: (row, _id, value: string) => {
                 const e = row.original.employee;
                 const q = value.toLowerCase();
-                return [fullName(e), e.employee_code, e.position, e.department].some((v) => v?.toLowerCase().includes(q));
+                return [fullName(e), e.employee_code, e.position].some((v) => v?.toLowerCase().includes(q));
             },
             cell: ({ row: { original: r } }) => (
                 <div className="flex min-w-[200px] items-center gap-3">

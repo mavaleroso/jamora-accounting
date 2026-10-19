@@ -14,7 +14,7 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * Single source of truth for timekeeping computations (web punches, manual entries,
- * CSV/biometric imports, corrections and the daily close).
+ * CSV imports, corrections and the daily close).
  *
  * Rules (PH Labor Code / DOLE + company policy in config/people.php):
  *  - Schedule = published roster > employee default shift template > config default shift.

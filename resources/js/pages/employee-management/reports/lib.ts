@@ -16,7 +16,7 @@ export const SERIES = [
 ] as const;
 export const slot = (i: number) => SERIES[Math.min(i, SERIES.length - 1)];
 
-export type Person = { id: number; code: string; name: string; department: string | null; position: string | null; avatarUrl: string | null };
+export type Person = { id: number; code: string; name: string; position: string | null; avatarUrl: string | null };
 type Count = { key: string; count: number };
 
 export type Workforce = {
@@ -26,7 +26,7 @@ export type Workforce = {
     separations: number;
     turnoverRate: number;
     avgTenureYears: number | null;
-    byDepartment: { department: string; count: number; regular: number }[];
+    byPosition: { position: string; count: number; regular: number }[];
     byType: Count[];
     byPayType: Count[];
     byGender: Count[];
@@ -53,7 +53,6 @@ export type Attendance = AttendanceSummary & {
     incomplete: number;
     unapproved: number;
     daily: { date: string; rate: number; present: number; late: number; absent: number }[];
-    byDepartment: (AttendanceSummary & { department: string })[];
     byEmployee: (AttendanceSummary & Person)[];
 };
 
@@ -76,10 +75,10 @@ export type Payroll = PayTotals & {
     unreleased: number;
     monthlyRunRate: number;
     trend: (PayTotals & { month: string })[];
-    byDepartment: (PayTotals & { department: string })[];
+    byEmployee: (PayTotals & Person)[];
 };
 
-export type Filters = { preset: string; from: string | null; to: string | null; department: string | null };
+export type Filters = { preset: string; from: string | null; to: string | null };
 
 export const peso = (n: number | null | undefined) => formatPhpCurrency(Number(n ?? 0));
 

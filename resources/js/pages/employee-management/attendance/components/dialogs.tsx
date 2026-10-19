@@ -171,7 +171,7 @@ function ManualEntryForm({ target, employees, today, onDone }: { target: ManualE
                 <DialogDescription>
                     {isEdit
                         ? `${fullName(employee)} · ${fmtDate(data.work_date, { weekday: 'short', month: 'short', day: 'numeric' })}`
-                        : 'Record punches on behalf of an employee (e.g. biometric outage or forgotten punch).'}
+                        : 'Record punches on behalf of an employee (e.g. a forgotten punch).'}
                 </DialogDescription>
             </DialogHeader>
 
@@ -222,7 +222,7 @@ function ManualEntryForm({ target, employees, today, onDone }: { target: ManualE
                     value={data.notes}
                     onChange={(e) => setData('notes', e.target.value)}
                     rows={2}
-                    placeholder="e.g. Biometric device offline — confirmed with branch manager"
+                    placeholder="e.g. Forgot to clock out — confirmed with branch manager"
                 />
             </Field>
 

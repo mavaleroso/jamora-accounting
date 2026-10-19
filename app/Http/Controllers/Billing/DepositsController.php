@@ -10,7 +10,6 @@ use App\Models\InvoicePayment;
 use App\Models\Journal;
 use App\Models\Partner;
 use App\Services\Accounting\CashMovementService;
-use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,6 +31,7 @@ class DepositsController extends Controller
         $filters = [
             'search' => trim((string) $request->get('search', '')),
             'status' => $request->get('status'),
+            'source' => $request->get('source'),
             'date_from' => $request->get('date_from'),
             'date_to' => $request->get('date_to'),
         ];
@@ -42,7 +42,9 @@ class DepositsController extends Controller
                 $term = "%{$filters['search']}%";
                 $q->where('reference', 'like', $term)->orWhereHas('partner', fn ($p) => $p->where('name', 'like', $term));
             }))
-            ->when(in_array($filters['status'], ['open', 'applied', 'refunded'], true), fn ($q) => $q->where('status', $filters['status']))
+            ->when(in_array($filters['status'], ['open', 'applied', 'refunded', 'void'], true), fn ($q) => $q->where('status', $filters['status']))
+            ->when($filters['source'] === 'optical', fn ($q) => $q->where('source_system', 'optical'))
+            ->when($filters['source'] === 'manual', fn ($q) => $q->whereNull('source_system'))
             ->when($filters['date_from'], fn ($q, $d) => $q->whereDate('deposit_date', '>=', $d))
             ->when($filters['date_to'], fn ($q, $d) => $q->whereDate('deposit_date', '<=', $d))
             ->orderByDesc('deposit_date')
@@ -139,12 +141,6 @@ class DepositsController extends Controller
 
     protected function bankAccounts()
     {
-        $entityId = app(EntityContext::class)->id();
-
-        return BankAccount::query()
-            ->where('is_active', true)
-            ->when($entityId, fn ($q) => $q->whereHas('entities', fn ($e) => $e->where('entities.id', $entityId)))
-            ->orderBy('code')
-            ->get(['id', 'code', 'name', 'is_shared']);
+        return BankAccount::query()->active()->orderBy('code')->get(['id', 'code', 'name']);
     }
 }

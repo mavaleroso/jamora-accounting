@@ -67,7 +67,7 @@ class ShiftRosterController extends Controller
             ->where('is_active', true)
             ->with(['defaultShiftTemplate'])
             ->orderBy('lastname')
-            ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'department', 'default_shift_template_id', 'rest_days']);
+            ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'default_shift_template_id', 'rest_days']);
 
         $shiftTemplates = ShiftTemplate::query()
             ->where('entity_id', $entityId)
@@ -171,7 +171,6 @@ class ShiftRosterController extends Controller
                     'code' => $employee->employee_code,
                     'name' => $employee->name,
                     'position' => $employee->position,
-                    'department' => $employee->department,
                 ],
                 'shifts' => $empShifts,
             ];
@@ -292,7 +291,7 @@ class ShiftRosterController extends Controller
 
         return Inertia::render('employee-management/roster/my-schedule', [
             ...$shared,
-            'employee' => $employee->only(['id', 'employee_code', 'name', 'position', 'department']),
+            'employee' => $employee->only(['id', 'employee_code', 'name', 'position']),
             'days' => $days->all(),
             'summary' => [
                 'scheduledMinutes' => $days->sum('scheduled_minutes'),

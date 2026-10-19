@@ -1,7 +1,20 @@
 import { formatPhpCurrency } from '@/lib/currency';
 
+/** A company (branch / entity) the user can open. */
+export type Company = { id: number; code: string; name: string };
+
+const COMPANY_DOTS = ['bg-sky-500', 'bg-violet-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500'];
+
+/** A stable colour per company, by its place in the list of companies. */
+export const companyDot = (companies: Company[], id?: number | null) => {
+    const i = companies.findIndex((c) => c.id === id);
+    return i < 0 ? 'bg-muted-foreground' : COMPANY_DOTS[i % COMPANY_DOTS.length];
+};
+
 export type ShiftTemplate = {
     id: number;
+    /** The company it belongs to; null = shared by every company. */
+    entity_id?: number | null;
     code: string;
     name: string;
     start_time: string;
@@ -12,6 +25,9 @@ export type ShiftTemplate = {
 
 export type Employee = {
     id: number;
+    /** The company (employer) the employee belongs to. */
+    entity_id: number;
+    entity?: Company | null;
     user_id?: number | null;
     employee_code: string;
     firstname: string;
@@ -22,11 +38,15 @@ export type Employee = {
     avatar_url?: string | null;
     gender?: string | null;
     civil_status?: string | null;
+    birth_date?: string | null;
     position?: string | null;
-    department?: string | null;
-    biometric_id?: string | null;
     email?: string | null;
     phone?: string | null;
+    address?: string | null;
+    emergency_contact_name?: string | null;
+    emergency_contact_relationship?: string | null;
+    emergency_contact_phone?: string | null;
+    dependents?: number | null;
     default_shift_template_id?: number | null;
     default_shift_template?: ShiftTemplate | null;
     rest_days?: number[] | null;
@@ -46,6 +66,7 @@ export type Employee = {
     pagibig_number?: string | null;
     tin?: string | null;
     bank_name?: string | null;
+    bank_account_name?: string | null;
     bank_account_no?: string | null;
     is_active: boolean;
     /** How SSS / PhilHealth / Pag-IBIG are deducted; a missing agency (or null) = automatic. */
@@ -54,8 +75,15 @@ export type Employee = {
     user?: { id: number; username: string | null; email: string | null; status: boolean; roles?: { id: number; name: string }[] } | null;
 };
 
-/** A user who can be linked to a new employee: not yet an employee in this branch. */
-export type LinkableUser = { id: number; name: string; username: string | null; email: string | null; role: string | null };
+/** A user who can be linked to a new employee, and the companies where they already are one. */
+export type LinkableUser = {
+    id: number;
+    name: string;
+    username: string | null;
+    email: string | null;
+    role: string | null;
+    employee_entity_ids?: number[];
+};
 
 export type LeaveTypeOption = {
     id: number;
@@ -179,13 +207,10 @@ export const PRESET_POSITIONS = [
     'Inventory & Billing Clerk',
 ];
 
-export const PRESET_DEPARTMENTS = [
-    'Clinical Optometry',
-    'Optical Sales & Lab',
-    'Front Desk & Cashiering',
-    'Administration & HR',
-    'Finance & Accounting',
-];
+export const EMERGENCY_RELATIONSHIPS = ['Mother', 'Father', 'Spouse', 'Partner', 'Sibling', 'Child', 'Relative', 'Friend'];
+
+/** No one younger may be employed (RA 9231). */
+export const MIN_WORKING_AGE = 15;
 
 export const EMPLOYMENT_STATUSES = [
     { value: 'active', label: 'Active' },
@@ -247,6 +272,15 @@ export const formatDate = (value?: string | null) => {
     return d ? d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 };
 
+/** Age in whole years today, or null without a birth date. */
+export const age = (birthDate?: string | null) => {
+    const b = parseDate(birthDate);
+    if (!b) return null;
+    const now = new Date();
+    const hadBirthday = now.getMonth() > b.getMonth() || (now.getMonth() === b.getMonth() && now.getDate() >= b.getDate());
+    return now.getFullYear() - b.getFullYear() - (hadBirthday ? 0 : 1);
+};
+
 export const addMonths = (value: string | null | undefined, months: number) => {
     const d = parseDate(value);
     if (!d) return null;
@@ -298,7 +332,11 @@ export const payUnit = (payType: string) => PAY_TYPES.find((p) => p.value === pa
 
 export const formatPay = (e: Pick<Employee, 'basic_pay' | 'pay_type'>) => `${formatPhpCurrency(Number(e.basic_pay))}${payUnit(e.pay_type)}`;
 
-export const missingStatutory = (e: Employee) => STATUTORY_FIELDS.filter((f) => !e[f.key]);
+/** The value, or null when empty or marked "-" (not on file yet). */
+export const onFile = (value?: string | null) => (value && value.trim() !== '-' ? value : null);
+
+// Records synced from optical-new mark IDs not on file yet with "-".
+export const missingStatutory = (e: Employee) => STATUTORY_FIELDS.filter((f) => !e[f.key] || e[f.key]?.trim() === '-');
 
 export const statusBadgeClass = (status: string) =>
     ({

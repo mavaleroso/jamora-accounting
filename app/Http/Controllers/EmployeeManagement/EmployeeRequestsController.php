@@ -163,7 +163,7 @@ class EmployeeRequestsController extends Controller
                     : 0,
             ],
             'self' => $self ? [
-                ...$self->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department', 'gender', 'leave_type_ids']),
+                ...$self->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'gender', 'leave_type_ids']),
                 'balances' => $this->leaveService->balanceSummary($self, $year, $leaveTypes),
                 'upcoming' => $this->outOfOffice($entityId, $today, $today->copy()->addDays(60), $self->id)->take(5)->values(),
             ] : null,
@@ -177,7 +177,7 @@ class EmployeeRequestsController extends Controller
                     ->where('entity_id', $entityId)
                     ->where('is_active', true)
                     ->orderBy('lastname')
-                    ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'department', 'gender', 'leave_type_ids'])
+                    ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender', 'leave_type_ids'])
                 : [],
             'leaveTypes' => $leaveTypes->map(fn (LeaveType $t) => $t->only([
                 'id', 'code', 'name', 'legal_basis', 'is_paid', 'balance_tracked', 'annual_entitlement', 'max_days_per_filing',
@@ -434,7 +434,7 @@ class EmployeeRequestsController extends Controller
             ->groupBy('employee_id');
 
         return $employees->map(fn (Employee $e) => [
-            'employee' => $e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'department']),
+            'employee' => $e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position']),
             'balances' => collect($this->leaveService->balanceSummary($e, $year, $leaveTypes, ($balances->get($e->id) ?? collect())->keyBy('leave_type_id')))
                 ->keyBy('code'),
         ])->all();

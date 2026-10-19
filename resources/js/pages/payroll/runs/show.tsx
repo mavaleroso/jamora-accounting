@@ -107,7 +107,7 @@ export default function PayrollRunPage({ run, checks, payslips, totals, remittan
 
     const needle = query.trim().toLowerCase();
     const rows = needle
-        ? payslips.filter((p) => `${p.employee?.name} ${p.employee?.employee_code} ${p.employee?.position ?? ''} ${p.employee?.department ?? ''}`.toLowerCase().includes(needle))
+        ? payslips.filter((p) => `${p.employee?.name} ${p.employee?.employee_code} ${p.employee?.position ?? ''}`.toLowerCase().includes(needle))
         : payslips;
     const errors = checks.filter((c) => c.level === 'error').length;
     const employerCost = run.gross_total + run.employer_total;

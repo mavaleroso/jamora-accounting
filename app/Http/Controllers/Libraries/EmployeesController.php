@@ -5,25 +5,32 @@ namespace App\Http\Controllers\Libraries;
 use App\Enums\RoleEnum;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\Entity;
 use App\Models\LeaveType;
 use App\Models\ShiftTemplate;
 use App\Models\User;
 use App\Services\People\BenefitReview;
 use App\Support\EntityContext;
+use App\Support\MissingValue;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use Spatie\Permission\Models\Role;
 
 /**
- * Employee Directory. Every employee has a login so they can use the self-service portal: creating an
- * employee also creates their user account (Employee role, this branch) or links an existing user.
+ * Employee Directory: the employees of every company (branch) the user can open, in one list. Every employee has a
+ * login so they can use the self-service portal: creating an employee also creates their user account (Employee
+ * role, the employee's company) or links an existing user. An employee is created in the company picked in the
+ * form and stays there; each record is validated and saved within its own company.
  */
 class EmployeesController extends Controller
 {
@@ -39,6 +46,7 @@ class EmployeesController extends Controller
     private const SORTABLE = [
         'code' => 'employee_code',
         'name' => 'lastname',
+        'company' => 'entity_id',
         'hire_date' => 'hire_date',
         'basic_pay' => 'basic_pay',
     ];
@@ -50,17 +58,28 @@ class EmployeesController extends Controller
         $search = trim((string) $request->query('search', ''));
         $status = in_array($request->query('status'), self::STATUSES, true) ? $request->query('status') : '';
         $type = in_array($request->query('type'), self::EMPLOYMENT_TYPES, true) ? $request->query('type') : '';
-        $department = trim((string) $request->query('department', ''));
         $sort = array_key_exists((string) $request->query('sort'), self::SORTABLE) ? (string) $request->query('sort') : 'code';
         $direction = $request->query('direction') === 'desc' ? 'desc' : 'asc';
+        $companies = $this->companies($request);
+        $company = $companies->contains('id', (int) $request->query('company')) ? (int) $request->query('company') : null;
 
-        $query = Employee::query()
-            ->with(['defaultShiftTemplate:id,code,name,start_time,end_time,color', 'user:id,username,email,status', 'user.roles:id,name'])
-            ->orderBy(self::SORTABLE[$sort], $direction)
-            ->orderBy('employee_code');
+        $query = $this->directory($request)
+            ->with([
+                'entity:id,code,name',
+                // Shift templates belong to a company, which need not be the current one.
+                'defaultShiftTemplate' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'code', 'name', 'start_time', 'end_time', 'color']),
+                'user:id,username,email,status',
+                'user.roles:id,name',
+            ])
+            ->orderBy($sort === 'company' ? Entity::query()->select('name')->whereColumn('entities.id', 'employees.entity_id') : self::SORTABLE[$sort], $direction);
 
         if ($sort === 'name') {
             $query->orderBy('firstname', $direction);
+        }
+        $query->orderBy('employee_code');
+
+        if ($company !== null) {
+            $query->where('employees.entity_id', $company);
         }
 
         if ($search !== '') {
@@ -69,7 +88,6 @@ class EmployeesController extends Controller
                     ->orWhere('firstname', 'like', "%{$search}%")
                     ->orWhere('lastname', 'like', "%{$search}%")
                     ->orWhere('position', 'like', "%{$search}%")
-                    ->orWhere('biometric_id', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%");
             });
         }
@@ -82,10 +100,6 @@ class EmployeesController extends Controller
             $query->where('employment_type', $type);
         }
 
-        if ($department !== '') {
-            $query->where('department', $department);
-        }
-
         $paginator = $query->paginate($pageSize, ['*'], 'page', $page);
 
         return Inertia::render('libraries/employees/page', [
@@ -95,20 +109,25 @@ class EmployeesController extends Controller
             'currentPage' => $paginator->currentPage(),
             'search' => $search,
             'filters' => [
+                'company' => $company !== null ? (string) $company : '',
                 'status' => $status,
                 'type' => $type,
-                'department' => $department,
                 'sort' => $sort,
                 'direction' => $direction,
             ],
-            'stats' => $this->stats(),
-            'linkableUsers' => $this->linkableUsers(),
-            'departments' => Employee::query()->whereNotNull('department')->distinct()->orderBy('department')->pluck('department'),
-            'positions' => Employee::query()->whereNotNull('position')->distinct()->orderBy('position')->pluck('position'),
+            'stats' => $this->stats($this->directory($request)),
+            'companies' => $companies,
+            // Where a new employee goes unless another company is picked.
+            'currentCompanyId' => app(EntityContext::class)->id(),
+            'linkableUsers' => $this->linkableUsers($companies->pluck('id')->all()),
+            'positions' => $this->directory($request)->whereNotNull('position')->whereNotIn('position', ['', MissingValue::MARK])->distinct()->orderBy('position')->pluck('position'),
+            // Every company's templates (and shared ones); the form offers those of the employee's company.
             'shiftTemplates' => ShiftTemplate::query()
+                ->withoutGlobalScope('entity')
+                ->where(fn ($q) => $q->whereIn('entity_id', $companies->pluck('id'))->orWhereNull('entity_id'))
                 ->where('is_active', true)
                 ->orderBy('name')
-                ->get(['id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'color']),
+                ->get(['id', 'entity_id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'color']),
             'leaveTypes' => LeaveType::query()
                 ->where('is_active', true)
                 ->orderBy('sort_order')
@@ -124,6 +143,28 @@ class EmployeesController extends Controller
     }
 
     public function store(Request $request): RedirectResponse
+    {
+        $company = $this->companyFor($request);
+
+        // Validation, the record and the login's access all belong to the chosen company.
+        return app(EntityContext::class)->runAs($company, fn () => $this->createEmployee($request, $company));
+    }
+
+    public function update(Request $request, int $id): RedirectResponse
+    {
+        $employee = $this->find($request, $id);
+
+        return app(EntityContext::class)->runAs($employee->entity, fn () => $this->updateEmployee($request, $employee));
+    }
+
+    public function destroy(Request $request, int $id): RedirectResponse
+    {
+        $this->find($request, $id)->delete();
+
+        return redirect()->back()->with('status', 'Employee deleted successfully.');
+    }
+
+    private function createEmployee(Request $request, Entity $company): RedirectResponse
     {
         $data = $this->validated($request);
         $account = Arr::only($data, self::ACCOUNT_FIELDS);
@@ -141,11 +182,11 @@ class EmployeesController extends Controller
         });
 
         return redirect()->back()->with('status', $account['account'] === 'new'
-            ? "Employee created. They can sign in as {$user?->username}."
-            : "Employee created and linked to the login of {$user?->name}.");
+            ? "Employee created in {$company->name}. They can sign in as {$user?->username}."
+            : "Employee created in {$company->name} and linked to the login of {$user?->name}.");
     }
 
-    public function update(Request $request, Employee $employee): RedirectResponse
+    private function updateEmployee(Request $request, Employee $employee): RedirectResponse
     {
         $data = $this->validated($request, $employee);
         $account = Arr::only($data, self::ACCOUNT_FIELDS);
@@ -179,24 +220,60 @@ class EmployeesController extends Controller
             : 'Employee updated successfully.');
     }
 
-    public function destroy(Employee $employee): RedirectResponse
+    /**
+     * Companies (branches) the user can open: the directory lists their employees.
+     *
+     * @return Collection<int, array{id: int, code: string, name: string}>
+     */
+    private function companies(Request $request): Collection
     {
-        $employee->delete();
+        return $request->user()->entities()->where('entities.is_active', true)->orderBy('entities.name')->get()
+            ->map(fn (Entity $e) => ['id' => $e->id, 'code' => $e->code, 'name' => $e->name])
+            ->values();
+    }
 
-        return redirect()->back()->with('status', 'Employee deleted successfully.');
+    /**
+     * @return Builder<Employee>
+     */
+    private function directory(Request $request): Builder
+    {
+        return Employee::query()->visibleTo($request->user());
+    }
+
+    /**
+     * An employee of any company the user can open.
+     */
+    private function find(Request $request, int $id): Employee
+    {
+        return $this->directory($request)->findOrFail($id);
+    }
+
+    /**
+     * The company a new employee joins: the one picked in the form, else the current branch.
+     */
+    private function companyFor(Request $request): Entity
+    {
+        $id = $request->filled('entity_id') ? (int) $request->input('entity_id') : app(EntityContext::class)->id();
+        $company = $request->user()->entities()->where('entities.is_active', true)->where('entities.id', $id)->first();
+
+        if (! $company) {
+            throw ValidationException::withMessages(['entity_id' => 'Choose a company you have access to.']);
+        }
+
+        return $company;
     }
 
     /**
      * Directory-wide counters (not limited to the current page or filters).
      *
+     * @param  Builder<Employee>  $base
      * @return array<string, int>
      */
-    private function stats(): array
+    private function stats(Builder $base): array
     {
-        $base = Employee::query();
         $missingStatutory = function ($q) {
             foreach (['sss_number', 'philhealth_number', 'pagibig_number', 'tin'] as $column) {
-                $q->orWhereNull($column)->orWhere($column, '');
+                MissingValue::orWhereMissing($q, $column);
             }
         };
 
@@ -205,32 +282,34 @@ class EmployeesController extends Controller
             'active' => (clone $base)->where('employment_status', 'active')->count(),
             'probationary' => (clone $base)->where('employment_status', 'active')->where('employment_type', 'probationary')->count(),
             'separated' => (clone $base)->where('employment_status', 'separated')->count(),
-            'unmapped_biometric' => (clone $base)->where('employment_status', 'active')
-                ->where(fn ($q) => $q->whereNull('biometric_id')->orWhere('biometric_id', ''))
-                ->count(),
             'incomplete_statutory' => (clone $base)->where('employment_status', 'active')->where($missingStatutory)->count(),
-            'incomplete_records' => (clone $base)->where('employment_status', 'active')
-                ->where(function ($q) use ($missingStatutory) {
-                    $q->where($missingStatutory)->orWhereNull('biometric_id')->orWhere('biometric_id', '');
-                })
-                ->count(),
         ];
     }
 
     /**
-     * Users who can be linked to a new employee: not already an employee in this branch.
+     * Users who can be linked to a new employee, with the companies where they already are one (a user is an
+     * employee at most once per company). Users who already are in every company listed are left out.
      *
-     * @return list<array{id: int, name: string, username: ?string, email: ?string, role: ?string}>
+     * @param  list<int>  $companyIds
+     * @return list<array{id: int, name: string, username: ?string, email: ?string, role: ?string, employee_entity_ids: list<int>}>
      */
-    private function linkableUsers(): array
+    private function linkableUsers(array $companyIds): array
     {
+        $employeeOf = Employee::query()->withoutGlobalScope('entity')->whereNotNull('user_id')->get(['user_id', 'entity_id'])
+            ->groupBy('user_id')
+            ->map(fn ($rows) => $rows->pluck('entity_id')->map(fn ($id) => (int) $id)->unique()->values()->all());
+
         return User::query()
             ->with('roles:id,name')
-            ->whereNotIn('id', Employee::query()->whereNotNull('user_id')->select('user_id'))
             ->orderBy('firstname')
             ->orderBy('lastname')
             ->get(['id', 'username', 'email', 'firstname', 'lastname'])
-            ->map(fn (User $u) => ['id' => $u->id, 'name' => $u->name, 'username' => $u->username, 'email' => $u->email, 'role' => $u->roles->first()?->name])
+            ->map(fn (User $u) => [
+                'id' => $u->id, 'name' => $u->name, 'username' => $u->username, 'email' => $u->email, 'role' => $u->roles->first()?->name,
+                'employee_entity_ids' => $employeeOf[$u->id] ?? [],
+            ])
+            ->filter(fn (array $u) => array_diff($companyIds, $u['employee_entity_ids']) !== [])
+            ->values()
             ->all();
     }
 
@@ -352,11 +431,15 @@ class EmployeesController extends Controller
             'lastname' => ['required', 'string', 'max:100'],
             'gender' => ['nullable', 'string', 'in:male,female'],
             'civil_status' => ['nullable', 'string', 'in:single,married,widowed,separated,solo_parent'],
+            'birth_date' => ['nullable', 'date', 'before_or_equal:'.now()->subYears(Employee::MIN_WORKING_AGE)->toDateString()],
+            'dependents' => ['nullable', 'integer', 'min:0', 'max:30'],
             'position' => ['nullable', 'string', 'max:100'],
-            'department' => ['nullable', 'string', 'max:100'],
-            'biometric_id' => ['nullable', 'string', 'max:50', Rule::unique('employees', 'biometric_id')->where('entity_id', $entityId)->whereNull('deleted_at')->ignore($employee?->id)],
             'email' => ['nullable', 'email', 'max:150', ...($newLogin ? [Rule::unique('users', 'email')] : [])],
             'phone' => ['nullable', 'string', 'max:50'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'emergency_contact_name' => ['nullable', 'string', 'max:150'],
+            'emergency_contact_relationship' => ['nullable', 'string', 'max:50'],
+            'emergency_contact_phone' => ['nullable', 'string', 'max:50'],
             'hire_date' => ['nullable', 'date'],
             'regularization_date' => ['nullable', 'date', ...$afterHire],
             'separation_date' => ['nullable', 'required_if:employment_status,separated', 'date', ...$afterHire],
@@ -377,6 +460,7 @@ class EmployeesController extends Controller
             'pagibig_number' => ['nullable', 'string', 'max:50'],
             'tin' => ['nullable', 'string', 'max:50'],
             'bank_name' => ['nullable', 'string', 'max:100'],
+            'bank_account_name' => ['nullable', 'string', 'max:150'],
             'bank_account_no' => ['nullable', 'string', 'max:50'],
             'is_active' => ['boolean'],
             'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
@@ -389,7 +473,7 @@ class EmployeesController extends Controller
             'separation_date.required_if' => 'A separation date is required for separated employees.',
             'regularization_date.after_or_equal' => 'Regularization date cannot be earlier than the hire date.',
             'separation_date.after_or_equal' => 'Separation date cannot be earlier than the hire date.',
-            'biometric_id.unique' => 'This biometric ID is already mapped to another employee.',
+            'birth_date.before_or_equal' => 'The employee must be at least '.Employee::MIN_WORKING_AGE.' years old (RA 9231).',
             'account.required' => 'Every employee needs a login: create one or link an existing user.',
             'username.unique' => 'This username is already taken.',
             'username.regex' => 'Use letters, numbers, dots, dashes and underscores only — no spaces.',

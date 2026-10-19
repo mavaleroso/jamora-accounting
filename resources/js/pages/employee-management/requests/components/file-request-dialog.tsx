@@ -331,7 +331,7 @@ function RequestForm({
                     <Field
                         label={type && type.attachment_required_after_days !== null ? 'Supporting document' : 'Supporting document (optional)'}
                         error={err.attachment}
-                        hint="PDF or photo, up to 5 MB — e.g. medical certificate, birth or death certificate, solo parent ID."
+                        hint="PDF or photo, up to 5 MB — e.g. medical certificate, birth or death certificate."
                     >
                         <label className="text-muted-foreground hover:bg-muted/40 flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm">
                             <Paperclip className="size-4" />

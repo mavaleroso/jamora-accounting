@@ -137,7 +137,7 @@ export default function OpticalRulesPage({ rules, accounts }: Props) {
             <div className="flex flex-col gap-6 p-4">
                 <Heading
                     title="Posting Rules"
-                    description="Configure default accounts used when syncing Optical sales and collections."
+                    description="The accounts this entity's optical sync posts to: deposits, sales, discounts, VAT, related-entity settlements, cost of goods sold and stock events."
                 />
 
                 <DataTable title="Optical Posting Rules" description="These rules map sync events to chart-of-accounts entries." columns={columns} data={rules} emptyTitle="No posting rules yet" />

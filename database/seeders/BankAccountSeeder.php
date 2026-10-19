@@ -2,51 +2,52 @@
 
 namespace Database\Seeders;
 
-use App\Models\Account;
 use App\Models\BankAccount;
 use App\Models\Entity;
+use App\Support\ChartOfAccounts;
 use Illuminate\Database\Seeder;
 
+/**
+ * Demo bank accounts. Every bank account belongs to exactly one entity and gets its own Cash in Bank ledger
+ * account in that entity's chart; no account is shared between entities.
+ */
 class BankAccountSeeder extends Seeder
 {
+    public const ACCOUNTS = [
+        'JAM_OPTICUS' => [
+            ['code' => 'JAM-BDO', 'name' => 'JAM Opticus Operating', 'bank_name' => 'BDO'],
+            ['code' => 'JAM-BPI', 'name' => 'JAM Opticus Collections', 'bank_name' => 'BPI'],
+        ],
+        'A_JAMORA' => [
+            ['code' => 'AJO-BPI', 'name' => 'A. Jamora Optical Operating', 'bank_name' => 'BPI'],
+            ['code' => 'AJO-MBTC', 'name' => 'A. Jamora Optical Payroll', 'bank_name' => 'Metrobank'],
+        ],
+        'AL_JAMORA' => [
+            ['code' => 'ALJ-BDO', 'name' => 'AL Jamora Optical Operating', 'bank_name' => 'BDO'],
+        ],
+    ];
+
     public function run(): void
     {
-        $jam = Entity::query()->where('code', 'JAM_OPTICUS')->first();
-        $aJamora = Entity::query()->where('code', 'A_JAMORA')->first();
-        $alJamora = Entity::query()->where('code', 'AL_JAMORA')->first();
+        foreach (self::ACCOUNTS as $entityCode => $accounts) {
+            $entity = Entity::query()->where('code', $entityCode)->first();
+            if (! $entity) {
+                continue;
+            }
 
-        $shared = [
-            ['code' => 'BANK1', 'name' => 'Shared Operating Account 1', 'bank_name' => 'BDO'],
-            ['code' => 'BANK2', 'name' => 'Shared Operating Account 2', 'bank_name' => 'BPI'],
-            ['code' => 'BANK3', 'name' => 'Shared Operating Account 3', 'bank_name' => 'Metrobank'],
-            ['code' => 'BANK4', 'name' => 'Shared Operating Account 4', 'bank_name' => 'UnionBank'],
-        ];
+            foreach ($accounts as $row) {
+                $bank = BankAccount::query()->withoutGlobalScope('entity')->updateOrCreate(
+                    ['code' => $row['code']],
+                    [
+                        'entity_id' => $entity->id,
+                        'name' => $row['name'],
+                        'bank_name' => $row['bank_name'],
+                        'is_active' => true,
+                    ]
+                );
 
-        foreach ($shared as $row) {
-            $account = BankAccount::query()->updateOrCreate(
-                ['code' => $row['code']],
-                [
-                    'name' => $row['name'],
-                    'bank_name' => $row['bank_name'],
-                    'is_shared' => true,
-                    'is_active' => true,
-                ]
-            );
-            $ids = array_filter([$jam?->id, $aJamora?->id]);
-            $account->entities()->sync($ids);
-        }
-
-        $alAccount = BankAccount::query()->updateOrCreate(
-            ['code' => 'BANK5'],
-            [
-                'name' => 'AL Jamora Dedicated Account',
-                'bank_name' => 'BDO',
-                'is_shared' => false,
-                'is_active' => true,
-            ]
-        );
-        if ($alJamora) {
-            $alAccount->entities()->sync([$alJamora->id]);
+                ChartOfAccounts::ensureBankLedger($bank);
+            }
         }
     }
 }

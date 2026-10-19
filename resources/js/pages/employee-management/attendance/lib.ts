@@ -5,8 +5,6 @@ export type Person = {
     lastname: string;
     name?: string;
     position?: string | null;
-    department?: string | null;
-    biometric_id?: string | null;
     avatar_url?: string | null;
 };
 

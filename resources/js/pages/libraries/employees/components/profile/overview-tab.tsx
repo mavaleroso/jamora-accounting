@@ -2,10 +2,11 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatPhpCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, Briefcase, CalendarClock, Fingerprint, IdCard, KeyRound, Mail, Palmtree, Phone, UserRound, Wallet } from 'lucide-react';
+import { AlertTriangle, Briefcase, CalendarClock, IdCard, KeyRound, Mail, MapPin, Palmtree, Phone, UserRound, Wallet } from 'lucide-react';
 import * as React from 'react';
 import {
     addMonths,
+    age,
     CIVIL_STATUSES,
     CONTRIBUTIONS,
     EMPLOYMENT_STATUSES,
@@ -15,6 +16,7 @@ import {
     labelOf,
     leaveTypesLabel,
     missingStatutory,
+    onFile,
     payEquivalents,
     PROBATION_MONTHS,
     restDayLabel,
@@ -80,9 +82,15 @@ export function OverviewTab({
     const probationEnds = e.employment_type === 'probationary' && !e.regularization_date ? addMonths(e.hire_date, PROBATION_MONTHS) : null;
     const shift = e.default_shift_template;
     const active = e.employment_status === 'active';
+    const years = age(e.birth_date);
+    const address = onFile(e.address);
+    const emergency = {
+        name: onFile(e.emergency_contact_name),
+        relationship: onFile(e.emergency_contact_relationship),
+        phone: onFile(e.emergency_contact_phone),
+    };
     const alerts = [
         active && missing.length > 0 && `Missing government IDs: ${missing.map((m) => m.label).join(', ')}.`,
-        active && !e.biometric_id && 'No biometric ID — time clock punches can’t be matched.',
         active && probationEnds && `Probation ends ${formatDate(probationEnds)} — review for regularization.`,
         active && data && !data.account && 'No login yet — the employee can’t use the portal. Add one under Edit › Login.',
     ].filter(Boolean) as string[];
@@ -119,8 +127,39 @@ export function OverviewTab({
                                 </a>
                             )}
                         </Item>
+                        <Item label="Home address" className="col-span-2">
+                            {address && (
+                                <span className="inline-flex items-start gap-1">
+                                    <MapPin className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+                                    {address}
+                                </span>
+                            )}
+                        </Item>
                         <Item label="Sex">{e.gender && (e.gender === 'female' ? 'Female' : 'Male')}</Item>
                         <Item label="Civil status">{e.civil_status && labelOf(CIVIL_STATUSES, e.civil_status)}</Item>
+                        <Item label="Date of birth">
+                            {e.birth_date && (
+                                <>
+                                    {formatDate(e.birth_date)}
+                                    {years !== null && <span className="text-muted-foreground"> · {years}</span>}
+                                </>
+                            )}
+                        </Item>
+                        <Item label="Dependents">{e.dependents != null && String(e.dependents)}</Item>
+                        <Item label="Emergency contact" className="col-span-2">
+                            {(emergency.name || emergency.phone) && (
+                                <>
+                                    {emergency.name}
+                                    {emergency.relationship && <span className="text-muted-foreground"> ({emergency.relationship})</span>}
+                                    {emergency.phone && (
+                                        <a href={`tel:${emergency.phone}`} className="flex items-center gap-1 hover:underline">
+                                            <Phone className="text-muted-foreground size-3.5" />
+                                            {emergency.phone}
+                                        </a>
+                                    )}
+                                </>
+                            )}
+                        </Item>
                     </dl>
                 </Card>
 
@@ -147,17 +186,11 @@ export function OverviewTab({
                     </dl>
                 </Card>
 
-                <Card title="Schedule & time clock" icon={CalendarClock}>
+                <Card title="Schedule" icon={CalendarClock}>
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-                        <Item label="Biometric ID" mono>
-                            {e.biometric_id && (
-                                <span className="inline-flex items-center gap-1">
-                                    <Fingerprint className="text-muted-foreground size-3.5" />
-                                    {e.biometric_id}
-                                </span>
-                            )}
+                        <Item label="Rest days" className="col-span-2">
+                            {restDayLabel(e.rest_days, policy.defaultRestDays)}
                         </Item>
-                        <Item label="Rest days">{restDayLabel(e.rest_days, policy.defaultRestDays)}</Item>
                         <Item label="Default shift" className="col-span-2">
                             {shift ? `${shift.name} (${shiftRange(shift)})` : 'Company default'}
                         </Item>
@@ -178,6 +211,9 @@ export function OverviewTab({
                         <Item label="Payroll bank">{e.bank_name || 'Cash or cheque'}</Item>
                         <Item label="Account no." mono>
                             {e.bank_account_no}
+                        </Item>
+                        <Item label="Account name" className="col-span-2">
+                            {onFile(e.bank_account_name)}
                         </Item>
                     </dl>
                 </Card>

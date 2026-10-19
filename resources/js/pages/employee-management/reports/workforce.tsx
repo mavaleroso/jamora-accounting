@@ -39,13 +39,13 @@ export function WorkforceSection({ data }: { data: Workforce }) {
 
             <div className="grid gap-4 lg:grid-cols-3">
                 <ChartCard
-                    title="By department"
+                    title="By position"
                     description="Active employees at period end"
                     className="lg:col-span-1"
-                    table={<MiniTable head={['Department', 'Active', 'Regular']} rows={data.byDepartment.map((d) => [d.department, d.count, d.regular])} />}
+                    table={<MiniTable head={['Position', 'Active', 'Regular']} rows={data.byPosition.map((d) => [d.position, d.count, d.regular])} />}
                 >
-                    {data.byDepartment.length ? (
-                        <RankBars rows={data.byDepartment.map((d) => ({ label: d.department, value: d.count, hint: `${d.regular} regular` }))} format={(v) => num(v)} />
+                    {data.byPosition.length ? (
+                        <RankBars rows={data.byPosition.map((d) => ({ label: d.position, value: d.count, hint: `${d.regular} regular` }))} format={(v) => num(v)} />
                     ) : (
                         <Empty>No active employees.</Empty>
                     )}
@@ -111,7 +111,7 @@ export function WorkforceSection({ data }: { data: Workforce }) {
                                     <span className="min-w-0 flex-1">
                                         <span className="block truncate text-sm font-medium">{m.name}</span>
                                         <span className="block truncate text-xs text-muted-foreground">
-                                            {m.position ?? '—'} · {m.department ?? 'Unassigned'}
+                                            {m.position ?? '—'}
                                         </span>
                                     </span>
                                     <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-medium', m.type === 'hire' ? TONE.emerald : TONE.slate)}>

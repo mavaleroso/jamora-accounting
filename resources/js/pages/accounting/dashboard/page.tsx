@@ -62,6 +62,7 @@ type DashboardData = {
     expenseMix: ExpenseMixItem[];
     recentJournalEntries: DashboardJournalEntry[];
     lastSyncRun: SyncRun | null;
+    lowStock?: { count: number; items: { stock_type: string; brand: string | null; code: string | null; on_hand_count: number }[] } | null;
     currentPeriod: {
         id: number;
         period_no: number;
@@ -105,6 +106,7 @@ export default function AccountingDashboardPage({
     expenseMix,
     recentJournalEntries,
     lastSyncRun,
+    lowStock = null,
     currentPeriod,
 }: Props) {
     const entries = Array.isArray(recentJournalEntries)
@@ -129,7 +131,7 @@ export default function AccountingDashboardPage({
                     <StatCard
                         title="Cash Position"
                         value={formatPhpCurrency(cashPosition)}
-                        description="Accounts 1000, 1010, 1020"
+                        description="Cash on hand, clearing and bank accounts"
                         icon={WalletIcon}
                         href="/accounting/cash-bank-records"
                     />
@@ -194,7 +196,7 @@ export default function AccountingDashboardPage({
                         </div>
                         <div>
                             <div className="text-foreground text-xs font-semibold">Shift & Attendance</div>
-                            <div className="text-muted-foreground text-[11px]">Weekly rosters & biometric punches</div>
+                            <div className="text-muted-foreground text-[11px]">Weekly rosters & time records</div>
                         </div>
                     </Link>
 
@@ -242,6 +244,23 @@ export default function AccountingDashboardPage({
                         href="/integration/optical/exceptions"
                         tone="danger"
                     />
+                    {lowStock && (
+                        <StatCard
+                            title="Low Stock"
+                            value={lowStock.count.toLocaleString()}
+                            description={
+                                lowStock.items.length
+                                    ? `Lowest: ${lowStock.items
+                                          .slice(0, 2)
+                                          .map((i) => `${i.brand ?? i.code ?? i.stock_type} (${i.on_hand_count})`)
+                                          .join(', ')}`
+                                    : 'Item groups at or below reorder level'
+                            }
+                            icon={Boxes}
+                            href="/integration/inventory?tab=alerts"
+                            tone={lowStock.count ? 'warning' : 'success'}
+                        />
+                    )}
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-3">

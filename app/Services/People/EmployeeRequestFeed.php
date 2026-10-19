@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
  */
 class EmployeeRequestFeed
 {
-    public const EMPLOYEE_COLUMNS = 'employee:id,entity_id,employee_code,firstname,middlename,lastname,avatar,position,department,gender';
+    public const EMPLOYEE_COLUMNS = 'employee:id,entity_id,employee_code,firstname,middlename,lastname,avatar,position,gender';
 
     /**
      * Both request tables as one queryable feed. Attendance "rejected" is reported as "declined".

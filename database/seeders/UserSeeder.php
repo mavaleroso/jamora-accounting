@@ -10,20 +10,26 @@ use Illuminate\Support\Facades\Hash;
 class UserSeeder extends Seeder
 {
     /**
-     * Create one demo login for each application role.
-     * All seeded users use the password "password".
+     * The owner's admin login (password "password" — change it after the first sign-in). Staff logins come from
+     * optical-new's users; demo logins for the other roles are in DemoUserSeeder.
      */
+    public const USERS = [
+        ['admin', 'Admin', null, 'User', 'Executive / Owner', RoleEnum::Admin],
+    ];
+
     public function run(): void
     {
         // Keep this seeder runnable on its own, including role permissions.
         $this->call(RolesAndPermissionsSeeder::class);
 
-        $users = [
-            ['admin', 'Admin', null, 'User', 'Executive / Owner', RoleEnum::Admin],
-            ['accountant', 'Sally', null, 'Accountant', 'Accountant', RoleEnum::Accountant],
-            ['retainer', 'Avery', null, 'Retainer', 'Accounting Retainer (outsourced)', RoleEnum::AccountingRetainer],
-            ['employee', 'Staff', 'Demo', 'Employee', 'Optical Staff / Assistant', RoleEnum::Employee],
-        ];
+        $this->seedUsers(static::USERS);
+    }
+
+    /**
+     * @param  list<array{string, string, ?string, string, string, RoleEnum}>  $users
+     */
+    protected function seedUsers(array $users): void
+    {
 
         foreach ($users as [$username, $firstname, $middlename, $lastname, $position, $role]) {
             $user = User::query()->updateOrCreate(

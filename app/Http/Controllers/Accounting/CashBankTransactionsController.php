@@ -55,7 +55,7 @@ class CashBankTransactionsController extends Controller
             ->join('journal_entries', 'journal_entry_lines.journal_entry_id', '=', 'journal_entries.id')
             ->where('journal_entries.entity_id', $entityId)
             ->whereNull('journal_entries.deleted_at')
-            ->where('journal_entries.status', '!=', 'void')
+            // A voided entry stays listed beside the posted entry that reverses it, so the cash book still nets out.
             ->whereIn('journal_entry_lines.account_id', $accountIds)
             ->whereDate('journal_entries.entry_date', '>=', $filters['date_from'])
             ->whereDate('journal_entries.entry_date', '<=', $filters['date_to']);
@@ -129,6 +129,7 @@ class CashBankTransactionsController extends Controller
             ],
             'cashAccounts' => $cashAccounts->values(),
             'bankAccounts' => $this->bankAccounts(),
+            'transferEndpoints' => $this->transferEndpoints(),
             'counterAccounts' => $this->counterAccounts(),
             'paymentMethods' => CashMovementService::METHODS,
             'entityName' => $entityContext->current()?->name,
@@ -141,6 +142,10 @@ class CashBankTransactionsController extends Controller
      */
     public function store(Request $request, EntityContext $entityContext): RedirectResponse
     {
+        if ($request->input('kind') === 'transfer') {
+            return $this->transfer($request);
+        }
+
         $data = $request->validate([
             'kind' => ['required', 'in:receipt,payment'],
             'txn_date' => ['required', 'date'],
@@ -209,6 +214,53 @@ class CashBankTransactionsController extends Controller
         return back()->with('status', ($receipt ? 'Receipt' : 'Payment').' of '.number_format($amount, 2).' recorded and journalized.');
     }
 
+    /**
+     * Move money between this entity's own cash accounts: bank deposits of cash on hand, card / e-wallet
+     * settlements net of merchant fees, bank-to-bank transfers and cash withdrawals.
+     */
+    protected function transfer(Request $request): RedirectResponse
+    {
+        $endpoint = ['required', 'string', function (string $attribute, mixed $value, \Closure $fail) {
+            if (! is_string($value) || (! str_starts_with($value, 'bank:') && ! array_key_exists($value, CashMovementService::CLEARING_SOURCES))) {
+                $fail('Choose a cash or bank account.');
+            }
+        }];
+
+        $data = $request->validate([
+            'kind' => ['required', 'in:transfer'],
+            'txn_date' => ['required', 'date'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
+            'fee' => ['nullable', 'numeric', 'min:0'],
+            'from' => $endpoint,
+            'to' => $endpoint,
+            'reference' => ['nullable', 'string', 'max:100'],
+            'description' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $entry = $this->cash->transfer($data, (int) $request->user()->id);
+
+        return back()->with('status', 'Transfer of '.number_format((float) $data['amount'], 2).' recorded ('.$entry->entry_no.').');
+    }
+
+    /** Where money can be moved from or to: cash on hand, the clearing accounts and this entity's banks. */
+    protected function transferEndpoints()
+    {
+        $clearing = Account::query()
+            ->whereIn('code', array_values(CashMovementService::CLEARING_SOURCES))
+            ->pluck('name', 'code');
+
+        $options = collect(CashMovementService::CLEARING_SOURCES)
+            ->filter(fn (string $code) => $clearing->has($code))
+            ->map(fn (string $code, string $key) => ['value' => $key, 'label' => "{$code} · {$clearing[$code]}", 'kind' => 'clearing'])
+            ->values();
+
+        return $options->merge($this->bankAccounts()->map(fn (BankAccount $b) => [
+            'value' => 'bank:'.$b->id,
+            'label' => "{$b->code} · {$b->name} ({$b->bank_name})",
+            'kind' => 'bank',
+        ]))->values();
+    }
+
     protected function cashAccounts()
     {
         return Account::query()
@@ -220,13 +272,7 @@ class CashBankTransactionsController extends Controller
 
     protected function bankAccounts()
     {
-        $entityId = app(EntityContext::class)->id();
-
-        return BankAccount::query()
-            ->where('is_active', true)
-            ->when($entityId, fn ($q) => $q->whereHas('entities', fn ($e) => $e->where('entities.id', $entityId)))
-            ->orderBy('code')
-            ->get(['id', 'code', 'name', 'bank_name', 'is_shared']);
+        return BankAccount::query()->active()->orderBy('code')->get(['id', 'code', 'name', 'bank_name']);
     }
 
     /** Accounts a direct receipt/payment may be charged to, grouped by classification for the picker. */

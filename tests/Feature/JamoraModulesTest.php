@@ -3,18 +3,18 @@
 use App\Models\Account;
 use App\Models\AccountType;
 use App\Models\BankAccount;
-use App\Models\BankTransaction;
 use App\Models\BenefitProgram;
 use App\Models\ComplianceItem;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\Entity;
-use App\Models\InventoryItem;
 use App\Models\InventoryMovement;
 use App\Models\ShiftRoster;
 use App\Models\User;
 use App\Support\EntityContext;
 use Carbon\Carbon;
+use Database\Seeders\AccountingSetupSeeder;
+use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -79,6 +79,7 @@ beforeEach(function () {
     ]);
 
     $this->bankAccount = BankAccount::create([
+        'entity_id' => $this->entity->id,
         'code' => 'BDO-01',
         'name' => 'BDO Operating Account',
         'bank_name' => 'Banco de Oro',
@@ -86,7 +87,6 @@ beforeEach(function () {
         'gl_account_id' => $this->cashAccount->id,
         'is_active' => true,
     ]);
-    $this->bankAccount->entities()->attach($this->entity->id);
 
     $this->cogsAccount = Account::create([
         'entity_id' => $this->entity->id,
@@ -122,8 +122,7 @@ test('cash and bank records register can be accessed and transactions recorded',
     $response->assertOk();
 
     // 2. Record a direct receipt into the bank: it posts a journal entry and lands on the bank register.
-    $this->seed(\Database\Seeders\AccountingSetupSeeder::class);
-    $this->bankAccount->entities()->syncWithoutDetaching([$this->entity->id]);
+    $this->seed(AccountingSetupSeeder::class);
     $revenue = Account::where('code', '4010')->firstOrFail();
 
     $postResponse = $this->withSession(['current_entity_id' => $this->entity->id])
@@ -151,49 +150,57 @@ test('cash and bank records register can be accessed and transactions recorded',
     $this->assertDatabaseHas('journal_entries', ['reference' => 'CR-2026-001', 'source_type' => 'cash_receipt']);
 });
 
-test('inventory movements post correctly and update stock and exception status', function () {
+test('the inventory screen shows synced stock postings and optical stock, and flagged items can be reviewed', function () {
     $this->actingAs($this->user);
+    config([
+        'optical.product_entity' => $this->entity->code,
+        'optical.api.base_url' => 'http://optical.test',
+        'optical.api.token' => 'secret-token',
+    ]);
+    Http::fake([
+        'optical.test/api/v1/accounting/inventory/stock-summary*' => Http::response(['data' => [
+            'on_hand_by_type' => ['frame' => 12], 'on_hand_total' => 12,
+            'on_hand_value_by_type' => ['frame' => 5400], 'on_hand_value_total' => 5400,
+            'low_stock_threshold' => 3,
+            'groups' => [
+                ['stock_type' => 'frame', 'brand' => 'Rayban', 'code' => 'RB-1', 'category' => 'Metal', 'on_hand_count' => 2, 'on_hand_value' => 900, 'min_quantity' => 1, 'is_low_stock' => true],
+                ['stock_type' => 'frame', 'brand' => 'Oakley', 'code' => 'OK-1', 'category' => 'Sport', 'on_hand_count' => 10, 'on_hand_value' => 4500, 'min_quantity' => 1, 'is_low_stock' => false],
+            ],
+        ]]),
+    ]);
 
-    $item = InventoryItem::create([
+    $movement = InventoryMovement::create([
         'entity_id' => $this->entity->id,
-        'sku' => 'FRM-TEST-001',
-        'name' => 'Titanium Eyeglass Frame',
-        'category' => 'frame',
-        'unit_cost' => 1200.00,
-        'selling_price' => 3800.00,
-        'qty_on_hand' => 10,
-        'reorder_level' => 3,
-        'asset_account_id' => $this->invAccount->id,
-        'cogs_account_id' => $this->cogsAccount->id,
-    ]);
-
-    // 1. Visit inventory integration page
-    $response = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->get('/integration/inventory');
-    $response->assertOk();
-
-    // 2. Post a stock movement (Edging loss exception)
-    $postResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post('/integration/inventory/movements', [
-            'inventory_item_id' => $item->id,
-            'movement_type' => 'edging_loss',
-            'quantity' => 1,
-            'unit_cost' => 1200.00,
-            'accounting_link_type' => 'cogs',
-            'notes' => 'Lens fractured during bevel edging',
-        ]);
-
-    $postResponse->assertSessionHas('status');
-
-    $this->assertDatabaseHas('inventory_movements', [
-        'inventory_item_id' => $item->id,
-        'movement_type' => 'edging_loss',
-        'quantity' => -1, // stored signed: stock out
+        'movement_reference' => 'FR-71',
+        'movement_type' => 'write_off',
+        'quantity' => -1,
+        'unit_cost' => 450,
+        'total_cost' => 450,
+        'accounting_link_type' => 'inventory_loss',
         'review_status' => 'needs_review',
+        'notes' => 'Tagged defective in the optical POS.',
+        'source_system' => 'optical',
+        'source_ref' => 'frame:71:defective',
+        'occurred_on' => now()->toDateString(),
     ]);
 
-    // Qty on hand should have decreased from 10 to 9
-    expect($item->fresh()->qty_on_hand)->toBe(9);
+    $this->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/integration/inventory')
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page->component('integration/inventory/page')
+            ->where('isStockEntity', true)
+            ->where('stock.value_total', 5400)
+            ->where('stock.low_stock_count', 1)
+            ->where('stock.low_stock.0.code', 'RB-1')
+            ->where('kpis.needsReview', 1)
+            ->where('movements.data.0.movement_reference', 'FR-71'));
+
+    $this->withSession(['current_entity_id' => $this->entity->id])
+        ->post("/integration/inventory/movements/{$movement->id}/review", ['resolution' => 'Returned to supplier for credit'])
+        ->assertSessionHas('status');
+
+    expect($movement->fresh()->review_status)->toBe('resolved')
+        ->and($movement->fresh()->notes)->toContain('Returned to supplier for credit');
 });
 
 test('employee management roster, attendance, and compliance operate seamlessly', function () {
@@ -206,8 +213,6 @@ test('employee management roster, attendance, and compliance operate seamlessly'
         'firstname' => 'Dr. Maria',
         'lastname' => 'Santos',
         'position' => 'Lead Optometrist',
-        'department' => 'Clinical Optometry',
-        'biometric_id' => 'BIO-TEST-01',
         'employment_status' => 'active',
         'pay_type' => 'monthly',
         'basic_pay' => 45000.00,
@@ -235,20 +240,19 @@ test('employee management roster, attendance, and compliance operate seamlessly'
     expect($roster)->not->toBeNull();
     expect($roster->notes)->toBe('SM Mall of Asia Clinic');
 
-    // 2. Test Biometric Attendance Punch
+    // 2. Test Attendance Punch
     $punchResponse = $this->withSession(['current_entity_id' => $this->entity->id])
         ->post('/employee-management/attendance/punch', [
             'employee_id' => $employee->id,
             'entry_date' => '2026-09-15',
             'time_in' => '10:05',
             'time_out' => '19:00',
-            'biometric_device_id' => 'BIO-DEV-01',
         ]);
     $punchResponse->assertSessionHas('status');
 
     $dtr = DtrEntry::where('employee_id', $employee->id)->first();
     expect($dtr)->not->toBeNull();
-    expect(\Carbon\Carbon::parse($dtr->work_date)->toDateString())->toBe('2026-09-15');
+    expect(Carbon::parse($dtr->work_date)->toDateString())->toBe('2026-09-15');
     expect($dtr->time_in)->toContain('10:05');
 
     // 3. Test Statutory Compliance Item Creation and Verification
@@ -292,7 +296,6 @@ test('benefits administration page renders and programs can be created and enrol
         'firstname' => 'Pedro',
         'lastname' => 'Penduko',
         'position' => 'Optical Technician & Edger',
-        'department' => 'Optical Sales & Lab',
         'employment_status' => 'active',
         'pay_type' => 'monthly',
         'basic_pay' => 28000.00,
@@ -384,7 +387,6 @@ test('coordinates-based attendance check-in, break-out, break-in, and check-out 
         'firstname' => 'Juan',
         'lastname' => 'Dela Cruz',
         'position' => 'Optician',
-        'department' => 'Optical Dispensing',
         'employment_status' => 'active',
         'pay_type' => 'monthly',
         'basic_pay' => 30000.00,
@@ -466,4 +468,3 @@ test('coordinates-based attendance check-in, break-out, break-in, and check-out 
     expect((float) $dtr->regular_hours)->toBe(8.0);
     expect((float) $dtr->ot_hours)->toBeGreaterThan(0.0);
 });
-

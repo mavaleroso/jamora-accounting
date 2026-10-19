@@ -2,14 +2,22 @@
 
 use App\Models\Account;
 use App\Models\BankAccount;
+use App\Models\BankReconciliation;
 use App\Models\BankTransaction;
+use App\Models\Bill;
 use App\Models\CustomerDeposit;
 use App\Models\Entity;
 use App\Models\Invoice;
+use App\Models\Journal;
 use App\Models\JournalEntry;
 use App\Models\Partner;
 use App\Models\User;
+use App\Models\Vendor;
+use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\LedgerService;
 use App\Services\Billing\InvoiceService;
+use App\Services\Reports\AgingReportService;
+use App\Support\ChartOfAccounts;
 use App\Support\EntityContext;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -30,8 +38,9 @@ beforeEach(function () {
     $this->user->givePermissionTo($permissions);
     $this->user->entities()->attach($this->entity->id, ['is_default' => true]);
 
-    $this->bank = BankAccount::create(['code' => 'BDO-1', 'name' => 'BDO Operating', 'bank_name' => 'BDO', 'is_shared' => true, 'is_active' => true]);
-    $this->bank->entities()->attach($this->entity->id);
+    $this->bank = BankAccount::create(['entity_id' => $this->entity->id, 'code' => 'BDO-1', 'name' => 'BDO Operating', 'bank_name' => 'BDO', 'is_active' => true]);
+    ChartOfAccounts::ensureBankLedger($this->bank);
+    $this->bank->refresh();
 
     $this->partner = Partner::create(['entity_id' => $this->entity->id, 'code' => 'C-001', 'name' => 'Maria Santos', 'type' => 'patient', 'is_active' => true]);
 });
@@ -82,7 +91,9 @@ test('confirming books AR, discounts, product vs service revenue and output VAT 
 
     expect((float) $entry->total_debit)->toBe((float) $entry->total_credit)
         ->and((float) lineFor($entry, '1100')->debit)->toBe(3200.0)
-        ->and((float) lineFor($entry, '4100')->debit)->toBe(800.0)
+        // Statutory senior/PWD discounts are booked apart from ordinary sales discounts.
+        ->and((float) lineFor($entry, '4110')->debit)->toBe(800.0)
+        ->and(lineFor($entry, '4100'))->toBeNull()
         ->and((float) lineFor($entry, '4000')->credit)->toBe(3000.0)
         ->and((float) lineFor($entry, '4010')->credit)->toBe(1000.0)
         ->and(lineFor($entry, '2100'))->toBeNull();
@@ -160,7 +171,7 @@ test('billing pages render', function () {
 });
 
 test('VAT-inclusive bills debit net expense and input VAT, and payments hit the chosen bank', function () {
-    $vendor = \App\Models\Vendor::create(['entity_id' => $this->entity->id, 'code' => 'V-001', 'name' => 'Essilor PH', 'is_active' => true]);
+    $vendor = Vendor::create(['entity_id' => $this->entity->id, 'code' => 'V-001', 'name' => 'Essilor PH', 'is_active' => true]);
     $rent = Account::where('code', '6100')->firstOrFail();
 
     $this->actingAs($this->user)->post('/ap/bills', [
@@ -169,7 +180,7 @@ test('VAT-inclusive bills debit net expense and input VAT, and payments hit the 
         'lines' => [['description' => 'Rent', 'account_id' => $rent->id, 'amount' => 11200]],
     ])->assertSessionHasNoErrors();
 
-    $bill = \App\Models\Bill::firstOrFail();
+    $bill = Bill::firstOrFail();
     expect((float) $bill->subtotal)->toBe(10000.0)->and((float) $bill->vat_amount)->toBe(1200.0);
 
     // Duplicate supplier invoice numbers are rejected.
@@ -199,19 +210,16 @@ test('VAT-inclusive bills debit net expense and input VAT, and payments hit the 
     $this->actingAs($this->user)->get("/ap/bills/{$bill->id}")->assertOk()->assertInertia(fn ($p) => $p->component('ap/bills/show/page'));
 });
 
-test('reconciliation clears items across entities on a shared account and only completes at zero difference', function () {
-    $other = Entity::create(['code' => 'AJO', 'name' => 'A. Jamora Optical', 'is_active' => true]);
-    $this->bank->entities()->attach($other->id);
-
+test('reconciliation clears statement items and only completes at zero difference', function () {
     $mine = BankTransaction::create(['bank_account_id' => $this->bank->id, 'entity_id' => $this->entity->id, 'txn_date' => now()->subDays(3)->toDateString(), 'description' => 'Collection', 'amount' => 5000, 'direction' => 'in']);
-    $theirs = BankTransaction::withoutGlobalScope('entity')->create(['bank_account_id' => $this->bank->id, 'entity_id' => $other->id, 'txn_date' => now()->subDays(2)->toDateString(), 'description' => 'Rent', 'amount' => 2000, 'direction' => 'out']);
+    $rent = BankTransaction::create(['bank_account_id' => $this->bank->id, 'entity_id' => $this->entity->id, 'txn_date' => now()->subDays(2)->toDateString(), 'description' => 'Rent', 'amount' => 2000, 'direction' => 'out']);
     BankTransaction::create(['bank_account_id' => $this->bank->id, 'entity_id' => $this->entity->id, 'txn_date' => now()->subDay()->toDateString(), 'description' => 'Outstanding check', 'amount' => 700, 'direction' => 'out']);
 
     $this->actingAs($this->user)->post('/banks/reconciliations', [
         'bank_account_id' => $this->bank->id, 'statement_date' => now()->toDateString(), 'statement_ending_balance' => 3000,
     ])->assertRedirect();
 
-    $rec = \App\Models\BankReconciliation::firstOrFail();
+    $rec = BankReconciliation::firstOrFail();
     $this->actingAs($this->user)->get("/banks/reconciliations/{$rec->id}")
         ->assertOk()->assertInertia(fn ($p) => $p->component('banks/reconciliations/show/page')->has('items', 3));
 
@@ -220,8 +228,8 @@ test('reconciliation clears items across entities on a shared account and only c
     $this->actingAs($this->user)->post("/banks/reconciliations/{$rec->id}/complete")->assertSessionHasErrors('difference');
     expect($rec->fresh()->status)->toBe('open');
 
-    // The other entity's payment on the shared account is part of the same statement.
-    $this->actingAs($this->user)->post("/banks/reconciliations/{$rec->id}/items", ['ids' => [$theirs->id], 'cleared' => true]);
+    // Clearing the rent payment brings the difference to zero; the outstanding check stays uncleared.
+    $this->actingAs($this->user)->post("/banks/reconciliations/{$rec->id}/items", ['ids' => [$rent->id], 'cleared' => true]);
     expect((float) $rec->fresh()->difference)->toBe(0.0);
 
     $this->actingAs($this->user)->post("/banks/reconciliations/{$rec->id}/complete")->assertSessionHasNoErrors();
@@ -235,7 +243,7 @@ test('reconciliation clears items across entities on a shared account and only c
     $this->actingAs($this->user)->post('/banks/reconciliations', [
         'bank_account_id' => $this->bank->id, 'statement_date' => now()->addMonth()->toDateString(), 'statement_ending_balance' => 2300,
     ]);
-    expect((float) \App\Models\BankReconciliation::where('status', 'open')->firstOrFail()->beginning_balance)->toBe(3000.0);
+    expect((float) BankReconciliation::where('status', 'open')->firstOrFail()->beginning_balance)->toBe(3000.0);
 });
 
 test('bank account pages show balances and the register', function () {
@@ -250,8 +258,8 @@ test('bank account pages show balances and the register', function () {
 
 test('general ledger carries the balance forward from before the period', function () {
     $this->user->givePermissionTo(Permission::findOrCreate('reports.general-ledger.view', 'web'));
-    $poster = app(\App\Services\Accounting\JournalPostingService::class);
-    $gj = \App\Models\Journal::where('code', 'GJ')->firstOrFail();
+    $poster = app(JournalPostingService::class);
+    $gj = Journal::where('code', 'GJ')->firstOrFail();
     $rent = Account::where('code', '6100')->firstOrFail();
     $accrued = Account::where('code', '2200')->firstOrFail();
 
@@ -263,7 +271,7 @@ test('general ledger carries the balance forward from before the period', functi
         $poster->post($entry, $this->user);
     }
 
-    $ledger = app(\App\Services\Accounting\LedgerService::class)->getLedger($rent->id, now()->startOfMonth()->toDateString(), now()->toDateString());
+    $ledger = app(LedgerService::class)->getLedger($rent->id, now()->startOfMonth()->toDateString(), now()->toDateString());
 
     expect($ledger['opening_balance'])->toBe(1000.0)
         ->and($ledger['lines'])->toHaveCount(1)
@@ -279,7 +287,7 @@ test('manual journals reject cash and bank accounts', function () {
     $rent = Account::where('code', '6100')->firstOrFail();
 
     $this->actingAs($this->user)->post('/accounting/journal-entries', [
-        'journal_id' => \App\Models\Journal::where('code', 'GJ')->value('id'),
+        'journal_id' => Journal::where('code', 'GJ')->value('id'),
         'entry_date' => now()->toDateString(),
         'lines' => [
             ['account_id' => $rent->id, 'debit' => 100, 'credit' => 0],
@@ -320,35 +328,82 @@ test('AR aging uses five buckets and ignores payments after the as-of date', fun
     // Paid today — but aging as of yesterday must still show it outstanding.
     $svc->collect($current, ['paid_date' => now()->toDateString(), 'amount' => 4480, 'payment_method' => 'cash'], $this->user->id);
 
-    $report = app(\App\Services\Reports\AgingReportService::class)->build('ar', now()->subDay()->toDateString());
+    $report = app(AgingReportService::class)->build('ar', now()->subDay()->toDateString());
     expect($report['totals']['days_61_90'])->toBe(4480.0)
         ->and($report['totals']['days_over_90'])->toBe(0.0)
         ->and($report['totals']['current'])->toBe(4480.0)
         ->and($report['document_count'])->toBe(2);
 
-    $today = app(\App\Services\Reports\AgingReportService::class)->build('ar', now()->toDateString());
+    $today = app(AgingReportService::class)->build('ar', now()->toDateString());
     expect($today['totals']['total'])->toBe(4480.0);
 
     $this->actingAs($this->user)->get('/reports/ar-aging')->assertOk()->assertInertia(fn ($p) => $p->component('reports/aging/page')->where('type', 'ar'));
     $this->actingAs($this->user)->get('/reports/ar-aging/export?view=detail')->assertOk()->assertDownload();
 });
 
-test('stock issues post COGS against inventory and cannot exceed stock on hand', function () {
-    $this->user->givePermissionTo(['journals.create', Permission::findOrCreate('integration.optical.view', 'web')]);
-    $item = \App\Models\InventoryItem::create(['entity_id' => $this->entity->id, 'sku' => 'FR-1', 'name' => 'Titanium frame', 'category' => 'frame', 'unit_cost' => 1200, 'selling_price' => 3800, 'qty_on_hand' => 5, 'reorder_level' => 2, 'is_active' => true]);
+test('each bank account has its own ledger account and belongs to one entity only', function () {
+    $ledger = Account::query()->findOrFail($this->bank->gl_account_id);
+    expect($ledger->code)->toBe('1011')
+        ->and($ledger->parent->code)->toBe('1010')
+        ->and($ledger->entity_id)->toBe($this->entity->id);
 
-    $this->actingAs($this->user)->post('/integration/inventory/movements', ['inventory_item_id' => $item->id, 'movement_type' => 'sales_issue', 'quantity' => 2, 'unit_cost' => 1200])
-        ->assertSessionHasNoErrors();
+    // Another entity's bank account cannot be used here.
+    $other = Entity::create(['code' => 'AJO', 'name' => 'A. Jamora Optical', 'is_active' => true]);
+    $theirs = BankAccount::withoutGlobalScope('entity')->create(['entity_id' => $other->id, 'code' => 'BPI-AJO', 'name' => 'A. Jamora Operating', 'bank_name' => 'BPI', 'is_active' => true]);
+    $revenue = Account::where('code', '4010')->firstOrFail();
 
-    $movement = \App\Models\InventoryMovement::firstOrFail();
-    $entry = JournalEntry::with('lines.account')->find($movement->journal_entry_id);
-    expect($item->fresh()->qty_on_hand)->toBe(3)
-        ->and($movement->quantity)->toBe(-2)
-        ->and((float) lineFor($entry, '5000')->debit)->toBe(2400.0)
-        ->and((float) lineFor($entry, '1200')->credit)->toBe(2400.0);
+    $this->actingAs($this->user)->post('/accounting/cash-bank-records', [
+        'kind' => 'receipt', 'payment_method' => 'bank_transfer', 'bank_account_id' => $theirs->id, 'counter_account_id' => $revenue->id,
+        'txn_date' => now()->toDateString(), 'amount' => 100, 'reference' => 'X-1', 'description' => 'Wrong bank',
+    ])->assertSessionHasErrors('bank_account_id');
 
-    $this->actingAs($this->user)->post('/integration/inventory/movements', ['inventory_item_id' => $item->id, 'movement_type' => 'edging_loss', 'quantity' => 9, 'unit_cost' => 1200])
-        ->assertSessionHasErrors('quantity');
+    $this->actingAs($this->user)->get('/banks/accounts')->assertOk()
+        ->assertInertia(fn ($p) => $p->has('bankAccounts', 1)->where('bankAccounts.0.code', 'BDO-1'));
+    $this->actingAs($this->user)->get("/banks/accounts/{$theirs->id}")->assertNotFound();
+
+    // A new account gets its own Cash in Bank sub-account.
+    $this->actingAs($this->user)->post('/banks/accounts', ['code' => 'BPI-2', 'name' => 'Collections', 'bank_name' => 'BPI', 'is_active' => true])->assertSessionHasNoErrors();
+    expect(BankAccount::where('code', 'BPI-2')->firstOrFail()->glAccount->code)->toBe('1012');
+});
+
+test('fund transfers deposit card settlements to the bank net of the merchant fee', function () {
+    $this->actingAs($this->user)->post('/accounting/cash-bank-records', [
+        'kind' => 'transfer', 'txn_date' => now()->toDateString(), 'from' => 'card_clearing', 'to' => 'bank:'.$this->bank->id,
+        'amount' => 10000, 'fee' => 250, 'reference' => 'SETTLE-01', 'description' => 'Card settlement',
+    ])->assertSessionHasNoErrors();
+
+    $entry = JournalEntry::with('lines.account')->where('source_type', 'fund_transfer')->sole();
+    $line = BankTransaction::where('source_type', 'fund_transfer')->sole();
+
+    expect($entry->status)->toBe('posted')
+        ->and((float) lineFor($entry, '1011')->debit)->toBe(9750.0)
+        ->and((float) lineFor($entry, '6600')->debit)->toBe(250.0)
+        ->and((float) lineFor($entry, '1020')->credit)->toBe(10000.0)
+        ->and($line->direction)->toBe('in')
+        ->and((float) $line->amount)->toBe(9750.0);
+
+    // Transfers between the same account, or a fee larger than the amount, are refused.
+    $this->actingAs($this->user)->post('/accounting/cash-bank-records', [
+        'kind' => 'transfer', 'txn_date' => now()->toDateString(), 'from' => 'cash_on_hand', 'to' => 'cash_on_hand', 'amount' => 100,
+    ])->assertSessionHasErrors('to');
+    $this->actingAs($this->user)->post('/accounting/cash-bank-records', [
+        'kind' => 'transfer', 'txn_date' => now()->toDateString(), 'from' => 'cash_on_hand', 'to' => 'bank:'.$this->bank->id, 'amount' => 100, 'fee' => 100,
+    ])->assertSessionHasErrors('fee');
+});
+
+test('voiding an entry keeps both it and its reversal in the general ledger', function () {
+    $invoice = makeInvoice();
+    app(InvoiceService::class)->confirm($invoice, $this->user->id);
+    $entry = JournalEntry::findOrFail($invoice->fresh()->journal_entry_id);
+    app(JournalPostingService::class)->void($entry, $this->user);
+
+    $ledger = app(LedgerService::class)->getLedger(Account::where('code', '1100')->value('id'));
+
+    // The original (now void) and its reversal both stay, netting to zero rather than leaving a negative balance.
+    expect($ledger['lines'])->toHaveCount(2)
+        ->and($ledger['total_debit'])->toBe(4480.0)
+        ->and($ledger['total_credit'])->toBe(4480.0)
+        ->and($ledger['closing_balance'])->toBe(0.0);
 });
 
 test('customer and supplier directories show open balances', function () {

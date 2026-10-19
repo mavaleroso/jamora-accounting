@@ -33,7 +33,9 @@ export function todayIso(): string {
 export const paymentMethodLabels: Record<string, string> = {
     cash: 'Cash',
     gcash: 'GCash',
+    e_wallet: 'E-wallet',
     card: 'Card',
+    intercompany: 'Collected by related entity',
     check: 'Check',
     bank_transfer: 'Bank transfer',
     bank: 'Bank',

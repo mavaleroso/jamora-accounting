@@ -10,7 +10,13 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class JournalEntry extends Model
 {
-    use SoftDeletes, BelongsToEntity;
+    use BelongsToEntity, SoftDeletes;
+
+    /**
+     * Entries that reached the ledger. A voided entry was posted and stays in the ledger next to the posted entry
+     * that reverses it, so balances read from journal lines must include both.
+     */
+    public const LEDGER_STATUSES = ['posted', 'void'];
 
     protected $fillable = [
         'entity_id',

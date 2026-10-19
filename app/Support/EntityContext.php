@@ -42,6 +42,29 @@ class EntityContext
         }
     }
 
+    /**
+     * Run the callback with another entity as the current one, then restore whichever was current before. The
+     * user's session choice is not touched, so integrations can post to several entities within one request.
+     *
+     * @template T
+     *
+     * @param  callable(Entity): T  $callback
+     * @return T
+     */
+    public function runAs(Entity $entity, callable $callback): mixed
+    {
+        [$previous, $wasResolved] = [$this->entity, $this->resolved];
+        $this->entity = $entity;
+        $this->resolved = true;
+
+        try {
+            return $callback($entity);
+        } finally {
+            $this->entity = $previous;
+            $this->resolved = $wasResolved;
+        }
+    }
+
     public function setId(?int $entityId): void
     {
         if ($entityId === null) {

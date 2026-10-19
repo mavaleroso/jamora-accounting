@@ -13,6 +13,7 @@ class CustomerDeposit extends Model
     protected $fillable = [
         'entity_id', 'partner_id', 'invoice_id', 'deposit_date', 'amount', 'applied_amount',
         'status', 'payment_method', 'bank_account_id', 'reference', 'notes', 'journal_entry_id',
+        'source_system', 'source_id', 'external_order_id',
     ];
 
     protected function casts(): array

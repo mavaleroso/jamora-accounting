@@ -16,7 +16,6 @@ import {
     ArrowUp,
     ChevronsUpDown,
     Eye,
-    Fingerprint,
     MoreHorizontal,
     Pencil,
     PlusIcon,
@@ -31,6 +30,7 @@ import { EmployeeFormDialog } from './components/employee-form-dialog';
 import { EmployeeProfileDialog } from './components/employee-profile-dialog';
 import {
     addMonths,
+    companyDot,
     EMPLOYMENT_STATUSES,
     EMPLOYMENT_TYPES,
     formatDate,
@@ -44,6 +44,7 @@ import {
     statusBadgeClass,
     STATUTORY_FIELDS,
     tenure,
+    type Company,
     type Employee,
     type LeaveTypeOption,
     type LinkableUser,
@@ -57,9 +58,9 @@ const breadcrumbs: BreadcrumbItem[] = [
 ];
 
 type Filters = {
+    company: string;
     status: string;
     type: string;
-    department: string;
     sort: string;
     direction: 'asc' | 'desc';
 };
@@ -69,9 +70,7 @@ type Stats = {
     active: number;
     probationary: number;
     separated: number;
-    unmapped_biometric: number;
     incomplete_statutory: number;
-    incomplete_records: number;
 };
 
 type Props = {
@@ -82,12 +81,15 @@ type Props = {
     search?: string;
     filters: Filters;
     stats: Stats;
-    departments: string[];
     positions: string[];
     shiftTemplates: ShiftTemplate[];
     policy: Policy;
     leaveTypes: LeaveTypeOption[];
     linkableUsers?: LinkableUser[];
+    /** Every company the user can open: the directory lists their employees together. */
+    companies: Company[];
+    /** Where a new employee goes unless another company is picked. */
+    currentCompanyId: number | null;
 };
 
 const ALL = 'all';
@@ -101,12 +103,13 @@ export default function EmployeesPage({
     search = '',
     filters,
     stats,
-    departments = [],
     positions = [],
     shiftTemplates = [],
     policy,
     leaveTypes = [],
     linkableUsers = [],
+    companies = [],
+    currentCompanyId = null,
 }: Props) {
     const [formOpen, setFormOpen] = React.useState(false);
     const [viewOpen, setViewOpen] = React.useState(false);
@@ -119,9 +122,9 @@ export default function EmployeesPage({
         (overrides: Partial<Filters & { search: string; page: number; per_page: number }>) => {
             const params = {
                 search,
+                company: filters.company,
                 status: filters.status,
                 type: filters.type,
-                department: filters.department,
                 sort: filters.sort,
                 direction: filters.direction,
                 per_page: pageSize,
@@ -141,7 +144,7 @@ export default function EmployeesPage({
             page: currentPage,
         });
 
-    const hasFilters = Boolean(search || filters.status || filters.type || filters.department);
+    const hasFilters = Boolean(search || filters.company || filters.status || filters.type);
     const pageCount = Math.max(1, Math.ceil(totalEmployees / pageSize));
     const from = totalEmployees === 0 ? 0 : (currentPage - 1) * pageSize + 1;
     const to = Math.min(currentPage * pageSize, totalEmployees);
@@ -199,10 +202,10 @@ export default function EmployeesPage({
         },
         {
             label: 'Records to complete',
-            value: stats.incomplete_records,
+            value: stats.incomplete_statutory,
             icon: AlertTriangle,
-            hint: `${stats.incomplete_statutory} missing gov’t IDs · ${stats.unmapped_biometric} no biometric`,
-            tone: stats.incomplete_records > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground',
+            hint: 'Active employees missing gov’t IDs',
+            tone: stats.incomplete_statutory > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground',
         },
     ];
 
@@ -251,6 +254,15 @@ export default function EmployeesPage({
                             <FilterChips
                                 chips={[
                                     ...(search ? [{ key: 'search', label: `“${search}”`, onRemove: () => query({ search: '' }) }] : []),
+                                    ...(filters.company
+                                        ? [
+                                              {
+                                                  key: 'company',
+                                                  label: companies.find((c) => String(c.id) === filters.company)?.name ?? 'Company',
+                                                  onRemove: () => query({ company: '' }),
+                                              },
+                                          ]
+                                        : []),
                                     ...(filters.status
                                         ? [
                                               {
@@ -263,18 +275,15 @@ export default function EmployeesPage({
                                     ...(filters.type
                                         ? [{ key: 'type', label: labelOf(EMPLOYMENT_TYPES, filters.type), onRemove: () => query({ type: '' }) }]
                                         : []),
-                                    ...(filters.department
-                                        ? [{ key: 'department', label: filters.department, onRemove: () => query({ department: '' }) }]
-                                        : []),
                                 ]}
-                                onClearAll={() => query({ search: '', status: '', type: '', department: '' })}
+                                onClearAll={() => query({ search: '', company: '', status: '', type: '' })}
                             />
                         }
                     >
                         <TableSearch
                             value={search}
                             onSearch={(value) => query({ search: value })}
-                            placeholder="Search name, code, position, biometric ID, email…"
+                            placeholder="Search name, code, position, email…"
                             className="lg:w-80"
                         />
                         <div className="bg-muted inline-flex w-fit rounded-md border p-0.5">
@@ -295,6 +304,24 @@ export default function EmployeesPage({
                             ))}
                         </div>
                         <div className="grid grid-cols-2 gap-2 sm:flex">
+                            {companies.length > 1 && (
+                                <Select value={filters.company || ALL} onValueChange={(v) => query({ company: v === ALL ? '' : v })}>
+                                    <SelectTrigger
+                                        className={cn('col-span-2 h-9 w-full sm:w-48', filters.company && 'border-primary/50')}
+                                        aria-label="Company"
+                                    >
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={ALL}>All companies</SelectItem>
+                                        {companies.map((c) => (
+                                            <SelectItem key={c.id} value={String(c.id)}>
+                                                {c.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
                             <Select value={filters.type || ALL} onValueChange={(v) => query({ type: v === ALL ? '' : v })}>
                                 <SelectTrigger className={cn('h-9 w-full sm:w-40', filters.type && 'border-primary/50')} aria-label="Employment type">
                                     <SelectValue />
@@ -304,22 +331,6 @@ export default function EmployeesPage({
                                     {EMPLOYMENT_TYPES.map((t) => (
                                         <SelectItem key={t.value} value={t.value}>
                                             {t.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select value={filters.department || ALL} onValueChange={(v) => query({ department: v === ALL ? '' : v })}>
-                                <SelectTrigger
-                                    className={cn('h-9 w-full sm:w-48', filters.department && 'border-primary/50')}
-                                    aria-label="Department"
-                                >
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={ALL}>All departments</SelectItem>
-                                    {departments.map((d) => (
-                                        <SelectItem key={d} value={d}>
-                                            {d}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -380,11 +391,18 @@ export default function EmployeesPage({
                                 ),
                             },
                             {
-                                id: 'department',
-                                header: 'Department',
-                                minScreen: 'md',
+                                id: 'company',
+                                header: <SortButton column="company">Company</SortButton>,
                                 className: 'text-sm',
-                                cell: (e) => e.department || <span className="text-muted-foreground">—</span>,
+                                cell: (e) =>
+                                    e.entity ? (
+                                        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                                            <span className={cn('size-2 shrink-0 rounded-full', companyDot(companies, e.entity_id))} aria-hidden />
+                                            {e.entity.name}
+                                        </span>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    ),
                             },
                             {
                                 id: 'employment',
@@ -467,41 +485,26 @@ export default function EmployeesPage({
                                 cell: (e) => {
                                     const missing = missingStatutory(e);
                                     return (
-                                        <div className="flex items-center gap-2">
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <div className="flex gap-0.5" aria-label={`${4 - missing.length} of 4 government IDs`}>
-                                                        {STATUTORY_FIELDS.map((f) => (
-                                                            <span
-                                                                key={f.key}
-                                                                className={cn(
-                                                                    'h-4 w-1.5 rounded-sm',
-                                                                    e[f.key] ? 'bg-emerald-500' : 'bg-muted-foreground/25',
-                                                                )}
-                                                            />
-                                                        ))}
-                                                    </div>
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    {missing.length === 0
-                                                        ? 'All government IDs on file'
-                                                        : `Missing: ${missing.map((m) => m.label).join(', ')}`}
-                                                </TooltipContent>
-                                            </Tooltip>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <Fingerprint
-                                                        className={cn(
-                                                            'size-4',
-                                                            e.biometric_id ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground/40',
-                                                        )}
-                                                    />
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    {e.biometric_id ? `Biometric ID ${e.biometric_id}` : 'No biometric ID mapped'}
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </div>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <div className="flex gap-0.5" aria-label={`${4 - missing.length} of 4 government IDs`}>
+                                                    {STATUTORY_FIELDS.map((f) => (
+                                                        <span
+                                                            key={f.key}
+                                                            className={cn(
+                                                                'h-4 w-1.5 rounded-sm',
+                                                                missing.includes(f) ? 'bg-muted-foreground/25' : 'bg-emerald-500',
+                                                            )}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                {missing.length === 0
+                                                    ? 'All government IDs on file'
+                                                    : `Missing: ${missing.map((m) => m.label).join(', ')}`}
+                                            </TooltipContent>
+                                        </Tooltip>
                                     );
                                 },
                             },
@@ -550,6 +553,8 @@ export default function EmployeesPage({
                 policy={policy}
                 leaveTypes={leaveTypes}
                 linkableUsers={linkableUsers}
+                companies={companies}
+                currentCompanyId={currentCompanyId}
             />
 
             <EmployeeProfileDialog
@@ -567,7 +572,7 @@ export default function EmployeesPage({
                 title="Delete employee"
                 description={
                     selected
-                        ? `Delete ${fullName(selected)} (${selected.employee_code})? If they have left the company, set their status to Separated instead to keep payroll and attendance history intact.`
+                        ? `Delete ${fullName(selected)} (${selected.employee_code}${selected.entity ? `, ${selected.entity.name}` : ''})? If they have left the company, set their status to Separated instead to keep payroll and attendance history intact.`
                         : ''
                 }
                 confirmLabel="Delete"

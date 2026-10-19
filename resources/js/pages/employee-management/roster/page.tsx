@@ -74,7 +74,6 @@ type EmployeeInfo = {
     code: string;
     name: string;
     position: string;
-    department: string;
 };
 
 type RosterRow = {
@@ -92,7 +91,6 @@ type Props = {
         firstname: string;
         lastname: string;
         position: string;
-        department: string;
     }>;
     rosterMatrix: RosterRow[];
 };

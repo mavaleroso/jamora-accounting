@@ -149,7 +149,7 @@ export const KINDS: Record<
         icon: Palmtree,
         tone: 'violet',
         source: 'leave',
-        description: 'Vacation, sick, emergency and statutory leaves (maternity, paternity, solo parent…).',
+        description: 'Vacation, sick, emergency and statutory leaves (maternity, paternity…).',
         when: 'Before your leave, or right after for sick / emergency',
     },
     overtime: {

@@ -8,14 +8,20 @@ use App\Http\Resources\JournalEntryResource;
 use App\Models\Account;
 use App\Models\AccountingPeriod;
 use App\Models\AccountPeriodBalance;
+use App\Models\Bill;
+use App\Models\CustomerDeposit;
 use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
+use App\Models\PartnerBalance;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
+use App\Services\Accounting\CashMovementService;
+use App\Support\EntityContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -73,13 +79,13 @@ class DashboardController extends Controller
                 ->where('status', 'failed')
                 ->count(),
             'cashPosition' => round($this->cashPosition($openPeriod, $yearStart, $yearEnd), 2),
-            'arBalance' => round((float) \App\Models\PartnerBalance::query()
+            'arBalance' => round((float) PartnerBalance::query()
                 ->whereHas('partner')
                 ->sum('balance'), 2),
-            'apBalance' => round((float) \App\Models\Bill::query()
+            'apBalance' => round((float) Bill::query()
                 ->whereIn('status', ['posted', 'partially_paid'])
                 ->sum('balance_due'), 2),
-            'depositsLiability' => round((float) \App\Models\CustomerDeposit::query()
+            'depositsLiability' => round((float) CustomerDeposit::query()
                 ->where('status', 'open')
                 ->sum(DB::raw('amount - applied_amount')), 2),
             'revenueMTD' => round($this->classificationTotal('revenue', $monthStart, $monthEnd), 2),
@@ -89,6 +95,7 @@ class DashboardController extends Controller
             'expenseMix' => $this->expenseMix($monthStart, $monthEnd),
             'recentJournalEntries' => $this->recentJournalEntries(),
             'lastSyncRun' => $this->lastSyncRun(),
+            'lowStock' => $this->lowStock(),
             'currentPeriod' => $openPeriod ? [
                 'id' => $openPeriod->id,
                 'period_no' => $openPeriod->period_no,
@@ -100,10 +107,10 @@ class DashboardController extends Controller
 
     private function cashPosition(?AccountingPeriod $openPeriod, string $yearStart, string $yearEnd): float
     {
-        $cashCodes = ['1000', '1010', '1020'];
+        // Cash on hand, card / e-wallet clearing and every bank account's own ledger account.
         $accounts = Account::query()
             ->with('accountType')
-            ->whereIn('code', $cashCodes)
+            ->whereIn('id', app(CashMovementService::class)->cashAccountIds())
             ->get();
 
         if ($accounts->isEmpty()) {
@@ -140,7 +147,7 @@ class DashboardController extends Controller
             $row = JournalEntryLine::query()
                 ->join('journal_entries', 'journal_entry_lines.journal_entry_id', '=', 'journal_entries.id')
                 ->where('journal_entry_lines.account_id', $account->id)
-                ->where('journal_entries.status', 'posted')
+                ->whereIn('journal_entries.status', JournalEntry::LEDGER_STATUSES)
                 ->whereBetween('journal_entries.entry_date', [$yearStart, $yearEnd])
                 ->select([
                     DB::raw('COALESCE(SUM(journal_entry_lines.debit), 0) as total_debit'),
@@ -173,7 +180,7 @@ class DashboardController extends Controller
             ->join('journal_entries', 'journal_entry_lines.journal_entry_id', '=', 'journal_entries.id')
             ->join('accounts', 'journal_entry_lines.account_id', '=', 'accounts.id')
             ->join('account_types', 'accounts.account_type_id', '=', 'account_types.id')
-            ->where('journal_entries.status', 'posted')
+            ->whereIn('journal_entries.status', JournalEntry::LEDGER_STATUSES)
             ->where('account_types.classification', $classification)
             ->whereBetween('journal_entries.entry_date', [$from, $to])
             ->select([
@@ -223,7 +230,7 @@ class DashboardController extends Controller
             ->join('journal_entries', 'journal_entry_lines.journal_entry_id', '=', 'journal_entries.id')
             ->join('accounts', 'journal_entry_lines.account_id', '=', 'accounts.id')
             ->join('account_types', 'accounts.account_type_id', '=', 'account_types.id')
-            ->where('journal_entries.status', 'posted')
+            ->whereIn('journal_entries.status', JournalEntry::LEDGER_STATUSES)
             ->where('account_types.classification', 'expense')
             ->whereBetween('journal_entries.entry_date', [$from, $to])
             ->groupBy('accounts.id', 'accounts.name')
@@ -258,6 +265,28 @@ class DashboardController extends Controller
         $resource = JournalEntryResource::collection($entries)->toArray(request());
 
         return $resource['data'] ?? [];
+    }
+
+    /**
+     * Low-stock groups from the optical POS, for the entity that holds the stock. Read from the ten-minute cache the
+     * inventory screen fills, so the dashboard never waits on the optical API.
+     *
+     * @return array{count: int, items: list<array<string, mixed>>}|null
+     */
+    private function lowStock(): ?array
+    {
+        if (app(EntityContext::class)->current()?->code !== config('optical.product_entity')) {
+            return null;
+        }
+
+        $summary = Cache::get('optical.stock-summary');
+        if (! is_array($summary)) {
+            return null;
+        }
+
+        $low = collect($summary['groups'] ?? [])->where('is_low_stock', true)->sortBy('on_hand_count')->values();
+
+        return ['count' => $low->count(), 'items' => $low->take(5)->all()];
     }
 
     /**

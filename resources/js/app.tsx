@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import '../css/app.css';
 import { initializeAppLayout } from './hooks/use-app-layout';
 import { initializeTheme } from './hooks/use-appearance';
+import { pageTransitionOptions } from './lib/page-transition';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Jamora BMS';
 
@@ -27,6 +28,9 @@ createInertiaApp({
     },
     progress: {
         color: '#c49a3c',
+    },
+    defaults: {
+        visitOptions: pageTransitionOptions,
     },
 });
 

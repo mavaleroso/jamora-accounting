@@ -42,7 +42,15 @@ class EmployeeOverviewController extends Controller
         protected EntityContext $entityContext,
     ) {}
 
-    public function __invoke(Request $request, Employee $employee): JsonResponse
+    public function __invoke(Request $request, int $id): JsonResponse
+    {
+        // The directory lists every company the user can open; the employee's own company is current for the lookups.
+        $employee = Employee::query()->visibleTo($request->user())->findOrFail($id);
+
+        return $this->entityContext->runAs($employee->entity, fn () => $this->overview($request, $employee));
+    }
+
+    private function overview(Request $request, Employee $employee): JsonResponse
     {
         $user = $request->user();
         $can = [

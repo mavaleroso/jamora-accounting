@@ -47,7 +47,7 @@ type Day = {
 type Summary = { scheduledMinutes: number; workDays: number; restDays: number; leaveDays: number; holidays: number };
 
 type Props = {
-    employee: { id: number; employee_code: string; name: string; position: string | null; department: string | null } | null;
+    employee: { id: number; employee_code: string; name: string; position: string | null } | null;
     days?: Day[];
     summary?: Summary;
     weekStart: string;
@@ -101,7 +101,7 @@ export default function MySchedulePage({ employee, days = [], summary, weekStart
 
             <div className="flex flex-1 flex-col gap-5 p-4 sm:p-6">
                 <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                    <Heading title="My Schedule" description={[employee.name, employee.position, employee.department].filter(Boolean).join(' · ')} />
+                    <Heading title="My Schedule" description={[employee.name, employee.position].filter(Boolean).join(' · ')} />
                     <div className="flex items-center gap-2">
                         <Button
                             variant="outline"

@@ -288,3 +288,55 @@
         animation: none;
     }
 }
+
+/*
+ * Page transitions (started by resources/js/lib/page-transition.ts through the View Transitions API).
+ * The sidebar and header are the root snapshot and cross-fade in place, so only the active link and the
+ * breadcrumbs visibly change; the page content fades out and the next page rises in. The group isn't
+ * animated, so pages of different heights don't morph into each other.
+ */
+@keyframes page-content-out {
+    to {
+        opacity: 0;
+    }
+}
+
+@keyframes page-content-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.page-transition [data-page-content] {
+    view-transition-name: page-content;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 180ms;
+}
+
+::view-transition-group(page-content) {
+    animation: none;
+}
+
+::view-transition-old(page-content) {
+    animation: page-content-out 120ms ease-in both;
+}
+
+::view-transition-new(page-content) {
+    animation: page-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1) 40ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+        animation: none;
+    }
+}
