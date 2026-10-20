@@ -25,8 +25,13 @@ export type User = {
     [key: string]: unknown;
 };
 
+/** An Admin who is also an employee uses the system as an admin or as that employee. */
+export type ViewMode = 'admin' | 'employee';
+
 export type Auth = {
     user: User;
+    /** The view in use, for an Admin who is also an employee; null for everyone else. */
+    viewMode?: ViewMode | null;
 };
 
 export type TwoFactorSetupData = {

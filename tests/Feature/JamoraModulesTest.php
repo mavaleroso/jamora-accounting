@@ -34,7 +34,7 @@ beforeEach(function () {
         'libraries.employees.manage',
         'roster.view', 'roster.manage',
         'attendance.view', 'attendance.punch', 'attendance.manage',
-        'leave.view', 'leave.file', 'leave.approve',
+        'leave.view', 'leave.file', 'requests.approve', 'requests.manage',
         'portal.view',
         'payroll.view', 'payroll.manage',
         'periods.view', 'dashboard.view', 'ap.view',
@@ -240,13 +240,14 @@ test('employee management roster, attendance, and compliance operate seamlessly'
     expect($roster)->not->toBeNull();
     expect($roster->notes)->toBe('SM Mall of Asia Clinic');
 
-    // 2. Test Attendance Punch
+    // 2. Test Attendance Punch (a manual entry by a timekeeper always gives a reason)
     $punchResponse = $this->withSession(['current_entity_id' => $this->entity->id])
         ->post('/employee-management/attendance/punch', [
             'employee_id' => $employee->id,
-            'entry_date' => '2026-09-15',
+            'work_date' => '2026-09-15',
             'time_in' => '10:05',
             'time_out' => '19:00',
+            'notes' => 'Biometric reader was down; times from the logbook.',
         ]);
     $punchResponse->assertSessionHas('status');
 
@@ -255,35 +256,43 @@ test('employee management roster, attendance, and compliance operate seamlessly'
     expect(Carbon::parse($dtr->work_date)->toDateString())->toBe('2026-09-15');
     expect($dtr->time_in)->toContain('10:05');
 
-    // 3. Test Statutory Compliance Item Creation and Verification
-    $complianceResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post('/employee-management/compliance', [
-            'title' => 'BIR Form 1601-C (Withholding Tax)',
-            'category' => 'statutory_tax',
-            'period' => 'September 2026',
-            'due_date' => '2026-10-10',
-            'owner_role' => 'Finance & Accounting',
-            'status' => 'submitted',
-            'reference_no' => 'EFPS-1601C-001',
-            'amount' => 15000.00,
-        ]);
-    $complianceResponse->assertSessionHas('status');
+    // 3. Statutory compliance: added as pending, prepared, filed with its reference, then verified by a second person.
+    $as = fn (User $user) => $this->actingAs($user)->withSession(['current_entity_id' => $this->entity->id]);
+    $as($this->user)->post('/employee-management/compliance', [
+        'title' => 'BIR Form 1601-C (Withholding Tax)',
+        'category' => 'statutory_tax',
+        'period' => 'September 2026',
+        'due_date' => '2026-10-10',
+        'owner_role' => 'Finance & Accounting',
+        'amount' => 15000.00,
+    ])->assertSessionHas('status');
 
-    $item = ComplianceItem::where('reference_no', 'EFPS-1601C-001')->first();
+    $item = ComplianceItem::where('title', 'BIR Form 1601-C (Withholding Tax)')->first();
     expect($item)->not->toBeNull();
-    expect($item->status)->toBe('submitted');
+    expect($item->status)->toBe('pending');
 
-    // Verify compliance item
-    $verifyResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post("/employee-management/compliance/{$item->id}/verify", [
-            'reference_no' => 'EFPS-1601C-001-SETTLED',
-            'amount' => 15000.00,
-            'notes' => 'Settled via BDO auto-debit',
-        ]);
-    $verifyResponse->assertSessionHas('status');
+    $as($this->user)->post("/employee-management/compliance/{$item->id}/status", ['status' => 'prepared'])->assertSessionHasNoErrors();
+    $as($this->user)->post("/employee-management/compliance/{$item->id}/status", [
+        'status' => 'submitted',
+        'reference_no' => 'EFPS-1601C-001',
+        'filed_on' => now()->toDateString(),
+        'amount' => 15000.00,
+    ])->assertSessionHasNoErrors();
+    expect($item->fresh()->only(['status', 'reference_no']))->toBe(['status' => 'submitted', 'reference_no' => 'EFPS-1601C-001']);
+
+    // Whoever prepared or filed it cannot also verify it.
+    $this->user->givePermissionTo(Permission::findOrCreate('compliance.verify', 'web'));
+    $as($this->user)->post("/employee-management/compliance/{$item->id}/verify", ['notes' => 'Settled via BDO auto-debit'])
+        ->assertSessionHasErrors(['status' => 'You prepared or filed this item — another person must verify it.']);
+
+    $verifier = User::factory()->create();
+    $verifier->givePermissionTo(['compliance.view', 'compliance.verify']);
+    $verifier->entities()->attach($this->entity->id, ['is_default' => true]);
+    $as($verifier)->post("/employee-management/compliance/{$item->id}/verify", ['notes' => 'Settled via BDO auto-debit'])
+        ->assertSessionHas('status');
 
     expect($item->fresh()->status)->toBe('verified');
-    expect($item->fresh()->verified_by)->toBe($this->user->id);
+    expect($item->fresh()->verified_by)->toBe($verifier->id);
 });
 
 test('benefits administration page renders and programs can be created and enrolled', function () {

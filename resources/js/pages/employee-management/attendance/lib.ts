@@ -114,7 +114,17 @@ export type BoardRow = {
     status: BoardStatus;
     late_by: number | null;
     tardiness_minutes: number;
-    schedule: { shift_name: string; start: string | null; end: string | null; source: string };
+    schedule: {
+        shift_name: string;
+        start: string | null;
+        end: string | null;
+        /** The employee's preset break today, when one is set and fits the shift. */
+        break_start: string | null;
+        break_end: string | null;
+        source: string;
+    };
+    /** The break was started well away from the preset break time. */
+    break_off_schedule: boolean;
     leave: string | null;
     /** Destination when on approved official business today. */
     official_business?: string | null;
@@ -135,6 +145,9 @@ export type MyDay = {
         start: string | null;
         end: string | null;
         break_minutes: number;
+        /** The employee's preset break today, when one is set and fits the shift. */
+        break_start: string | null;
+        break_end: string | null;
         grace_minutes: number;
         is_rest_day: boolean;
         source: string;
@@ -193,7 +206,15 @@ export type BranchLocation = {
     geofence_system_enabled?: boolean;
 };
 
-export type Perspective = { canManage: boolean; canViewTeam: boolean; hasSelf: boolean };
+export type Perspective = {
+    canManage: boolean;
+    canViewTeam: boolean;
+    hasSelf: boolean;
+    /** Approve or decline employees' requests (requests.approve, the owner's). */
+    canReviewRequests?: boolean;
+    /** File or cancel requests for other employees (requests.manage, the owner's). */
+    canHandleRequests?: boolean;
+};
 
 export type Filters = {
     employee_id: number | null;

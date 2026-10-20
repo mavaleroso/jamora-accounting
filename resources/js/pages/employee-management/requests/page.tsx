@@ -2,6 +2,7 @@ import Heading from '@/components/heading';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import AppLayout from '@/layouts/app-layout';
+import type { OvertimePolicy } from '@/lib/overtime-policy';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
@@ -51,11 +52,13 @@ type Props = {
     teamBalances: TeamBalanceRow[] | null;
     employees: (Person & LeaveEligibility)[];
     leaveTypes: LeaveTypeOption[];
+    overtimePolicy: OvertimePolicy;
     today: string;
 };
 
 export default function EmployeeRequestsPage(props: Props) {
-    const { perspective, views, view, filters, feed, statusCounts, badges, self, team, teamBalances, employees, leaveTypes, today } = props;
+    const { perspective, views, view, filters, feed, statusCounts, badges, self, team, teamBalances, employees, leaveTypes, overtimePolicy, today } =
+        props;
     const { canReview, canViewTeam, hasSelf, canApproveLeave, canApproveAttendance } = perspective;
 
     const [fileKind, setFileKind] = React.useState<Kind | null | undefined>(undefined); // undefined = closed, null = pick a type
@@ -347,6 +350,7 @@ export default function EmployeeRequestsPage(props: Props) {
                 onBehalf={{ leave: canApproveLeave, attendance: canApproveAttendance }}
                 employees={employees}
                 today={today}
+                overtimePolicy={overtimePolicy}
                 initialDate={initialDate}
             />
             <DecisionDialog

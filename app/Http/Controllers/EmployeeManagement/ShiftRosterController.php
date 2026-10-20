@@ -13,6 +13,7 @@ use App\Models\ShiftTemplate;
 use App\Services\People\AttendanceCalculator;
 use App\Services\People\EmployeeResolver;
 use App\Support\EntityContext;
+use App\Support\ViewMode;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Http\RedirectResponse;
@@ -40,8 +41,8 @@ class ShiftRosterController extends Controller
 
         $endOfWeek = (clone $startOfWeek)->endOfWeek();
 
-        // Staff who neither schedule nor pay the team only ever see their own week.
-        if (! $request->user()->canAny(['roster.manage', 'payroll.view', 'payroll.manage'])) {
+        // Staff who neither schedule nor pay the team only ever see their own week, as does an Admin in the employee view.
+        if (! $request->user()->canAny(['roster.manage', 'payroll.view', 'payroll.manage']) || app(ViewMode::class)->asEmployee($request->user())) {
             return $this->mySchedule($request, $entityId, $startOfWeek, $endOfWeek);
         }
 
@@ -69,11 +70,15 @@ class ShiftRosterController extends Controller
             ->orderBy('lastname')
             ->get(['id', 'employee_code', 'firstname', 'lastname', 'position', 'default_shift_template_id', 'rest_days']);
 
+        // The company's shift library, offered when rostering a day; the default first.
         $shiftTemplates = ShiftTemplate::query()
             ->where('entity_id', $entityId)
             ->where('is_active', true)
+            ->orderByDesc('is_default')
+            ->orderBy('start_time')
             ->orderBy('name')
-            ->get();
+            ->get(['id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'grace_minutes', 'color', 'is_default']);
+        $defaultShift = ShiftTemplate::defaultShift($entityId);
 
         $rosters = ShiftRoster::query()
             ->where('entity_id', $entityId)
@@ -146,14 +151,15 @@ class ShiftRosterController extends Controller
                     ];
                 } else {
                     $defaultTpl = $employee->defaultShiftTemplate;
+                    $default = $defaultShift;
                     $empShifts[$dateStr] = [
                         'id' => null,
-                        'shift_template_id' => $defaultTpl?->id,
-                        'shift_name' => $isEmployeeRestDay ? 'Rest Day' : ($defaultTpl?->name ?? 'Regular Shift (8:00 AM - 5:00 PM)'),
-                        'shift_start' => $isEmployeeRestDay ? null : ($defaultTpl?->start_time ?? '08:00:00'),
-                        'shift_end' => $isEmployeeRestDay ? null : ($defaultTpl?->end_time ?? '17:00:00'),
-                        'break_minutes' => $defaultTpl?->break_minutes ?? 60,
-                        'grace_minutes' => $defaultTpl?->grace_minutes ?? 5,
+                        'shift_template_id' => $defaultTpl?->id ?? $default['id'],
+                        'shift_name' => $isEmployeeRestDay ? 'Rest Day' : ($defaultTpl?->name ?? $default['name']),
+                        'shift_start' => $isEmployeeRestDay ? null : ($defaultTpl?->start_time ?? $default['start']),
+                        'shift_end' => $isEmployeeRestDay ? null : ($defaultTpl?->end_time ?? $default['end']),
+                        'break_minutes' => $defaultTpl?->break_minutes ?? $default['break_minutes'],
+                        'grace_minutes' => $defaultTpl?->grace_minutes ?? $default['grace_minutes'],
                         'is_rest_day' => $isEmployeeRestDay,
                         'status' => 'draft',
                         'notes' => null,
@@ -182,6 +188,9 @@ class ShiftRosterController extends Controller
             'weekEnd' => $endOfWeek->toDateString(),
             'employees' => $employees,
             'shiftTemplates' => $shiftTemplates,
+            // The shift everyone works unless rostered otherwise: the company default in the shift library.
+            'defaultShift' => $defaultShift,
+            'canManageShifts' => $request->user()?->hasAnyPermission(['libraries.shifts.manage', 'roster.manage']) ?? false,
             'rosterMatrix' => $rosterMatrix,
             'summary' => [
                 'totalShifts' => $totalShifts,
@@ -274,6 +283,8 @@ class ShiftRosterController extends Controller
                 'start' => $schedule->start,
                 'end' => $schedule->end,
                 'break_minutes' => $schedule->isRestDay ? 0 : $schedule->breakMinutes,
+                'break_start' => $schedule->breakStart,
+                'break_end' => $schedule->breakEnd,
                 'grace_minutes' => $schedule->isRestDay ? 0 : $schedule->graceMinutes,
                 'is_rest_day' => $schedule->isRestDay,
                 'source' => $schedule->source,
@@ -342,10 +353,11 @@ class ShiftRosterController extends Controller
         $isRestDay = (bool) ($validated['is_rest_day'] ?? false);
         $status = $validated['status'] ?? ShiftRoster::STATUS_PUBLISHED;
 
-        $startTime = $isRestDay ? null : ($validated['shift_start'] ?? $template?->start_time ?? '08:00:00');
-        $endTime = $isRestDay ? null : ($validated['shift_end'] ?? $template?->end_time ?? '17:00:00');
-        $breakMin = $isRestDay ? 0 : ($validated['break_minutes'] ?? $template?->break_minutes ?? 60);
-        $graceMin = $isRestDay ? 0 : ($validated['grace_minutes'] ?? $template?->grace_minutes ?? 5);
+        $default = ShiftTemplate::defaultShift($entityId);
+        $startTime = $isRestDay ? null : ($validated['shift_start'] ?? $template?->start_time ?? $default['start']);
+        $endTime = $isRestDay ? null : ($validated['shift_end'] ?? $template?->end_time ?? $default['end']);
+        $breakMin = $isRestDay ? 0 : ($validated['break_minutes'] ?? $template?->break_minutes ?? $default['break_minutes']);
+        $graceMin = $isRestDay ? 0 : ($validated['grace_minutes'] ?? $template?->grace_minutes ?? $default['grace_minutes']);
 
         ShiftRoster::updateOrCreate(
             [
@@ -475,49 +487,5 @@ class ShiftRosterController extends Controller
             ->where('status', '!=', DtrEntry::STATUS_LOCKED)
             ->get()
             ->each(fn (DtrEntry $dtr) => $this->attendanceCalculator->compute($dtr)->save());
-    }
-
-    public function storeTemplate(Request $request, EntityContext $entityContext): RedirectResponse
-    {
-        $entityId = $entityContext->id();
-        $validated = $request->validate([
-            'code' => ['required', 'string', 'max:50'],
-            'name' => ['required', 'string', 'max:100'],
-            'start_time' => ['required', 'string'],
-            'end_time' => ['required', 'string'],
-            'break_minutes' => ['nullable', 'integer', 'min:0', 'max:300'],
-            'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:120'],
-            'color' => ['nullable', 'string', 'max:20'],
-            'is_active' => ['nullable', 'boolean'],
-        ]);
-
-        ShiftTemplate::updateOrCreate(
-            [
-                'entity_id' => $entityId,
-                'code' => $validated['code'],
-            ],
-            [
-                'name' => $validated['name'],
-                'start_time' => Carbon::parse($validated['start_time'])->format('H:i:s'),
-                'end_time' => Carbon::parse($validated['end_time'])->format('H:i:s'),
-                'break_minutes' => $validated['break_minutes'] ?? 60,
-                'grace_minutes' => $validated['grace_minutes'] ?? 5,
-                'color' => $validated['color'] ?? '#3b82f6',
-                'is_active' => $validated['is_active'] ?? true,
-            ]
-        );
-
-        return redirect()->back()->with('status', 'Shift template saved successfully.');
-    }
-
-    public function destroyTemplate(ShiftTemplate $template, EntityContext $entityContext): RedirectResponse
-    {
-        if ($template->entity_id && $template->entity_id !== $entityContext->id()) {
-            abort(403);
-        }
-
-        $template->delete();
-
-        return redirect()->back()->with('status', 'Shift template removed.');
     }
 }

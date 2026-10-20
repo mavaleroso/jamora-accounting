@@ -35,21 +35,22 @@ import {
     EMPLOYMENT_TYPES,
     formatDate,
     formatPay,
+    formatTime,
     fullName,
     labelOf,
     missingStatutory,
     PROBATION_MONTHS,
     restDayLabel,
-    shiftRange,
     statusBadgeClass,
     STATUTORY_FIELDS,
     tenure,
+    type BreakSlot,
     type Company,
+    type CompanyBank,
     type Employee,
     type LeaveTypeOption,
     type LinkableUser,
     type Policy,
-    type ShiftTemplate,
 } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -82,10 +83,13 @@ type Props = {
     filters: Filters;
     stats: Stats;
     positions: string[];
-    shiftTemplates: ShiftTemplate[];
     policy: Policy;
     leaveTypes: LeaveTypeOption[];
     linkableUsers?: LinkableUser[];
+    /** Co-workers' preset breaks, so the form can show who else is on break at a given time. */
+    breakSlots?: BreakSlot[];
+    /** Every company's active bank accounts, for the account each employee is paid from. */
+    bankAccounts?: CompanyBank[];
     /** Every company the user can open: the directory lists their employees together. */
     companies: Company[];
     /** Where a new employee goes unless another company is picked. */
@@ -104,10 +108,11 @@ export default function EmployeesPage({
     filters,
     stats,
     positions = [],
-    shiftTemplates = [],
     policy,
     leaveTypes = [],
     linkableUsers = [],
+    breakSlots = [],
+    bankAccounts = [],
     companies = [],
     currentCompanyId = null,
 }: Props) {
@@ -453,16 +458,10 @@ export default function EmployeesPage({
                                 className: 'text-sm',
                                 cell: (e) => (
                                     <>
-                                        <div className="truncate">
-                                            {e.default_shift_template ? (
-                                                e.default_shift_template.name
-                                            ) : (
-                                                <span className="text-muted-foreground">Default shift</span>
-                                            )}
-                                        </div>
+                                        <div className="truncate">{policy.defaultShift?.name ?? 'Default shift'}</div>
                                         <div className="text-muted-foreground text-[11px]">
-                                            {e.default_shift_template && <>{shiftRange(e.default_shift_template)} · </>}
                                             Off {restDayLabel(e.rest_days, policy.defaultRestDays)}
+                                            {e.break_start && <> · Break {formatTime(e.break_start)}</>}
                                         </div>
                                     </>
                                 ),
@@ -548,11 +547,12 @@ export default function EmployeesPage({
                 open={formOpen}
                 onOpenChange={setFormOpen}
                 employee={editing}
-                shiftTemplates={shiftTemplates}
                 positions={positions}
                 policy={policy}
                 leaveTypes={leaveTypes}
                 linkableUsers={linkableUsers}
+                breakSlots={breakSlots}
+                bankAccounts={bankAccounts}
                 companies={companies}
                 currentCompanyId={currentCompanyId}
             />

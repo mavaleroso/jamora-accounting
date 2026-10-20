@@ -27,10 +27,12 @@ use Spatie\Permission\Models\Role;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // Leave may be filed any day ahead here; the filing notice is tested in LeaveNoticeTest.
+    config(['people.leave.min_notice_days' => 0]);
     // Wednesday. Default shift 09:00–18:00 with a 60-minute break; Sunday rest.
     Carbon::setTestNow('2026-10-14 09:00:00');
 
-    foreach (['attendance.view', 'attendance.punch', 'attendance.manage', 'leave.view', 'leave.file', 'leave.approve', 'roster.view', 'roster.manage', 'payroll.view', 'payroll.manage', 'compliance.view'] as $p) {
+    foreach (['attendance.view', 'attendance.punch', 'attendance.manage', 'leave.view', 'leave.file', 'requests.approve', 'requests.manage', 'roster.view', 'roster.manage', 'payroll.view', 'payroll.manage', 'compliance.view'] as $p) {
         Permission::findOrCreate($p, 'web');
     }
 
@@ -56,7 +58,7 @@ beforeEach(function () {
         'rest_days' => ['sun'],
     ]);
 
-    $this->hrUser = $makeUser('hr@fix.test', 'HR Manager', ['attendance.view', 'attendance.manage', 'leave.view', 'leave.file', 'leave.approve', 'roster.view', 'roster.manage', 'payroll.view', 'payroll.manage']);
+    $this->hrUser = $makeUser('hr@fix.test', 'HR Manager', ['attendance.view', 'attendance.manage', 'leave.view', 'leave.file', 'requests.approve', 'requests.manage', 'roster.view', 'roster.manage', 'payroll.view', 'payroll.manage']);
     $this->hrEmployee = $makeEmployee($this->hrUser, 'HR-1', 'Helen');
 
     $this->staffUser = $makeUser('staff@fix.test', 'Employee', ['attendance.view', 'attendance.punch', 'leave.view', 'leave.file']);

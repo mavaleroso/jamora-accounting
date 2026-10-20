@@ -17,32 +17,40 @@ import { generatePassword } from '../../../admin/users/lib';
 import {
     addMonths,
     age,
+    bankLabel,
+    breakRange,
+    breakStartOptions,
     CIVIL_STATUSES,
     CONTRIBUTION_MODES,
     CONTRIBUTIONS,
     EMERGENCY_RELATIONSHIPS,
     EMPLOYMENT_STATUSES,
     EMPLOYMENT_TYPES,
+    fitBreak,
     formatDate,
+    formatTime,
     fullName,
     MIN_WORKING_AGE,
     PAY_TYPES,
     payEquivalents,
     PRESET_POSITIONS,
     PROBATION_MONTHS,
+    regularShift,
     restDayLabel,
     shiftRange,
     statutoryEstimate,
     toDateInput,
     WEEKDAYS,
+    windowsOverlap,
+    type BreakSlot,
     type Company,
+    type CompanyBank,
     type ContributionAgency,
     type ContributionMode,
     type Employee,
     type LeaveTypeOption,
     type LinkableUser,
     type Policy,
-    type ShiftTemplate,
 } from '../lib';
 import { EmployeeAvatar } from './employee-avatar';
 
@@ -69,17 +77,19 @@ type FormData = {
     hire_date: string;
     regularization_date: string;
     separation_date: string;
-    default_shift_template_id: string;
     rest_days: number[];
+    /** HH:MM, or '' for no preset break. */
+    break_start: string;
     leave_type_ids: number[];
     is_active: boolean;
     pay_type: string;
     basic_pay: string;
     vacation_leave_credits: string;
     sick_leave_credits: string;
-    bank_name: string;
     bank_account_name: string;
     bank_account_no: string;
+    /** The company bank account charged at release, or '' for not set. */
+    charge_bank_account_id: string;
     sss_number: string;
     philhealth_number: string;
     pagibig_number: string;
@@ -132,7 +142,7 @@ const TABS = [
             'hire_date',
             'regularization_date',
             'separation_date',
-            'default_shift_template_id',
+            'break_start',
             'rest_days',
             'is_active',
         ],
@@ -145,9 +155,9 @@ const TABS = [
         fields: [
             'pay_type',
             'basic_pay',
-            'bank_name',
             'bank_account_name',
             'bank_account_no',
+            'charge_bank_account_id',
             'sss_number',
             'philhealth_number',
             'pagibig_number',
@@ -175,8 +185,6 @@ type TabId = (typeof TABS)[number]['id'];
 
 const NONE = 'none';
 
-const PAYROLL_BANKS = ['BDO Unibank', 'BPI', 'Metrobank', 'UnionBank', 'Landbank', 'Security Bank', 'China Bank', 'RCBC', 'PNB', 'GCash', 'Maya'];
-
 function initialData(employee: Employee | null, policy: Policy, leaveTypes: LeaveTypeOption[], currentCompanyId: number | null): FormData {
     return {
         entity_id: String(employee?.entity_id ?? currentCompanyId ?? ''),
@@ -200,8 +208,8 @@ function initialData(employee: Employee | null, policy: Policy, leaveTypes: Leav
         hire_date: toDateInput(employee?.hire_date) || (employee ? '' : new Date().toISOString().slice(0, 10)),
         regularization_date: toDateInput(employee?.regularization_date),
         separation_date: toDateInput(employee?.separation_date),
-        default_shift_template_id: employee?.default_shift_template_id ? String(employee.default_shift_template_id) : '',
         rest_days: employee ? (employee.rest_days ?? []) : policy.defaultRestDays,
+        break_start: employee?.break_start?.slice(0, 5) ?? '',
         // Default: every leave type selected.
         leave_type_ids: employee?.leave_type_ids ?? leaveTypes.map((t) => t.id),
         is_active: employee?.is_active ?? true,
@@ -209,9 +217,9 @@ function initialData(employee: Employee | null, policy: Policy, leaveTypes: Leav
         basic_pay: employee ? String(employee.basic_pay ?? '') : '',
         vacation_leave_credits: employee ? String(employee.vacation_leave_credits ?? 0) : '',
         sick_leave_credits: employee ? String(employee.sick_leave_credits ?? 0) : '',
-        bank_name: employee?.bank_name ?? '',
         bank_account_name: employee?.bank_account_name ?? '',
         bank_account_no: employee?.bank_account_no ?? '',
+        charge_bank_account_id: employee?.charge_bank_account_id ? String(employee.charge_bank_account_id) : '',
         sss_number: employee?.sss_number ?? '',
         philhealth_number: employee?.philhealth_number ?? '',
         pagibig_number: employee?.pagibig_number ?? '',
@@ -230,6 +238,12 @@ function initialData(employee: Employee | null, policy: Policy, leaveTypes: Leav
         link_user_id: '',
     };
 }
+
+/** "Maria Clara Santos" -> "Maria S." */
+const shortName = (name: string) => {
+    const parts = name.trim().split(/\s+/);
+    return parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : name;
+};
 
 /** "Maria Clara Santos" -> "maria.santos" */
 function suggestUsername(first: string, last: string): string {
@@ -289,7 +303,6 @@ type Props = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     employee: Employee | null;
-    shiftTemplates: ShiftTemplate[];
     positions: string[];
     policy: Policy;
     leaveTypes: LeaveTypeOption[];
@@ -297,6 +310,10 @@ type Props = {
     companies?: Company[];
     /** Where a new employee goes unless another company is picked. */
     currentCompanyId?: number | null;
+    /** Co-workers' preset breaks, to show who else is on break at a given time. */
+    breakSlots?: BreakSlot[];
+    /** Every company's active bank accounts; the employee is paid from one of their own company's. */
+    bankAccounts?: CompanyBank[];
 };
 
 export function EmployeeFormDialog({ open, onOpenChange, employee, ...rest }: Props) {
@@ -312,13 +329,14 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, ...rest }: Pr
 function EmployeeForm({
     employee,
     onDone,
-    shiftTemplates,
     positions,
     policy,
     leaveTypes,
     linkableUsers = [],
     companies = [],
     currentCompanyId = null,
+    breakSlots = [],
+    bankAccounts = [],
 }: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
     const isEdit = employee !== null;
     const linked = employee?.user ?? null;
@@ -360,7 +378,8 @@ function EmployeeForm({
             ...(isEdit ? { _method: 'put' } : {}),
             ...(avatar ? { avatar } : {}),
             ...(remove_avatar && !avatar ? { remove_avatar: true } : {}),
-            default_shift_template_id: d.default_shift_template_id || null,
+            charge_bank_account_id: d.charge_bank_account_id || null,
+            break_start: d.break_start || null,
             dependents: d.dependents === '' ? null : d.dependents,
             vacation_leave_credits: d.vacation_leave_credits === '' ? null : d.vacation_leave_credits,
             sick_leave_credits: d.sick_leave_credits === '' ? null : d.sick_leave_credits,
@@ -385,8 +404,39 @@ function EmployeeForm({
     const probationEnds = data.employment_type === 'probationary' ? addMonths(data.hire_date, PROBATION_MONTHS) : null;
     const company = companies.find((c) => String(c.id) === data.entity_id) ?? employee?.entity ?? null;
     // Shift templates and logins are per company: offer the chosen company's.
-    const companyShifts = shiftTemplates.filter((s) => s.entity_id == null || String(s.entity_id) === data.entity_id);
-    const selectedShift = companyShifts.find((s) => String(s.id) === data.default_shift_template_id);
+    // Preset break: exactly an hour within the regular shift. Co-workers may share a time; the form shows who.
+    // Every employee works their company's default shift (Libraries › Shifts).
+    const companyShift = policy.defaultShifts?.[Number(data.entity_id)] ?? policy.defaultShift;
+    const shift = regularShift(null, { ...policy, defaultShift: companyShift });
+    const hasBreak = !!shift && shift.break_minutes > 0;
+    const breakWindow = fitBreak(data.break_start, shift);
+    // The payroll bank is one of the company's registered bank accounts: pay is released from it at release.
+    const companyBanks = bankAccounts.filter((b) => String(b.entity_id) === data.entity_id);
+    const companyName = (id: number) => companies.find((c) => c.id === id)?.name ?? employee?.entity?.name ?? 'Unknown company';
+    const payrollBankHint =
+        companyBanks.length === 0
+            ? `${company?.name ?? 'This company'} has no registered bank account yet. Register one in Banks first.`
+            : data.charge_bank_account_id
+              ? 'Payroll releases pay from this account automatically. You review the list before releasing.'
+              : 'Paid in cash or cheque, from the registered account chosen when releasing pay.';
+    const coworkerBreaks = breakSlots.filter((b) => String(b.entity_id) === data.entity_id && b.id !== employee?.id);
+    const onBreakWith = (window: [string, string] | null) =>
+        window ? coworkerBreaks.filter((b) => windowsOverlap(window, [b.break_start, b.break_end])) : [];
+    const sharing = onBreakWith(breakWindow);
+    const breakLength = shift?.break_minutes === 60 ? '1 hour' : `${shift?.break_minutes} minutes`;
+    const breakOptions = breakStartOptions(shift);
+    if (data.break_start && !breakOptions.includes(data.break_start)) breakOptions.unshift(data.break_start);
+    const breakHint = !hasBreak ? (
+        'This shift has no unpaid break.'
+    ) : !data.break_start ? (
+        `Optional. The break is exactly ${breakLength}, unpaid.`
+    ) : !breakWindow ? (
+        <span className="text-amber-700 dark:text-amber-400">
+            Doesn’t fit the {shiftRange({ start_time: shift.start, end_time: shift.end })} shift. Pick another time.
+        </span>
+    ) : (
+        `Exactly ${breakLength}, unpaid.${sharing.length > 0 ? ` Also on break then: ${sharing.map((b) => b.name).join(', ')}.` : ''}`
+    );
     const linkable = linkableUsers.filter((u) => !(u.employee_entity_ids ?? []).includes(Number(data.entity_id)));
     const positionOptions = Array.from(new Set([...PRESET_POSITIONS, ...positions]));
     const tabIndex = TABS.findIndex((t) => t.id === tab);
@@ -515,7 +565,12 @@ function EmployeeForm({
                                         value={data.entity_id}
                                         disabled={isEdit}
                                         onValueChange={(v) =>
-                                            setData((d) => ({ ...d, entity_id: v, default_shift_template_id: '', link_user_id: '' }))
+                                            setData((d) => ({
+                                                ...d,
+                                                entity_id: v,
+                                                link_user_id: '',
+                                                charge_bank_account_id: '',
+                                            }))
                                         }
                                     >
                                         <SelectTrigger aria-label="Company">
@@ -882,27 +937,50 @@ function EmployeeForm({
                                     <div className="grid gap-4 sm:grid-cols-2">
                                         <Field
                                             label="Default shift"
-                                            error={err.default_shift_template_id}
-                                            hint={
-                                                selectedShift
-                                                    ? `${shiftRange(selectedShift)} · ${selectedShift.break_minutes ?? 60} min break`
-                                                    : 'Used when no roster is published for the day.'
-                                            }
+                                            hint="Every employee works the company default unless the roster sets another for the day. Set it in Libraries › Shifts."
                                         >
+                                            <div className="bg-muted/40 flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm">
+                                                <span className="truncate">{companyShift?.name ?? 'Company default shift'}</span>
+                                                {companyShift && (
+                                                    <span className="text-muted-foreground shrink-0 text-xs">
+                                                        {shiftRange({ start_time: companyShift.start, end_time: companyShift.end })}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </Field>
+                                        <Field label="Break time" error={err.break_start} hint={breakHint}>
                                             <Select
-                                                value={data.default_shift_template_id || NONE}
-                                                onValueChange={(v) => setData('default_shift_template_id', v === NONE ? '' : v)}
+                                                value={data.break_start || NONE}
+                                                onValueChange={(v) => setData('break_start', v === NONE ? '' : v)}
+                                                disabled={!hasBreak && !data.break_start}
                                             >
-                                                <SelectTrigger>
-                                                    <SelectValue />
+                                                <SelectTrigger aria-label="Break time">
+                                                    <SelectValue>
+                                                        {data.break_start
+                                                            ? breakRange(breakWindow) || formatTime(data.break_start)
+                                                            : 'No preset break'}
+                                                    </SelectValue>
                                                 </SelectTrigger>
                                                 <SelectContent>
-                                                    <SelectItem value={NONE}>Company default shift</SelectItem>
-                                                    {companyShifts.map((s) => (
-                                                        <SelectItem key={s.id} value={String(s.id)}>
-                                                            {s.name} ({shiftRange(s)})
-                                                        </SelectItem>
-                                                    ))}
+                                                    <SelectItem value={NONE}>No preset break</SelectItem>
+                                                    {breakOptions.map((time) => {
+                                                        const window = fitBreak(time, shift);
+                                                        const others = onBreakWith(window);
+                                                        return (
+                                                            <SelectItem key={time} value={time}>
+                                                                <span className="flex w-full items-center justify-between gap-3">
+                                                                    <span>
+                                                                        {window ? breakRange(window) : `${formatTime(time)} (outside the shift)`}
+                                                                    </span>
+                                                                    {others.length > 0 && (
+                                                                        <span className="text-muted-foreground text-xs">
+                                                                            {others.map((b) => shortName(b.name)).join(', ')}
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                            </SelectItem>
+                                                        );
+                                                    })}
                                                 </SelectContent>
                                             </Select>
                                         </Field>
@@ -1037,39 +1115,61 @@ function EmployeeForm({
                                     )}
                                 </div>
                             </FormSection>
-                            <FormSection title="Payroll bank" description="Where net pay is credited. Leave blank for cash or cheque.">
+                            <FormSection
+                                title="Payroll bank"
+                                description="One of the company’s registered bank accounts. Pay is released from it to the employee’s account at the same bank."
+                            >
                                 <div className="grid gap-4 sm:grid-cols-3">
-                                    <Field label="Payroll bank" htmlFor="bank_name" error={err.bank_name}>
-                                        <TextCombobox
-                                            id="bank_name"
-                                            value={data.bank_name}
-                                            onValueChange={(v) => setData('bank_name', v)}
-                                            options={PAYROLL_BANKS}
-                                            placeholder="Cash or cheque (no bank)"
-                                            aria-invalid={!!err.bank_name}
-                                        />
-                                    </Field>
                                     <Field
-                                        label="Account name"
-                                        htmlFor="bank_account_name"
-                                        error={err.bank_account_name}
-                                        hint="As the bank has it, e.g. Juan S. Dela Cruz."
+                                        label="Payroll bank"
+                                        error={err.charge_bank_account_id}
+                                        hint={payrollBankHint}
+                                        className="sm:col-span-3 sm:max-w-md"
                                     >
-                                        <Input
-                                            id="bank_account_name"
-                                            value={data.bank_account_name}
-                                            onChange={(e) => setData('bank_account_name', e.target.value)}
-                                        />
+                                        <Select
+                                            value={data.charge_bank_account_id || NONE}
+                                            onValueChange={(v) => setData('charge_bank_account_id', v === NONE ? '' : v)}
+                                            disabled={companyBanks.length === 0 && !data.charge_bank_account_id}
+                                        >
+                                            <SelectTrigger aria-label="Payroll bank">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NONE}>None — cash or cheque</SelectItem>
+                                                {companyBanks.map((b) => (
+                                                    <SelectItem key={b.id} value={String(b.id)}>
+                                                        {bankLabel(b)}
+                                                        <span className="text-muted-foreground">— {companyName(b.entity_id)}</span>
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     </Field>
-                                    <Field label="Account number" htmlFor="bank_account_no" error={err.bank_account_no}>
-                                        <Input
-                                            id="bank_account_no"
-                                            value={data.bank_account_no}
-                                            onChange={(e) => setData('bank_account_no', e.target.value)}
-                                            placeholder="0012-3456-7890"
-                                            className="font-mono"
-                                        />
-                                    </Field>
+                                    {data.charge_bank_account_id && (
+                                        <>
+                                            <Field
+                                                label="Account name"
+                                                htmlFor="bank_account_name"
+                                                error={err.bank_account_name}
+                                                hint="As the bank has it, e.g. Juan S. Dela Cruz."
+                                            >
+                                                <Input
+                                                    id="bank_account_name"
+                                                    value={data.bank_account_name}
+                                                    onChange={(e) => setData('bank_account_name', e.target.value)}
+                                                />
+                                            </Field>
+                                            <Field label="Account number" htmlFor="bank_account_no" error={err.bank_account_no}>
+                                                <Input
+                                                    id="bank_account_no"
+                                                    value={data.bank_account_no}
+                                                    onChange={(e) => setData('bank_account_no', e.target.value)}
+                                                    placeholder="0012-3456-7890"
+                                                    className="font-mono"
+                                                />
+                                            </Field>
+                                        </>
+                                    )}
                                 </div>
                             </FormSection>
                             <FormSection

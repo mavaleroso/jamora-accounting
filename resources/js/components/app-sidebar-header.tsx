@@ -3,19 +3,22 @@ import { Breadcrumbs } from '@/components/breadcrumbs';
 import { EntitySwitcher } from '@/components/entity-switcher';
 import LayoutToggleDropdown from '@/components/layout-toggle-dropdown';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import { ViewModeSwitch } from '@/components/view-mode-switch';
 import type { BreadcrumbItem as BreadcrumbItemType } from '@/types';
 import { usePage } from '@inertiajs/react';
 
-/** Routes that keep separate books per entity — show the entity switcher in the page header. */
+/**
+ * Routes that keep separate books per entity — show the entity switcher in the page header. The Employee Directory and
+ * Bank Accounts are not: they list every company's records together, each labelled by company, and their forms pick it.
+ */
 const ENTITY_SCOPED_PATH_PREFIXES = [
     '/accounting',
     '/billing',
     '/payroll',
     '/ap',
-    '/banks',
+    '/banks/reconciliations',
     '/reports',
     '/libraries/partners',
-    '/libraries/employees',
     '/libraries/vendors',
     '/libraries/cost-centers',
     '/libraries/tax-codes',
@@ -40,6 +43,7 @@ export function AppSidebarHeader({ breadcrumbs = [] }: { breadcrumbs?: Breadcrum
                 <Breadcrumbs breadcrumbs={breadcrumbs} />
             </div>
             {showEntitySwitcher ? <EntitySwitcher variant="header" /> : null}
+            <ViewModeSwitch />
             <AppearanceToggle />
             <LayoutToggleDropdown />
         </header>

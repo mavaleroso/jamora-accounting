@@ -37,6 +37,7 @@ enum PermissionEnum: string
     case LibrariesCostCentersManage = 'libraries.cost-centers.manage';
     case LibrariesTaxCodesManage = 'libraries.tax-codes.manage';
     case LibrariesEmployeesManage = 'libraries.employees.manage';
+    case LibrariesShiftsManage = 'libraries.shifts.manage';
     case LibrariesPartnersManage = 'libraries.partners.manage';
     case LibrariesVendorsManage = 'libraries.vendors.manage';
     case BillingView = 'billing.view';
@@ -55,6 +56,7 @@ enum PermissionEnum: string
     case AdminUsersManage = 'admin.users.manage';
     case AdminRolesPermissionsManage = 'admin.roles-permissions.manage';
     case AdminAuditTrailsView = 'admin.audit-trails.view';
+    case AdminSystemSettingsManage = 'admin.system-settings.manage';
     case SettingsProfileManage = 'settings.profile.manage';
 
     // Employee Management Permissions
@@ -63,10 +65,13 @@ enum PermissionEnum: string
     case AttendanceManage = 'attendance.manage';
     case LeaveView = 'leave.view';
     case LeaveFile = 'leave.file';
-    case LeaveApprove = 'leave.approve';
     case RosterView = 'roster.view';
     case RosterManage = 'roster.manage';
     case PortalView = 'portal.view';
+
+    // Employees' requests (leave, overtime, time corrections, official business)
+    case RequestsApprove = 'requests.approve';
+    case RequestsManage = 'requests.manage';
 
     // Statutory compliance calendar
     case ComplianceView = 'compliance.view';

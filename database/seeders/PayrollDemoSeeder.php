@@ -78,7 +78,8 @@ class PayrollDemoSeeder extends Seeder
         $this->seedTimeRecords($entity, $calculator, $user, $pending, $dtrTo);
 
         $bank = BankAccount::query()
-            ->whereHas('entities', fn ($q) => $q->where('entities.id', $entity->id))
+            ->withoutGlobalScope('entity')
+            ->usableBy($entity->id)
             ->where('is_active', true)
             ->orderBy('id')
             ->first();

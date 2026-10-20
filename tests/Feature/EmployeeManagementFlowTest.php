@@ -26,10 +26,12 @@ use Spatie\Permission\Models\Role;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // Leave may be filed any day ahead here; the filing notice is tested in LeaveNoticeTest.
+    config(['people.leave.min_notice_days' => 0]);
     $permissions = [
         'roster.view', 'roster.manage',
         'attendance.view', 'attendance.punch', 'attendance.manage',
-        'leave.view', 'leave.file', 'leave.approve',
+        'leave.view', 'leave.file', 'requests.approve', 'requests.manage',
         'benefits.view', 'benefits.manage',
         'compliance.view', 'compliance.manage', 'compliance.verify',
         'portal.view',
@@ -139,9 +141,9 @@ beforeEach(function () {
 test('shift templates can be created, roster assigned, copied to next week, and deleted', function () {
     $this->actingAs($this->hrUser);
 
-    // 1. Create Shift Template
+    // 1. Add a shift to the shift library
     $templateResponse = $this->withSession(['current_entity_id' => $this->entity->id])
-        ->post('/employee-management/roster/templates', [
+        ->post('/libraries/shifts', [
             'code' => 'MORNING',
             'name' => 'Morning Clinic Shift',
             'start_time' => '08:00',

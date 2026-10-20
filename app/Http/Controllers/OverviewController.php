@@ -216,12 +216,12 @@ class OverviewController extends Controller
             );
         }
 
-        if ($can(['leave.approve'])) {
+        if ($can(['requests.approve'])) {
             $pending = LeaveRequest::query()->where('status', LeaveRequest::STATUS_PENDING)->count();
             $metrics[] = $this->metric('Leave to approve', $pending, tone: $this->alertTone($pending), href: '/employee-management/requests');
         }
 
-        if ($can(['attendance.manage'])) {
+        if ($can(['requests.approve'])) {
             $pending = AttendanceRequest::query()->where('status', 'pending')->count();
             $metrics[] = $this->metric('Attendance requests', $pending, tone: $this->alertTone($pending), href: '/employee-management/requests');
         }

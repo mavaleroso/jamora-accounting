@@ -2,9 +2,16 @@
 
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
+use Spatie\Permission\Models\Permission;
+
+/** The settings pages need the settings.profile.manage permission, which every role is given. */
+beforeEach(function () {
+    $this->user = User::factory()->create();
+    $this->user->givePermissionTo(Permission::findOrCreate('settings.profile.manage', 'web'));
+});
 
 test('password can be updated', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)
@@ -23,7 +30,7 @@ test('password can be updated', function () {
 });
 
 test('correct password must be provided to update password', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)

@@ -17,7 +17,7 @@ class Payslip extends Model
         'absences', 'tardiness', 'unpaid_leave', 'gross_pay',
         'sss', 'sss_er', 'sss_ec', 'philhealth', 'philhealth_er', 'pagibig', 'pagibig_er', 'employer_benefits',
         'taxable_income', 'is_mwe', 'withholding_tax', 'other_deductions', 'benefit_deductions',
-        'net_pay', 'thirteenth_month_accrual', 'meta',
+        'net_pay', 'charge_bank_account_id', 'thirteenth_month_accrual', 'meta',
     ];
 
     protected function casts(): array
@@ -71,6 +71,14 @@ class Payslip extends Model
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class);
+    }
+
+    /**
+     * The company bank account the net pay was released from (set when the run is paid).
+     */
+    public function chargeBankAccount(): BelongsTo
+    {
+        return $this->belongsTo(BankAccount::class, 'charge_bank_account_id');
     }
 
     public function payrollRun(): BelongsTo

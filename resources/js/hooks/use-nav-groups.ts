@@ -27,6 +27,7 @@ import {
     Receipt,
     Scale,
     Shield,
+    SlidersHorizontal,
     UserCheck,
     UserRound,
     Users,
@@ -83,6 +84,15 @@ const employeeMgmtNavItems: NavItem[] = [
     { title: 'Compliance Mgmt', href: '/employee-management/compliance', icon: BadgeCheck },
 ];
 
+/** The pages an employee uses for themselves: what the employee view shows. */
+const SELF_SERVICE_HREFS = [
+    '/employee-management/portal',
+    '/employee-management/attendance',
+    '/employee-management/requests',
+    '/employee-management/roster',
+    '/employee-management/my-pay',
+];
+
 const reportsNavItems: NavItem[] = [
     { title: 'Trial Balance', href: '/reports/trial-balance', icon: Scale },
     { title: 'Income Statement', href: '/reports/income-statement', icon: FileSpreadsheet },
@@ -102,6 +112,7 @@ const librariesNavItems: NavItem[] = [
     { title: 'Account Types', href: '/libraries/account-types', icon: BookOpen },
     { title: 'Journal Types', href: '/libraries/journal-types', icon: Receipt },
     { title: 'Cost Centers', href: '/libraries/cost-centers', icon: Landmark },
+    { title: 'Shifts', href: '/libraries/shifts', icon: Clock },
     { title: 'Tax Codes', href: '/libraries/tax-codes', icon: Calculator },
     { title: 'Partners', href: '/libraries/partners', icon: Users },
     { title: 'Vendors', href: '/libraries/vendors', icon: Building2 },
@@ -111,6 +122,7 @@ const adminNavItems: NavItem[] = [
     { title: 'Users', href: '/admin/users', icon: Users },
     { title: 'Roles & Permissions', href: '/admin/roles', icon: Shield },
     { title: 'Audit Trails', href: '/admin/audit-trails', icon: HistoryIcon },
+    { title: 'System Settings', href: '/admin/system-settings', icon: SlidersHorizontal },
 ];
 
 /**
@@ -120,7 +132,9 @@ const adminNavItems: NavItem[] = [
 export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
     const { props } = usePage<SharedData>();
     const auth = props?.auth;
-    const isEmployee = auth?.user?.roles?.includes('Employee') ?? false;
+    // An Admin who is also an employee may use the employee view: the same menu an employee has.
+    const viewingAsEmployee = auth?.viewMode === 'employee';
+    const isEmployee = (auth?.user?.roles?.includes('Employee') ?? false) || viewingAsEmployee;
     const can = (permission: string) => hasPermission(auth, permission);
     const canAny = (permissions: string[]) => hasAnyPermission(auth, permissions);
 
@@ -202,6 +216,8 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                 return can('libraries.journals.manage');
             case '/libraries/cost-centers':
                 return can('libraries.cost-centers.manage');
+            case '/libraries/shifts':
+                return canAny(['libraries.shifts.manage', 'roster.manage']);
             case '/libraries/tax-codes':
                 return can('libraries.tax-codes.manage');
             case '/libraries/partners':
@@ -232,13 +248,15 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
 
     const filteredEmployeeMgmt = employeeMgmtNavItems
         .filter((item) => {
+            // The employee view keeps only the self-service pages; an admin's permissions would otherwise show them all.
+            if (viewingAsEmployee && !SELF_SERVICE_HREFS.some((href) => href === item.href)) return false;
             switch (item.href) {
                 case '/employee-management':
                     // Same gate as the route: anyone who manages part of Employee Management (not self-service staff).
                     return (
                         canAny([
                             'attendance.manage',
-                            'leave.approve',
+                            'requests.approve',
                             'payroll.view',
                             'payroll.manage',
                             'payroll.run',
@@ -257,7 +275,7 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                     return canAny([
                         'leave.view',
                         'leave.file',
-                        'leave.approve',
+                        'requests.approve',
                         'attendance.view',
                         'attendance.punch',
                         'attendance.manage',
@@ -269,11 +287,12 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                 case '/employee-management/benefits':
                     return canAny(['payroll.manage', 'libraries.employees.manage']);
                 case '/employee-management/portal':
-                    // A personal page: only useful to someone with an employee record in this branch.
-                    return !!auth?.user?.employee_id && canAny(['portal.view', 'payroll.view', 'payroll.manage']);
+                    // A personal page: only useful to someone with an employee record in this branch. An Admin who is also
+                    // an employee opens it from the employee view, so the admin view leaves it out.
+                    return !!auth?.user?.employee_id && auth?.viewMode !== 'admin' && canAny(['portal.view', 'payroll.view', 'payroll.manage']);
                 case '/employee-management/my-pay':
-                    // The signed-in employee's own pay history.
-                    return !!auth?.user?.employee_id && can('portal.view');
+                    // The signed-in employee's own pay history (for an Admin, in the employee view).
+                    return !!auth?.user?.employee_id && auth?.viewMode !== 'admin' && can('portal.view');
                 case '/employee-management/reports':
                     return canAny(['payroll.view', 'dashboard.view']);
                 case '/employee-management/compliance':
@@ -284,7 +303,7 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
         })
         .map((item) => {
             // Same rule as the server: without scheduling or payroll access the roster is the user's own week.
-            if (item.href === '/employee-management/roster' && !canAny(['roster.manage', 'payroll.view', 'payroll.manage'])) {
+            if (item.href === '/employee-management/roster' && (viewingAsEmployee || !canAny(['roster.manage', 'payroll.view', 'payroll.manage']))) {
                 return { ...item, title: 'My Schedule' };
             }
 
@@ -324,6 +343,8 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                     return can('admin.roles-permissions.manage');
                 case '/admin/audit-trails':
                     return can('admin.audit-trails.view');
+                case '/admin/system-settings':
+                    return can('admin.system-settings.manage');
                 default:
                     return true;
             }

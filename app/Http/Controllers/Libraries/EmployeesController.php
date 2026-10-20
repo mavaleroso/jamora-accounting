@@ -4,14 +4,17 @@ namespace App\Http\Controllers\Libraries;
 
 use App\Enums\RoleEnum;
 use App\Http\Controllers\Controller;
+use App\Models\BankAccount;
 use App\Models\Employee;
 use App\Models\Entity;
 use App\Models\LeaveType;
 use App\Models\ShiftTemplate;
 use App\Models\User;
 use App\Services\People\BenefitReview;
+use App\Services\People\WorkSchedule;
 use App\Support\EntityContext;
 use App\Support\MissingValue;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -67,9 +70,10 @@ class EmployeesController extends Controller
             ->with([
                 'entity:id,code,name',
                 // Shift templates belong to a company, which need not be the current one.
-                'defaultShiftTemplate' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'code', 'name', 'start_time', 'end_time', 'color']),
+                'defaultShiftTemplate' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'color']),
                 'user:id,username,email,status',
                 'user.roles:id,name',
+                'chargeBankAccount' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'entity_id', 'name', 'bank_name', 'account_number']),
             ])
             ->orderBy($sort === 'company' ? Entity::query()->select('name')->whereColumn('entities.id', 'employees.entity_id') : self::SORTABLE[$sort], $direction);
 
@@ -121,13 +125,17 @@ class EmployeesController extends Controller
             'currentCompanyId' => app(EntityContext::class)->id(),
             'linkableUsers' => $this->linkableUsers($companies->pluck('id')->all()),
             'positions' => $this->directory($request)->whereNotNull('position')->whereNotIn('position', ['', MissingValue::MARK])->distinct()->orderBy('position')->pluck('position'),
-            // Every company's templates (and shared ones); the form offers those of the employee's company.
-            'shiftTemplates' => ShiftTemplate::query()
+            // Each company's active bank accounts, held or shared (a shared one is listed under each of its companies):
+            // the form presets the one an employee's pay is released from.
+            'bankAccounts' => BankAccount::query()
                 ->withoutGlobalScope('entity')
-                ->where(fn ($q) => $q->whereIn('entity_id', $companies->pluck('id'))->orWhereNull('entity_id'))
-                ->where('is_active', true)
-                ->orderBy('name')
-                ->get(['id', 'entity_id', 'code', 'name', 'start_time', 'end_time', 'break_minutes', 'color']),
+                ->join('bank_account_entity as share', 'share.bank_account_id', '=', 'bank_accounts.id')
+                ->whereIn('share.entity_id', $companies->pluck('id'))
+                ->where('bank_accounts.is_active', true)
+                ->orderBy('bank_accounts.name')
+                ->get(['bank_accounts.id', 'share.entity_id', 'bank_accounts.name', 'bank_accounts.bank_name', 'bank_accounts.account_number']),
+            // Co-workers' preset breaks, so the form can show who else is on break at a given time.
+            'breakSlots' => $this->breakSlots($request),
             'leaveTypes' => LeaveType::query()
                 ->where('is_active', true)
                 ->orderBy('sort_order')
@@ -136,6 +144,11 @@ class EmployeesController extends Controller
                 'daysPerYear' => (int) config('people.timekeeping.days_per_year', 313),
                 'hoursPerDay' => (int) config('people.timekeeping.regular_hours_per_day', 8),
                 'defaultRestDays' => array_map('intval', config('people.default_rest_days', [0])),
+                // The shift every employee works: the company default in its shift library (Libraries › Shifts). The
+                // current company's, and each company's for the form, which may add an employee to another.
+                'defaultShift' => $this->companyShift(app(EntityContext::class)->id()),
+                'defaultShifts' => $companies->mapWithKeys(fn (array $c) => [$c['id'] => $this->companyShift($c['id'])]),
+                'presetBreakMinutes' => WorkSchedule::presetBreakMinutes(),
                 // Contribution tables, for the form's estimate of automatic SSS / PhilHealth / Pag-IBIG.
                 'statutory' => config('people.statutory'),
             ],
@@ -221,13 +234,13 @@ class EmployeesController extends Controller
     }
 
     /**
-     * Companies (branches) the user can open: the directory lists their employees.
+     * Companies (branches) in the user's directory: it lists their employees, and a new employee may join any of them.
      *
      * @return Collection<int, array{id: int, code: string, name: string}>
      */
     private function companies(Request $request): Collection
     {
-        return $request->user()->entities()->where('entities.is_active', true)->orderBy('entities.name')->get()
+        return $request->user()->directoryEntities()->orderBy('entities.name')->get()
             ->map(fn (Entity $e) => ['id' => $e->id, 'code' => $e->code, 'name' => $e->name])
             ->values();
     }
@@ -241,7 +254,7 @@ class EmployeesController extends Controller
     }
 
     /**
-     * An employee of any company the user can open.
+     * An employee of any company in the user's directory.
      */
     private function find(Request $request, int $id): Employee
     {
@@ -254,13 +267,73 @@ class EmployeesController extends Controller
     private function companyFor(Request $request): Entity
     {
         $id = $request->filled('entity_id') ? (int) $request->input('entity_id') : app(EntityContext::class)->id();
-        $company = $request->user()->entities()->where('entities.is_active', true)->where('entities.id', $id)->first();
+        $company = $id ? $request->user()->directoryEntities()->find($id) : null;
 
         if (! $company) {
             throw ValidationException::withMessages(['entity_id' => 'Choose a company you have access to.']);
         }
 
         return $company;
+    }
+
+    /**
+     * The shift an employee normally works: their own shift, else their company's default shift.
+     *
+     * @return array{start: string, end: string, break_minutes: int}
+     */
+    private function regularShift(?ShiftTemplate $template, ?int $entityId): array
+    {
+        $default = ShiftTemplate::defaultShift($entityId);
+
+        return $template
+            ? ['start' => (string) $template->start_time, 'end' => (string) $template->end_time, 'break_minutes' => (int) $template->break_minutes]
+            : ['start' => $default['start'], 'end' => $default['end'], 'break_minutes' => $default['break_minutes']];
+    }
+
+    /**
+     * A company's default shift, as the form shows it.
+     *
+     * @return array{name: string, start: string, end: string, break_minutes: int}
+     */
+    private function companyShift(?int $entityId): array
+    {
+        return ['name' => ShiftTemplate::defaultShift($entityId)['name'], ...$this->regularShift(null, $entityId)];
+    }
+
+    /**
+     * The window a preset break covers on a shift: always the preset length, and none when the shift has no break.
+     *
+     * @param  array{start: string, end: string, break_minutes: int}  $shift
+     * @return array{0: string, 1: string}|null
+     */
+    private function presetWindow(?string $breakStart, array $shift): ?array
+    {
+        return $shift['break_minutes'] > 0
+            ? WorkSchedule::fitBreak($breakStart, $shift['start'], $shift['end'], WorkSchedule::presetBreakMinutes())
+            : null;
+    }
+
+    /**
+     * Preset breaks of active employees and the window each covers on their regular shift. Co-workers may share one.
+     *
+     * @return list<array{id: int, entity_id: int, name: string, break_start: string, break_end: string}>
+     */
+    private function breakSlots(Request $request): array
+    {
+        return $this->directory($request)
+            ->whereNotNull('break_start')
+            ->where('employment_status', 'active')
+            ->where('is_active', true)
+            ->with(['defaultShiftTemplate' => fn ($q) => $q->withoutGlobalScope('entity')])
+            ->get(['id', 'entity_id', 'firstname', 'middlename', 'lastname', 'break_start', 'default_shift_template_id'])
+            ->map(function (Employee $e) {
+                $window = $this->presetWindow($e->break_start, $this->regularShift($e->defaultShiftTemplate, $e->entity_id));
+
+                return $window ? ['id' => $e->id, 'entity_id' => $e->entity_id, 'name' => $e->name, 'break_start' => $window[0], 'break_end' => $window[1]] : null;
+            })
+            ->filter()
+            ->values()
+            ->all();
     }
 
     /**
@@ -448,6 +521,7 @@ class EmployeesController extends Controller
             'default_shift_template_id' => ['nullable', 'integer', Rule::exists('shift_templates', 'id')->where(fn ($q) => $q->where('entity_id', $entityId)->orWhereNull('entity_id'))],
             'rest_days' => ['nullable', 'array'],
             'rest_days.*' => ['integer', 'between:0,6'],
+            'break_start' => ['nullable', 'date_format:H:i,H:i:s'],
             'leave_type_scope' => ['nullable', 'in:all,custom'],
             'leave_type_ids' => ['nullable', 'array'],
             'leave_type_ids.*' => ['integer', 'exists:leave_types,id'],
@@ -459,9 +533,15 @@ class EmployeesController extends Controller
             'philhealth_number' => ['nullable', 'string', 'max:50'],
             'pagibig_number' => ['nullable', 'string', 'max:50'],
             'tin' => ['nullable', 'string', 'max:50'],
-            'bank_name' => ['nullable', 'string', 'max:100'],
             'bank_account_name' => ['nullable', 'string', 'max:150'],
             'bank_account_no' => ['nullable', 'string', 'max:50'],
+            // The payroll bank: an active bank account the employee's company holds or shares. Pay is released from
+            // it to the employee's account at the same bank; none = paid in cash or cheque.
+            'charge_bank_account_id' => ['nullable', 'integer', function (string $attribute, mixed $value, \Closure $fail) use ($entityId) {
+                if (! BankAccount::query()->withoutGlobalScope('entity')->usableBy((int) $entityId)->where('is_active', true)->whereKey($value)->exists()) {
+                    $fail('Choose one of the bank accounts registered for the employee\'s company.');
+                }
+            }],
             'is_active' => ['boolean'],
             'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'remove_avatar' => ['nullable', 'boolean'],
@@ -473,6 +553,7 @@ class EmployeesController extends Controller
             'separation_date.required_if' => 'A separation date is required for separated employees.',
             'regularization_date.after_or_equal' => 'Regularization date cannot be earlier than the hire date.',
             'separation_date.after_or_equal' => 'Separation date cannot be earlier than the hire date.',
+            'break_start.date_format' => 'Enter the break time as hours and minutes, e.g. 12:00.',
             'birth_date.before_or_equal' => 'The employee must be at least '.Employee::MIN_WORKING_AGE.' years old (RA 9231).',
             'account.required' => 'Every employee needs a login: create one or link an existing user.',
             'username.unique' => 'This username is already taken.',
@@ -486,6 +567,11 @@ class EmployeesController extends Controller
         $restDays = array_values(array_unique(array_map('intval', $data['rest_days'] ?? [])));
         sort($restDays);
         $data['rest_days'] = $restDays !== [] ? $restDays : null;
+
+        // The preset break must lie within the employee's regular shift; the shift decides its length.
+        if (array_key_exists('break_start', $data)) {
+            $data['break_start'] = $this->presetBreak($data['break_start'], $data['default_shift_template_id'] ?? null);
+        }
 
         // "All" is stored as NULL so leave types added later are enabled automatically.
         $data['leave_type_ids'] = ($data['leave_type_scope'] ?? 'all') === 'custom'
@@ -503,6 +589,13 @@ class EmployeesController extends Controller
             $data['contribution_settings'] = $this->contributionSettings($data['contribution_settings'] ?? []);
         }
 
+        // The employee's bank is the payroll bank's: their account is held at the registered bank pay is released from.
+        if (array_key_exists('charge_bank_account_id', $data)) {
+            $data['bank_name'] = $data['charge_bank_account_id']
+                ? BankAccount::query()->withoutGlobalScope('entity')->whereKey($data['charge_bank_account_id'])->value('bank_name')
+                : null;
+        }
+
         // Separated staff can never be scheduled or paid; clear stale separation dates otherwise.
         if ($data['employment_status'] === 'separated') {
             $data['is_active'] = false;
@@ -512,5 +605,30 @@ class EmployeesController extends Controller
         }
 
         return $data;
+    }
+
+    /**
+     * The preset break start (H:i:s), or null for none. Refused when the hour does not fit the regular shift.
+     */
+    private function presetBreak(?string $breakStart, ?int $templateId): ?string
+    {
+        if (blank($breakStart)) {
+            return null;
+        }
+
+        $shift = $this->regularShift($templateId ? ShiftTemplate::query()->withoutGlobalScope('entity')->find($templateId) : null, app(EntityContext::class)->id());
+        $window = $this->presetWindow($breakStart, $shift);
+
+        if ($window === null) {
+            $range = Carbon::parse($shift['start'])->format('g:i A').' – '.Carbon::parse($shift['end'])->format('g:i A');
+            $minutes = WorkSchedule::presetBreakMinutes();
+            $length = $minutes === 60 ? '1-hour' : "{$minutes}-minute";
+
+            throw ValidationException::withMessages(['break_start' => $shift['break_minutes'] > 0
+                ? "The {$length} break must fit within the shift ({$range})."
+                : 'This shift has no unpaid break. Leave the break time blank or choose a shift with one.']);
+        }
+
+        return $window[0];
     }
 }

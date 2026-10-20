@@ -48,11 +48,11 @@ class DemoDataSeeder extends Seeder
             $employeeUser->entities()->syncWithoutDetaching([$jamOpticus->id, $aJamora->id, $alJamora->id]);
         }
 
-        // Each entity has its own bank accounts (see BankAccountSeeder).
+        // Four accounts shared by JAM Opticus and A. Jamora Optical, one dedicated to AL Jamora (see BankAccountSeeder).
         $bankAccounts = BankAccount::query()->withoutGlobalScope('entity')->get()->keyBy('code');
-        $bdoShared = $bankAccounts['JAM-BDO'] ?? $bankAccounts->first();
-        $bpiShared = $bankAccounts['AJO-BPI'] ?? $bankAccounts->first();
-        $bdoAlJamora = $bankAccounts['ALJ-BDO'] ?? $bankAccounts->first();
+        $bdoShared = $bankAccounts['BANK1'] ?? $bankAccounts->first();
+        $bpiShared = $bankAccounts['BANK2'] ?? $bankAccounts->first();
+        $bdoAlJamora = $bankAccounts['BANK5'] ?? $bankAccounts->first();
 
         // 1. Partners (Customers / Patients)
         $cust1 = Partner::firstOrCreate(

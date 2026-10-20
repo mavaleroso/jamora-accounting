@@ -80,7 +80,8 @@ export function initializeAppLayout() {
 
 /** Sidebar vs top-navbar shell. Employees default to the top navbar until they pick a layout themselves. */
 export function useAppLayout() {
-    const isEmployee = usePage<SharedData>().props.auth?.user?.roles?.includes('Employee') ?? false;
+    const { auth } = usePage<SharedData>().props;
+    const isEmployee = (auth?.user?.roles?.includes('Employee') ?? false) || auth?.viewMode === 'employee';
     const fallback: AppLayoutMode = isEmployee ? 'navbar' : layoutStore.fallback;
     const layout = useSyncExternalStore(
         layoutStore.subscribe,

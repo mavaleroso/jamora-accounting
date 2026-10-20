@@ -17,18 +17,22 @@ enum RoleEnum: string
     /**
      * Sign-offs the Accountant prepares for but the owner gives: approving manual journal entries,
      * approving and releasing payroll, verifying statutory filings, closing / reopening periods, voiding posted entries,
-     * plus user and access administration and the audit trail that oversees the Accountant.
+     * deciding on employees' requests and handling them for employees,
+     * plus user and access administration, company-wide system settings and the audit trail that oversees the Accountant.
      */
     public const OWNER_ONLY = [
         'admin.users.manage',
         'admin.roles-permissions.manage',
         'admin.audit-trails.view',
+        'admin.system-settings.manage',
         'journals.approve',
         'journals.void',
         'periods.close',
         'periods.reopen',
         'payroll.run',
         'compliance.verify',
+        'requests.approve',
+        'requests.manage',
     ];
 
     /** Self-service keys a reviewer outside the company has no use for. */
@@ -45,8 +49,8 @@ enum RoleEnum: string
 
         return array_values(match ($this) {
             self::Admin => $all,
-            // Everything day to day, including filing own leave and clocking in; own requests are
-            // reviewed by someone else (the services refuse self-approval).
+            // Everything day to day, including filing own leave and clocking in. Employees' requests, own
+            // included, are decided by the owner.
             self::Accountant => array_diff($all, self::OWNER_ONLY),
             // Sees everything and signs off filings as the second person. Its only change to the books
             // is drafting adjusting entries, which reach the ledger when the owner approves them.

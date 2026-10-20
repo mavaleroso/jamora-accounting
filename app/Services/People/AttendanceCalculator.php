@@ -8,6 +8,8 @@ use App\Models\Employee;
 use App\Models\Holiday;
 use App\Models\LeaveRequest;
 use App\Models\ShiftRoster;
+use App\Models\ShiftTemplate;
+use App\Support\SystemSettings;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Validation\ValidationException;
@@ -17,19 +19,23 @@ use Illuminate\Validation\ValidationException;
  * CSV imports, corrections and the daily close).
  *
  * Rules (PH Labor Code / DOLE + company policy in config/people.php):
- *  - Schedule = published roster > employee default shift template > config default shift.
+ *  - Schedule = published roster > employee's own shift > the company's default shift (shift library, else config).
  *  - Tardiness counts from scheduled start once the grace period is exceeded.
  *  - Undertime = minutes left before scheduled end.
  *  - Regular hours are capped at the scheduled net hours and 8 hours (Art. 83).
- *  - OT rendered = work after scheduled end (min threshold, floored to blocks). Payable OT
- *    (ot_hours_approved) = all OT rendered on a day that has an approved overtime request.
- *    The request authorises overtime; the time clock decides how many hours.
- *  - Night differential = hours worked between 22:00 and 06:00 (Art. 86).
+ *  - OT rendered = work after regular hours end (scheduled end; the 8th hour on rest days and holidays),
+ *    starting after the unpaid break before OT and stopping at the OT ceiling (System Settings), with a
+ *    min threshold and floored to blocks. Payable OT (ot_hours_approved) = all OT rendered on a day that
+ *    has an approved overtime request. The request authorises overtime; the time clock decides how many hours.
+ *  - Night differential = hours worked between 22:00 and 06:00 (Art. 86), less unpaid breaks and time past
+ *    the OT ceiling.
  *  - Day type combines rest day and holiday for premium computation.
  */
 class AttendanceCalculator
 {
     public const WORKED_STATUSES = ['present', 'late', 'undertime'];
+
+    public function __construct(protected SystemSettings $settings) {}
 
     /**
      * Resolve the effective schedule for an employee on a date.
@@ -47,7 +53,7 @@ class AttendanceCalculator
             ->first();
 
         if ($roster) {
-            return new WorkSchedule(
+            return $this->withPresetBreak($employee, new WorkSchedule(
                 $roster->id,
                 (string) $roster->shift_name,
                 $roster->is_rest_day ? null : $this->normalizeTime($roster->shift_start),
@@ -56,7 +62,7 @@ class AttendanceCalculator
                 (int) ($roster->grace_minutes ?? 5),
                 (bool) $roster->is_rest_day,
                 'roster',
-            );
+            ));
         }
 
         $isRestDay = in_array($date->dayOfWeek, $employee->restDayNumbers(), true);
@@ -65,7 +71,7 @@ class AttendanceCalculator
             : null;
 
         if ($template) {
-            return new WorkSchedule(
+            return $this->withPresetBreak($employee, new WorkSchedule(
                 null,
                 $isRestDay ? 'Rest Day' : $template->name,
                 $isRestDay ? null : $this->normalizeTime($template->start_time),
@@ -74,20 +80,44 @@ class AttendanceCalculator
                 (int) $template->grace_minutes,
                 $isRestDay,
                 'template',
-            );
+            ));
         }
 
-        $default = config('people.default_shift');
+        // The company's default shift in its shift library (else the configured one).
+        $default = ShiftTemplate::defaultShift($employee->entity_id);
 
-        return new WorkSchedule(
+        return $this->withPresetBreak($employee, new WorkSchedule(
             null,
             $isRestDay ? 'Rest Day' : $default['name'],
-            $isRestDay ? null : $default['start'],
-            $isRestDay ? null : $default['end'],
-            (int) $default['break_minutes'],
-            (int) $default['grace_minutes'],
+            $isRestDay ? null : $this->normalizeTime($default['start']),
+            $isRestDay ? null : $this->normalizeTime($default['end']),
+            $default['break_minutes'],
+            $default['grace_minutes'],
             $isRestDay,
             'default',
+        ));
+    }
+
+    /**
+     * The schedule with the employee's preset break (exactly an hour), when the day's shift has a break and the
+     * preset fits within it.
+     */
+    protected function withPresetBreak(Employee $employee, WorkSchedule $schedule): WorkSchedule
+    {
+        $window = $schedule->isRestDay || $schedule->breakMinutes <= 0
+            ? null
+            : WorkSchedule::fitBreak($employee->break_start, $schedule->start, $schedule->end, WorkSchedule::presetBreakMinutes());
+
+        return $window === null ? $schedule : new WorkSchedule(
+            $schedule->rosterId,
+            $schedule->shiftName,
+            $schedule->start,
+            $schedule->end,
+            $schedule->breakMinutes,
+            $schedule->graceMinutes,
+            $schedule->isRestDay,
+            $schedule->source,
+            ...$window,
         );
     }
 
@@ -227,23 +257,36 @@ class AttendanceCalculator
         [$breakMinutes, $breakStart, $breakEnd] = $this->breakWindow($dtr, $dateStr, $in, $spanMinutes, $scheduledBreak);
         $workedMinutes = max(0, $spanMinutes - $breakMinutes);
         $regularCap = (int) config('people.timekeeping.regular_hours_per_day', 8) * 60;
+        // When regular hours end, so overtime can follow; null when the day has none to follow.
+        $regularEnd = null;
 
         if ($isWorkingDay && $schedIn && $schedOut) {
             $tardiness = $this->lateMinutes($in, $schedIn, $schedule->graceMinutes);
             $undertime = $out->lt($schedOut) ? (int) $out->diffInMinutes($schedOut) : 0;
             $scheduledNet = max(0, $schedIn->diffInMinutes($schedOut) - $scheduledBreak);
             $regularMinutes = min($workedMinutes, $scheduledNet ?: $regularCap, $regularCap);
-
-            $otStart = $in->gt($schedOut) ? $in : $schedOut;
-            $otMinutes = $out->gt($otStart) ? (int) $otStart->diffInMinutes($out) : 0;
+            $regularEnd = $schedOut;
         } else {
             // Rest day / holiday work: first 8 hours at day premium, excess is OT.
             $regularMinutes = min($workedMinutes, $regularCap);
-            $otMinutes = max(0, $workedMinutes - $regularCap);
+            if ($workedMinutes > $regularCap) {
+                // The 8th hour ends this long after check-in, the unpaid meal break included.
+                $regularEnd = $in->copy()->addMinutes($regularCap + $breakMinutes);
+            }
+        }
+
+        $unpaid = $breakStart && $breakEnd ? [[$breakStart, $breakEnd]] : [];
+        $workEnd = $out;
+        if ($regularEnd) {
+            [$otStart, $otEnd] = $this->otWindow($regularEnd, $in, $out);
+            $otMinutes = $otEnd->gt($otStart) ? (int) $otStart->diffInMinutes($otEnd) : 0;
+            // The break before OT is unpaid and nothing past the ceiling counts, night differential included.
+            $unpaid[] = [$regularEnd, $otStart];
+            $workEnd = $otEnd;
         }
 
         $otMinutes = $this->applyOtPolicy($otMinutes);
-        $ndMinutes = $this->nightDiffMinutes($in, $out, $breakStart, $breakEnd);
+        $ndMinutes = $this->nightDiffMinutes($in, $workEnd, $unpaid);
 
         $status = 'present';
         if ($tardiness > 0) {
@@ -530,10 +573,84 @@ class AttendanceCalculator
         return intdiv($otMinutes, $block) * $block;
     }
 
-    protected function nightDiffMinutes(Carbon $in, Carbon $out, ?Carbon $breakStart, ?Carbon $breakEnd): int
+    /**
+     * When overtime can be counted once regular hours end: after the unpaid break before overtime, and up
+     * to the ceiling (the first time that time of day comes round after regular hours end), within the punches.
+     * Both are set in System Settings.
+     *
+     * @return array{0:Carbon,1:Carbon} [start, end]; no overtime when end is not after start
+     */
+    protected function otWindow(Carbon $regularEnd, Carbon $in, Carbon $out): array
+    {
+        $start = $regularEnd->copy()->addMinutes($this->settings->overtimeBreakMinutes());
+        if ($in->gt($start)) {
+            $start = $in->copy();
+        }
+
+        $end = $out->copy();
+        if ($ceiling = $this->settings->overtimeCeiling()) {
+            $cap = Carbon::parse($regularEnd->toDateString().' '.$ceiling);
+            if ($cap->lte($regularEnd)) {
+                $cap->addDay();
+            }
+            if ($cap->lt($end)) {
+                $end = $cap;
+            }
+        }
+
+        return [$start, $end];
+    }
+
+    /**
+     * Recompute every time record payroll has not locked yet (of the given employees, else everyone's), so the
+     * cut-off in progress follows a policy or shift just changed. Saves only the records whose figures change.
+     *
+     * @param  list<int>|null  $employeeIds
+     * @return int records changed
+     */
+    public function recomputeUnlocked(?array $employeeIds = null): int
+    {
+        $changed = 0;
+        if ($employeeIds === []) {
+            return 0;
+        }
+
+        DtrEntry::query()
+            ->withoutEntityScope()
+            ->when($employeeIds !== null, fn ($q) => $q->whereIn('employee_id', $employeeIds))
+            ->where(fn ($q) => $q->whereNull('status')->orWhere('status', '!=', DtrEntry::STATUS_LOCKED))
+            ->whereNotNull('time_in')
+            ->whereNotNull('time_out')
+            ->with(['employee' => fn ($q) => $q->withoutEntityScope()])
+            ->lazyById(200)
+            ->each(function (DtrEntry $dtr) use (&$changed) {
+                if (! $dtr->employee) {
+                    return;
+                }
+
+                $this->compute($dtr, $dtr->employee);
+                if ($dtr->isDirty()) {
+                    $dtr->save();
+                    $changed++;
+                }
+            });
+
+        return $changed;
+    }
+
+    /**
+     * @param  list<array{0:Carbon,1:Carbon}>  $unpaid  breaks within the day that are not worked time
+     */
+    protected function nightDiffMinutes(Carbon $in, Carbon $out, array $unpaid = []): int
     {
         $ndStart = (string) config('people.timekeeping.night_diff_start', '22:00');
         $ndEnd = (string) config('people.timekeeping.night_diff_end', '06:00');
+
+        // Only the part of a break between check-in and the end of counted work was counted as worked.
+        $unpaid = array_filter(array_map(
+            fn (array $gap) => [$gap[0]->gt($in) ? $gap[0] : $in, $gap[1]->lt($out) ? $gap[1] : $out],
+            $unpaid,
+        ), fn (array $gap) => $gap[1]->gt($gap[0]));
 
         $total = 0;
         $cursor = $in->copy()->subDay()->startOfDay();
@@ -547,8 +664,8 @@ class AttendanceCalculator
             }
 
             $total += $this->overlap($in, $out, $wStart, $wEnd);
-            if ($breakStart && $breakEnd) {
-                $total -= $this->overlap($breakStart, $breakEnd, $wStart, $wEnd);
+            foreach ($unpaid as [$from, $to]) {
+                $total -= $this->overlap($from, $to, $wStart, $wEnd);
             }
 
             $cursor->addDay();

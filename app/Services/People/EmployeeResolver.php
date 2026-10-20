@@ -5,6 +5,7 @@ namespace App\Services\People;
 use App\Models\Employee;
 use App\Models\User;
 use App\Support\EntityContext;
+use App\Support\ViewMode;
 
 /**
  * Resolves the employee record linked to a user within the current entity.
@@ -42,9 +43,19 @@ class EmployeeResolver
         return (clone $base)->whereNull('user_id')->where('email', $user->email)->first();
     }
 
+    /**
+     * Whether the user holds any of these permissions as such. Unlike isHr(), payroll.manage does not stand in for
+     * them: deciding on and handling employees' requests (requests.approve, requests.manage) are the owner's.
+     */
+    public function may(?User $user, string ...$abilities): bool
+    {
+        return $user !== null && ! app(ViewMode::class)->asEmployee($user) && $user->canAny($abilities);
+    }
+
     public function isHr(?User $user, string $ability = 'payroll.manage'): bool
     {
-        if (! $user) {
+        // An Admin in the employee view uses the self-service side, as any employee does.
+        if (! $user || app(ViewMode::class)->asEmployee($user)) {
             return false;
         }
 

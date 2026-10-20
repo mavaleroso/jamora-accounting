@@ -16,7 +16,7 @@ beforeEach(function () {
     Carbon::setTestNow('2026-10-14 10:30:00'); // Wednesday
     $this->entity = Entity::create(['code' => 'DSH', 'name' => 'Dashboard Clinic', 'is_active' => true]);
 
-    foreach (['attendance.view', 'attendance.manage', 'leave.approve', 'payroll.view', 'compliance.view', 'portal.view'] as $p) {
+    foreach (['attendance.view', 'attendance.manage', 'requests.approve', 'requests.manage', 'payroll.view', 'compliance.view', 'portal.view'] as $p) {
         Permission::findOrCreate($p, 'web');
     }
     $make = function (array $permissions) {
@@ -26,8 +26,8 @@ beforeEach(function () {
 
         return $u;
     };
-    $this->hr = $make(['attendance.manage', 'leave.approve', 'payroll.view', 'compliance.view']);
-    $this->approver = $make(['leave.approve']);
+    $this->hr = $make(['attendance.manage', 'requests.approve', 'requests.manage', 'payroll.view', 'compliance.view']);
+    $this->approver = $make(['requests.approve', 'requests.manage']);
     $this->staff = $make(['attendance.view', 'portal.view']);
 
     $emp = fn (string $code, string $first, array $a = []) => Employee::create([

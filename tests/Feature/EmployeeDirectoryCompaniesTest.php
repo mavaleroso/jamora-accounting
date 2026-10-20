@@ -23,7 +23,8 @@ beforeEach(function () {
     Permission::findOrCreate('libraries.employees.manage', 'web');
     Role::findOrCreate('Employee', 'web');
     $this->hr = User::factory()->create();
-    $this->hr->assignRole(Role::findOrCreate('Accountant', 'web')->syncPermissions(['libraries.employees.manage']));
+    // An HR clerk; the Admin and the Accountant list every company (AdminCompanyAccessTest).
+    $this->hr->assignRole(Role::findOrCreate('HR Clerk', 'web')->syncPermissions(['libraries.employees.manage']));
     $this->hr->entities()->attach($this->aj->id, ['is_default' => true]);
     $this->hr->entities()->attach($this->jam->id, ['is_default' => false]);
 

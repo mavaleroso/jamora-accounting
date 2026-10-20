@@ -32,6 +32,9 @@ type Day = {
     start: string | null;
     end: string | null;
     break_minutes: number;
+    /** The employee's preset break that day, when one is set and fits the shift. */
+    break_start: string | null;
+    break_end: string | null;
     grace_minutes: number;
     is_rest_day: boolean;
     source: 'roster' | 'template' | 'default';
@@ -238,7 +241,13 @@ function DayRow({ day, can }: { day: Day; can: Props['can'] }) {
                     {hasShift && !(day.leave && !day.leave.half_day) && (
                         <>
                             <span>{day.shift_name}</span>
-                            {day.break_minutes > 0 && <span>{fmtMinutes(day.break_minutes)} break</span>}
+                            {day.break_minutes > 0 && (
+                                <span>
+                                    {day.break_start
+                                        ? `Break ${fmtTime(day.break_start)} – ${fmtTime(day.break_end)}`
+                                        : `${fmtMinutes(day.break_minutes)} break`}
+                                </span>
+                            )}
                             {day.grace_minutes > 0 && <span>{day.grace_minutes} min grace</span>}
                             {day.scheduled_minutes > 0 && <span>{fmtMinutes(day.scheduled_minutes)} scheduled</span>}
                         </>

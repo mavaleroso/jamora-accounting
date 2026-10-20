@@ -6,6 +6,12 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets;
+use Illuminate\Support\Env;
+
+// Keep this app's .env values to its own request, out of the process environment. Under a threaded server (Apache
+// mod_php on Windows) every site shares one process, so putenv() would let one app's .env leak into another's request,
+// e.g. optical-new's password check reading this app's database.
+Env::disablePutenv();
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(

@@ -2,10 +2,10 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\Entity;
 use App\Models\User;
 use App\Services\People\EmployeeResolver;
 use App\Support\EntityContext;
+use App\Support\ViewMode;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -29,9 +29,8 @@ class HandleInertiaRequests extends Middleware
 
         $available = [];
         if ($user) {
-            $available = $user->hasRole('Admin')
-                ? Entity::query()->where('is_active', true)->orderBy('name')->get(['id', 'code', 'name'])
-                : $user->entities()->where('entities.is_active', true)->orderBy('entities.name')->get(['entities.id', 'entities.code', 'entities.name']);
+            // The company switcher: every company the user can open (an Admin, every one).
+            $available = $user->accessibleEntities()->orderBy('entities.name')->get(['entities.id', 'entities.code', 'entities.name']);
         }
 
         return [
@@ -51,6 +50,8 @@ class HandleInertiaRequests extends Middleware
                         'employee_id' => app(EmployeeResolver::class)->forUser($user, $current?->id)?->id,
                     ]
                 ) : null,
+                // An Admin who is also an employee: "admin" or "employee", the view in use. Null for everyone else.
+                'viewMode' => app(ViewMode::class)->current($user),
             ],
             'entity' => [
                 'current' => $current ? [

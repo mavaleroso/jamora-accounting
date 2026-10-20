@@ -352,9 +352,10 @@ class JournalPostingService
 
     protected function resolveOpenPeriod(string $date): AccountingPeriod
     {
+        // Compared as dates: a stored "Y-m-d 00:00:00" must still cover the 1st of the month.
         $period = AccountingPeriod::query()
-            ->where('start_date', '<=', $date)
-            ->where('end_date', '>=', $date)
+            ->whereDate('start_date', '<=', $date)
+            ->whereDate('end_date', '>=', $date)
             ->where('status', 'open')
             ->first();
 

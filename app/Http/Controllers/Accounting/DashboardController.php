@@ -66,8 +66,8 @@ class DashboardController extends Controller
 
         $openPeriod = AccountingPeriod::query()
             ->where('status', 'open')
-            ->where('start_date', '<=', $now->toDateString())
-            ->where('end_date', '>=', $now->toDateString())
+            ->whereDate('start_date', '<=', $now->toDateString())
+            ->whereDate('end_date', '>=', $now->toDateString())
             ->orderBy('start_date')
             ->first();
 

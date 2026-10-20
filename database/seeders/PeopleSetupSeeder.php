@@ -51,57 +51,15 @@ class PeopleSetupSeeder extends Seeder
             }
         }
 
-        // 3. Seed Shift Templates for Entities
-        $entities = Entity::all();
-        foreach ($entities as $entity) {
-            $regularShift = ShiftTemplate::updateOrCreate(
-                ['entity_id' => $entity->id, 'code' => 'REG-0817'],
-                [
-                    'name' => 'Regular Clinic Shift (8:00 AM - 5:00 PM)',
-                    'start_time' => '08:00:00',
-                    'end_time' => '17:00:00',
-                    'break_minutes' => 60,
-                    'grace_minutes' => 5,
-                    'color' => '#3b82f6',
-                    'is_active' => true,
-                ]
-            );
-
-            ShiftTemplate::updateOrCreate(
-                ['entity_id' => $entity->id, 'code' => 'MALL-1019'],
-                [
-                    'name' => 'Mall Clinic Shift (10:00 AM - 7:00 PM)',
-                    'start_time' => '10:00:00',
-                    'end_time' => '19:00:00',
-                    'break_minutes' => 60,
-                    'grace_minutes' => 5,
-                    'color' => '#10b981',
-                    'is_active' => true,
-                ]
-            );
-
-            ShiftTemplate::updateOrCreate(
-                ['entity_id' => $entity->id, 'code' => 'CLOSE-1221'],
-                [
-                    'name' => 'Afternoon Closing Shift (12:00 PM - 9:00 PM)',
-                    'start_time' => '12:00:00',
-                    'end_time' => '21:00:00',
-                    'break_minutes' => 60,
-                    'grace_minutes' => 5,
-                    'color' => '#8b5cf6',
-                    'is_active' => true,
-                ]
-            );
-
-            // Assign default template and rest days to active employees if not already set
-            Employee::withoutEntityScope()
-                ->where('entity_id', $entity->id)
-                ->whereNull('default_shift_template_id')
-                ->update([
-                    'default_shift_template_id' => $regularShift->id,
-                    'rest_days' => json_encode([0]), // Sunday off
-                ]);
+        // 3. Shifts: each company's shift library starts with its default shift (config people.default_shift, 9:00 AM -
+        // 6:00 PM), the one every employee works; more are added in Libraries › Shifts. Employees without rest days get
+        // the company default.
+        foreach (Entity::query()->pluck('id') as $entityId) {
+            ShiftTemplate::ensureDefault((int) $entityId);
         }
+        Employee::withoutEntityScope()
+            ->whereNull('rest_days')
+            ->update(['rest_days' => json_encode(config('people.default_rest_days', [0]))]);
 
         // 4. Seed Standard Statutory Benefit Programs (global or per entity)
         BenefitProgram::updateOrCreate(

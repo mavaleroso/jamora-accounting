@@ -6,11 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { describeOvertime, type OvertimePolicy } from '@/lib/overtime-policy';
 import { cn } from '@/lib/utils';
 import { useForm } from '@inertiajs/react';
 import { ArrowLeft, Info, Loader2, Paperclip } from 'lucide-react';
 import * as React from 'react';
 import {
+    fmtDate,
     fmtDays,
     fullName,
     KINDS,
@@ -39,6 +41,8 @@ type Props = {
     onBehalf: { leave: boolean; attendance: boolean };
     employees: (Person & LeaveEligibility)[];
     today: string;
+    /** When approved overtime counts, explained on the overtime form. */
+    overtimePolicy: OvertimePolicy;
     /** Pre-fills the request's date(s), e.g. when opened from My Schedule for a specific day. */
     initialDate?: string;
 };
@@ -98,6 +102,43 @@ function Field({
     );
 }
 
+/** A PDF or photo to back a request (medical certificate, travel order...), up to 5 MB. */
+function AttachmentField({
+    label,
+    hint,
+    file,
+    error,
+    onChange,
+}: {
+    label: string;
+    hint: string;
+    file: File | null;
+    error?: string;
+    onChange: (file: File | null) => void;
+}) {
+    return (
+        <Field label={label} error={error} hint={hint}>
+            <label className="text-muted-foreground hover:bg-muted/40 flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm">
+                <Paperclip className="size-4" />
+                <span className="truncate">{file ? file.name : 'Attach a file'}</span>
+                <input
+                    type="file"
+                    className="sr-only"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp,.heic"
+                    onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+                />
+            </label>
+        </Field>
+    );
+}
+
+/** "2026-10-20" + 5 days -> "2026-10-25" (dates as typed, no time zone shift). */
+const addDays = (iso: string, days: number) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d + days));
+    return date.toISOString().slice(0, 10);
+};
+
 const daysBetween = (from: string, to: string) => {
     if (!from || !to || to < from) return 0;
     return Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1;
@@ -108,7 +149,7 @@ const FIELDS: Record<Kind, string[]> = {
     leave: ['leave_type_id', 'start_date', 'end_date', 'half_day', 'attachment'],
     overtime: ['work_date'],
     correction: ['work_date', 'requested_time_in', 'requested_break_out', 'requested_break_in', 'requested_time_out'],
-    official_business: ['work_date', 'destination'],
+    official_business: ['work_date', 'destination', 'attachment'],
     undertime: ['work_date', 'requested_time_out'],
     schedule_change: ['work_date', 'requested_rest_day', 'requested_time_in', 'requested_time_out'],
 };
@@ -130,6 +171,7 @@ function RequestForm({
     onBehalf,
     employees,
     today,
+    overtimePolicy,
     initialDate,
     onBack,
     onDone,
@@ -252,7 +294,20 @@ function RequestForm({
                         </div>
                     )}
                     <Field label="Leave type" error={err.leave_type_id}>
-                        <Select value={data.leave_type_id} onValueChange={(v) => setData('leave_type_id', v)} disabled={types.length === 0}>
+                        <Select
+                            value={data.leave_type_id}
+                            onValueChange={(v) => {
+                                // Leave that must be filed ahead can't start before its earliest date.
+                                const notice = types.find((t) => String(t.id) === v)?.min_notice_days ?? 0;
+                                const first = notice > 0 ? addDays(today, notice) : null;
+                                setData((d) => ({
+                                    ...d,
+                                    leave_type_id: v,
+                                    ...(first && d.start_date < first ? { start_date: first, end_date: d.end_date < first ? first : d.end_date } : {}),
+                                }));
+                            }}
+                            disabled={types.length === 0}
+                        >
                             <SelectTrigger>
                                 <SelectValue placeholder="Select leave type" />
                             </SelectTrigger>
@@ -280,10 +335,15 @@ function RequestForm({
                     {type && <LeavePolicy type={type} balance={balance} />}
 
                     <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label="First day" error={err.start_date}>
+                        <Field
+                            label="First day"
+                            error={err.start_date}
+                            hint={type && type.min_notice_days > 0 ? `Earliest: ${fmtDate(addDays(today, type.min_notice_days))}` : undefined}
+                        >
                             <Input
                                 type="date"
                                 value={data.start_date}
+                                min={type && type.min_notice_days > 0 ? addDays(today, type.min_notice_days) : undefined}
                                 onChange={(e) => {
                                     const v = e.target.value;
                                     setData((d) => ({ ...d, start_date: v, end_date: d.end_date < v ? v : d.end_date }));
@@ -328,22 +388,13 @@ function RequestForm({
                         </p>
                     )}
 
-                    <Field
+                    <AttachmentField
                         label={type && type.attachment_required_after_days !== null ? 'Supporting document' : 'Supporting document (optional)'}
-                        error={err.attachment}
                         hint="PDF or photo, up to 5 MB — e.g. medical certificate, birth or death certificate."
-                    >
-                        <label className="text-muted-foreground hover:bg-muted/40 flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm">
-                            <Paperclip className="size-4" />
-                            <span className="truncate">{data.attachment ? data.attachment.name : 'Attach a file'}</span>
-                            <input
-                                type="file"
-                                className="sr-only"
-                                accept=".pdf,.jpg,.jpeg,.png,.webp,.heic"
-                                onChange={(e) => setData('attachment', e.target.files?.[0] ?? null)}
-                            />
-                        </label>
-                    </Field>
+                        file={data.attachment}
+                        error={err.attachment}
+                        onChange={(file) => setData('attachment', file)}
+                    />
                 </>
             )}
 
@@ -372,7 +423,8 @@ function RequestForm({
 
             {kind === 'overtime' && (
                 <p className={cn('rounded-md border px-3 py-2 text-xs', TONE.blue)}>
-                    No need to estimate hours. Once approved, you are paid for the overtime the time clock records after your shift ends that day.
+                    No need to estimate hours. Once approved, you are paid for the overtime the time clock records that day.{' '}
+                    {describeOvertime(overtimePolicy)}
                 </p>
             )}
 
@@ -406,6 +458,13 @@ function RequestForm({
                             placeholder="e.g. BIR RDO 47, East Makati"
                         />
                     </Field>
+                    <AttachmentField
+                        label="Supporting document (optional)"
+                        hint="PDF or photo, up to 5 MB — e.g. travel order, invitation, memo or receipt."
+                        file={data.attachment}
+                        error={err.attachment}
+                        onChange={(file) => setData('attachment', file)}
+                    />
                     <p className={cn('rounded-md border px-3 py-2 text-xs', TONE.emerald)}>
                         Covers the whole day. Once approved, your full shift counts as worked and you don’t need to check in or out.
                     </p>

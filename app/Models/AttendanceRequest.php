@@ -65,7 +65,7 @@ class AttendanceRequest extends Model
         'entity_id', 'employee_id', 'dtr_entry_id', 'request_type', 'work_date',
         'requested_time_in', 'requested_break_out', 'requested_break_in', 'requested_time_out',
         'requested_ot_hours', 'destination', 'requested_rest_day',
-        'reason', 'status', 'filed_by', 'reviewed_by', 'reviewed_at', 'review_remarks',
+        'reason', 'attachment_path', 'status', 'filed_by', 'reviewed_by', 'reviewed_at', 'review_remarks',
     ];
 
     protected function casts(): array

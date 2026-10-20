@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/compon
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { UserInfo } from '@/components/user-info';
 import { UserMenuContent } from '@/components/user-menu-content';
+import { ViewModeSwitch } from '@/components/view-mode-switch';
 import { useContentWidth } from '@/hooks/use-app-layout';
 import { shellContainerClass } from '@/lib/app-shell-layout';
 import { APP_BRAND } from '@/lib/entities';
@@ -110,6 +111,7 @@ export function AppHeader({ breadcrumbs = [] }: Props) {
                         )}
                     </div>
                     {isEntityScopedPath(url) && <EntitySwitcher variant="header" />}
+                    <ViewModeSwitch />
                     <AppearanceToggle />
                     <LayoutToggleDropdown />
                 </div>

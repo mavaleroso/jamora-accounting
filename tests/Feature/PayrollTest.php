@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\BankAccount;
+use App\Models\BankTransaction;
 use App\Models\BenefitProgram;
 use App\Models\DtrEntry;
 use App\Models\Employee;
@@ -10,6 +12,7 @@ use App\Models\PayrollRun;
 use App\Models\Payslip;
 use App\Models\User;
 use App\Services\Payroll\PayrollCalculator;
+use App\Support\ChartOfAccounts;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Database\Seeders\AccountingSetupSeeder;
@@ -167,8 +170,10 @@ test('draft, adjust, approve, post, release — end to end', function () {
         ->and($byCode['2440'])->toBe(-500.0)
         ->and($byCode['6010'])->toBeGreaterThan(0);
 
-    // Employees only see payslips once posted.
-    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15'])->assertSessionHasNoErrors();
+    // Released from a registered bank account of the company; nobody has a payroll bank, so it is chosen here.
+    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15'])->assertSessionHasErrors('bank_account_id');
+    $bank = BankAccount::create(['entity_id' => $this->entity->id, 'code' => 'BDO-PAY', 'name' => 'Payroll', 'bank_name' => 'BDO', 'is_active' => true]);
+    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15', 'bank_account_id' => $bank->id])->assertSessionHasNoErrors();
     expect($run->fresh()->status)->toBe('paid')
         ->and($run->fresh()->payment_journal_entry_id)->not->toBeNull()
         ->and($this->period->fresh()->status)->toBe('paid');
@@ -360,4 +365,90 @@ test('contributions are always computed from the table, unless set to not deduct
 
     $d = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
     expect($d->meta['contribution_modes'])->toBe([]);
+});
+
+test('each employee is paid from their payroll bank, a registered bank account of the company, reviewed before release', function () {
+    $bank = function (Entity $entity, string $code, string $name, string $bankName) {
+        $account = BankAccount::query()->withoutEntityScope()->create(['entity_id' => $entity->id, 'code' => $code, 'name' => $name, 'bank_name' => $bankName, 'account_number' => '0099'.$code, 'is_active' => true]);
+        ChartOfAccounts::ensureBankLedger($account);
+
+        return $account->fresh();
+    };
+    $bdo = $bank($this->entity, '11', 'Payroll BDO', 'BDO');
+    $bpi = $bank($this->entity, '12', 'Operating BPI', 'BPI');
+    $elsewhere = Entity::create(['code' => 'OTHER-BR', 'name' => 'Other Clinic', 'type' => 'branch', 'status' => 'active', 'currency' => 'PHP']);
+    $theirs = $bank($elsewhere, '21', 'Their account', 'BDO');
+
+    // The payroll bank is picked in the Employee Directory from the company's registered accounts only; the employee's
+    // bank follows it.
+    Permission::findOrCreate('libraries.employees.manage', 'web');
+    $this->user->givePermissionTo('libraries.employees.manage');
+    $save = fn (?int $bankId) => ($this->as)()->put("/libraries/employees/{$this->monthly->id}", [
+        'employee_code' => 'E-001', 'firstname' => 'Maria', 'lastname' => 'Santos', 'employment_status' => 'active', 'employment_type' => 'regular',
+        'pay_type' => 'monthly', 'basic_pay' => 30000, 'charge_bank_account_id' => $bankId,
+    ]);
+    $save($theirs->id)->assertSessionHasErrors(['charge_bank_account_id' => "Choose one of the bank accounts registered for the employee's company."]);
+    $save($bpi->id)->assertSessionHasNoErrors();
+    expect($this->monthly->fresh()->only(['charge_bank_account_id', 'bank_name']))->toBe(['charge_bank_account_id' => $bpi->id, 'bank_name' => 'BPI']);
+    $save(null)->assertSessionHasNoErrors(); // cash or cheque
+    expect($this->monthly->fresh()->only(['charge_bank_account_id', 'bank_name']))->toBe(['charge_bank_account_id' => null, 'bank_name' => null]);
+    $save($bdo->id)->assertSessionHasNoErrors();
+    expect($this->monthly->fresh()->only(['charge_bank_account_id', 'bank_name']))->toBe(['charge_bank_account_id' => $bdo->id, 'bank_name' => 'BDO']);
+
+    fillCutoff($this->monthly, $this->daily);
+    ($this->as)()->post("/payroll/runs/periods/{$this->period->id}/compute")->assertSessionHasNoErrors();
+    $run = PayrollRun::firstOrFail();
+    ($this->as)()->post("/payroll/runs/{$run->id}/approve")->assertSessionHasNoErrors();
+    ($this->as)()->post("/payroll/runs/{$run->id}/post")->assertSessionHasNoErrors();
+    $maria = Payslip::where('employee_id', $this->monthly->id)->firstOrFail();
+    $jun = Payslip::where('employee_id', $this->daily->id)->firstOrFail();
+
+    // The review lists each payslip with its preset account (Jun has none), and only this company's accounts.
+    $review = fn () => ($this->as)()->get("/payroll/runs/{$run->id}")->assertOk();
+    $charged = fn ($rows) => collect($rows)->pluck('charge_bank_account_id', 'id')->sortKeys()->all();
+    $byPayslip = fn (array $banks) => collect($banks)->sortKeys()->all();
+    $review()->assertInertia(fn (Assert $page) => $page
+        ->has('bankAccounts', 2)
+        ->where('bankAccounts.0.company', 'Payroll Clinic') // each option names the company it is registered to
+        ->where('payslips', fn ($rows) => $charged($rows) === $byPayslip([$maria->id => $bdo->id, $jun->id => null])));
+
+    // The account picked at release covers only employees without a payroll bank: it is required for them, and must
+    // be registered for this company.
+    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15'])
+        ->assertSessionHasErrors(['bank_account_id' => 'Choose the registered bank account to pay the 1 employee without a payroll bank from.']);
+    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15', 'bank_account_id' => $theirs->id])->assertSessionHasErrors('bank_account_id');
+    ($this->as)()->post("/payroll/runs/{$run->id}/pay", ['paid_on' => '2026-10-15', 'bank_account_id' => $bpi->id])->assertSessionHasNoErrors();
+
+    $run->refresh();
+    $entry = JournalEntry::with('lines')->findOrFail($run->payment_journal_entry_id);
+    $credits = $entry->lines->where('credit', '>', 0)->mapWithKeys(fn ($l) => [$l->account_id => round((float) $l->credit, 2)])->all();
+    expect($credits)->toBe([$bdo->gl_account_id => (float) $maria->net_pay, $bpi->gl_account_id => (float) $jun->net_pay])
+        ->and((float) $entry->total_debit)->toBe(round((float) $maria->net_pay + (float) $jun->net_pay, 2))
+        ->and($entry->memo)->toContain('via Payroll BDO, Operating BPI')
+        ->and($run->bank_account_id)->toBeNull()   // two accounts: each payslip keeps its own
+        ->and($maria->fresh()->charge_bank_account_id)->toBe($bdo->id)
+        ->and($jun->fresh()->charge_bank_account_id)->toBe($bpi->id);
+
+    // Each bank's register shows its part of the release, tagged with the company, ready to reconcile.
+    expect(BankTransaction::query()->withoutGlobalScope('entity')->where('source_type', 'payroll_payment')->orderBy('bank_account_id')->get()
+        ->map(fn (BankTransaction $t) => [$t->bank_account_id, $t->entity_id, $t->direction, (float) $t->amount, $t->journal_entry_id])->all())
+        ->toBe([
+            [$bdo->id, $this->entity->id, 'out', (float) $maria->net_pay, $entry->id],
+            [$bpi->id, $this->entity->id, 'out', (float) $jun->net_pay, $entry->id],
+        ]);
+
+    // Fixed at release: a later change to the preset doesn't rewrite history.
+    $this->monthly->update(['charge_bank_account_id' => $bpi->id]);
+    $review()->assertInertia(fn (Assert $page) => $page
+        ->where('run.timeline.paid.bank', 'Payroll BDO, Operating BPI')
+        ->where('payslips', fn ($rows) => $charged($rows) === $byPayslip([$maria->id => $bdo->id, $jun->id => $bpi->id])));
+
+    // The disbursement list says which account pays whom, grouped by account.
+    $csv = ($this->as)()->get("/payroll/runs/{$run->id}/export/bank")->streamedContent();
+    expect($csv)->toContain('Paid from')->toContain('Payroll BDO')->toContain('Operating BPI');
+
+    // Another company's account, once shared with this company, can be an employee's payroll bank.
+    ChartOfAccounts::ensureBankLedger($theirs, $this->entity->id);
+    $save($theirs->id)->assertSessionHasNoErrors();
+    expect($this->monthly->fresh()->charge_bank_account_id)->toBe($theirs->id);
 });

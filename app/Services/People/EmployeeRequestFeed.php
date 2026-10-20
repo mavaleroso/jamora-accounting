@@ -122,6 +122,7 @@ class EmployeeRequestFeed
                 'time_out' => $a->requested_time_out,
                 'ot_hours' => $a->requested_ot_hours !== null ? (float) $a->requested_ot_hours : null,
                 'destination' => $a->destination,
+                'attachment_url' => $a->attachment_path ? route('employee-management.requests.attendance.attachment', $a->id) : null,
                 'rest_day' => (bool) $a->requested_rest_day,
                 'dtr' => $a->dtrEntry?->only(['time_in', 'break_out', 'break_in', 'time_out', 'ot_hours', 'ot_hours_approved', 'scheduled_in', 'scheduled_out']),
             ],

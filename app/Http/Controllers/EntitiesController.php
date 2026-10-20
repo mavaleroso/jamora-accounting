@@ -21,14 +21,8 @@ class EntitiesController extends Controller
             ->where('is_active', true)
             ->firstOrFail();
 
-        $hasAccess = $user->hasRole('Admin')
-            || $user->entities()->where('entities.id', $entity->id)->exists();
-
-        abort_unless($hasAccess, 403);
-
-        if ($user->hasRole('Admin') && ! $user->entities()->where('entities.id', $entity->id)->exists()) {
-            $user->entities()->attach($entity->id, ['is_default' => false]);
-        }
+        // An Admin opens every company without being given it.
+        abort_unless($user->canOpenEntity($entity->id), 403);
 
         $entityContext->set($entity);
 

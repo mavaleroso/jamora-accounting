@@ -11,7 +11,17 @@ import { cn } from '@/lib/utils';
 import { Link, useForm } from '@inertiajs/react';
 import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
 import * as React from 'react';
-import { DAY_TYPE_LABEL, fmtRange, PAY_TYPE, PAYROLL_URL, peso, TONE, type AdjustmentCategory, type PayslipRow } from './lib';
+import {
+    DAY_TYPE_LABEL,
+    fmtRange,
+    PAY_TYPE,
+    PAYROLL_URL,
+    peso,
+    TONE,
+    type AdjustmentCategory,
+    type CompanyBankAccount,
+    type PayslipRow,
+} from './lib';
 
 /* ---------------------------------------------------------------------------------------------- */
 /* Payslip                                                                                         */
@@ -480,12 +490,22 @@ function AdjustmentForm({
 /* Release                                                                                         */
 /* ---------------------------------------------------------------------------------------------- */
 
+/** "Payroll Account · BDO ••1234" */
+const bankLabel = (b: CompanyBankAccount) =>
+    [b.name, [b.bank_name, b.account_number ? `••${b.account_number.slice(-4)}` : null].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+
+/**
+ * Release pay after a review: every employee is paid from their payroll bank (a registered bank account of the company,
+ * set in their directory record), shown with the totals per account. Employees without one (cash or cheque) are paid
+ * from the registered account picked here.
+ */
 export function ReleaseDialog({
     open,
     onOpenChange,
     runId,
     net,
     payDate,
+    payslips,
     bankAccounts,
 }: {
     open: boolean;
@@ -493,25 +513,49 @@ export function ReleaseDialog({
     runId: number;
     net: number;
     payDate: string | null;
-    bankAccounts: { id: number; name: string; bank_name: string | null; account_number: string | null }[];
+    payslips: PayslipRow[];
+    bankAccounts: CompanyBankAccount[];
 }) {
+    const active = bankAccounts.filter((b) => b.is_active);
     const form = useForm({
         paid_on: payDate ?? new Date().toISOString().slice(0, 10),
-        bank_account_id: bankAccounts[0] ? String(bankAccounts[0].id) : '',
+        // Only for employees without a payroll bank (cash or cheque).
+        bank_account_id: active[0] ? String(active[0].id) : '',
     });
     const { data, setData, errors, processing } = form;
     const confirm = useConfirm();
 
+    const byId = new Map(bankAccounts.map((b) => [b.id, b]));
+    const fallback = (data.bank_account_id && byId.get(Number(data.bank_account_id))) || null;
+    const rows = payslips
+        .map((p) => {
+            const preset = (p.charge_bank_account_id && byId.get(p.charge_bank_account_id)) || null;
+            const bank = preset ?? fallback;
+            return { p, preset: !!preset, key: bank?.id ?? 0, label: bank ? bankLabel(bank) : 'No account chosen' };
+        })
+        .sort((a, b) => a.label.localeCompare(b.label) || (a.p.employee?.name ?? '').localeCompare(b.p.employee?.name ?? ''));
+    const unset = rows.filter((r) => !r.preset).length;
+    const blocked = unset > 0 && !fallback;
+    const groups = [
+        ...rows
+            .reduce((acc, r) => {
+                const g = acc.get(r.key) ?? { label: r.label, count: 0, total: 0 };
+                acc.set(r.key, { ...g, count: g.count + 1, total: g.total + Number(r.p.net_pay) });
+                return acc;
+            }, new Map<number, { label: string; count: number; total: number }>())
+            .values(),
+    ];
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-md">
+            <DialogContent className="flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-3xl">
                 <form
-                    className="space-y-4"
+                    className="flex min-h-0 flex-1 flex-col"
                     onSubmit={async (e) => {
                         e.preventDefault();
                         const ok = await confirm({
                             title: `Release ${peso(net)} net pay?`,
-                            description: 'The payout is posted to the books and the run is marked paid. This cannot be undone.',
+                            description: `${groups.map((g) => `${g.label}: ${peso(g.total)} (${g.count})`).join('; ')}. The payout is posted to the books and the run is marked paid. This cannot be undone.`,
                             confirmLabel: 'Release pay',
                         });
                         if (!ok) return;
@@ -519,42 +563,119 @@ export function ReleaseDialog({
                         form.post(`${PAYROLL_URL}/${runId}/pay`, { preserveScroll: true, onSuccess: () => onOpenChange(false) });
                     }}
                 >
-                    <DialogHeader>
-                        <DialogTitle>Release pay</DialogTitle>
+                    <DialogHeader className="border-b px-6 pt-6 pb-4">
+                        <DialogTitle>Review and release pay</DialogTitle>
                         <DialogDescription>
-                            Records the payout of {peso(net)} net pay: debits Salaries Payable and credits the paying bank. Upload the bank
-                            disbursement list to your bank first.
+                            Each employee is paid from their payroll bank, one of the company’s registered bank accounts set in their Employee
+                            Directory record. Check who is paid from which account, then release. Upload each account’s disbursement list to that bank
+                            first.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">Paid on</Label>
-                            <Input type="date" value={data.paid_on} onChange={(e) => setData('paid_on', e.target.value)} />
-                            <InputError message={errors.paid_on} />
+
+                    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+                        <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+                            <div className="space-y-1.5">
+                                <Label className="text-xs">Paid on</Label>
+                                <Input type="date" value={data.paid_on} onChange={(e) => setData('paid_on', e.target.value)} />
+                                <InputError message={errors.paid_on} />
+                            </div>
+                            {unset > 0 &&
+                                (active.length === 0 ? (
+                                    <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                                        {unset} {unset === 1 ? 'employee has' : 'employees have'} no payroll bank, and this company has no registered
+                                        bank account to pay them from. Register one in Banks first.
+                                    </p>
+                                ) : (
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs">
+                                            Paid from, for the {unset} {unset === 1 ? 'employee' : 'employees'} without a payroll bank (cash or
+                                            cheque)
+                                        </Label>
+                                        <Select value={data.bank_account_id} onValueChange={(v) => setData('bank_account_id', v)}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Choose a registered account" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {active.map((b) => (
+                                                    <SelectItem key={b.id} value={String(b.id)}>
+                                                        {bankLabel(b)}
+                                                        {b.company && <span className="text-muted-foreground">— {b.company}</span>}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <InputError message={(errors as Record<string, string>).bank_account_id} />
+                                        <p className="text-muted-foreground text-[11px]">
+                                            Give them a payroll bank under Employee Directory › Edit › Pay & contributions to make it automatic.
+                                        </p>
+                                    </div>
+                                ))}
                         </div>
-                        <div className="space-y-1.5">
-                            <Label className="text-xs">Paid from</Label>
-                            <Select value={data.bank_account_id || 'none'} onValueChange={(v) => setData('bank_account_id', v === 'none' ? '' : v)}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {bankAccounts.map((b) => (
-                                        <SelectItem key={b.id} value={String(b.id)}>
-                                            {b.name}
-                                        </SelectItem>
+
+                        {/* Totals per account charged */}
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            {groups.map((g) => (
+                                <div key={g.label} className="bg-muted/30 flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                                    <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium">{g.label}</div>
+                                        <div className="text-muted-foreground text-[11px]">
+                                            {g.count} {g.count === 1 ? 'employee' : 'employees'}
+                                        </div>
+                                    </div>
+                                    <div className="font-mono text-sm font-semibold tabular-nums">{peso(g.total)}</div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Every employee and the account charged */}
+                        <div className="overflow-x-auto rounded-lg border">
+                            <table className="w-full text-sm">
+                                <thead className="bg-muted/40 text-muted-foreground text-left text-xs">
+                                    <tr>
+                                        <th className="px-3 py-2 font-medium">Employee</th>
+                                        <th className="px-3 py-2 font-medium">Credited to</th>
+                                        <th className="px-3 py-2 font-medium">Paid from</th>
+                                        <th className="px-3 py-2 text-right font-medium">Net pay</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {rows.map(({ p, preset, label }) => (
+                                        <tr key={p.id}>
+                                            <td className="px-3 py-2">
+                                                <div className="font-medium">{p.employee?.name ?? '—'}</div>
+                                                <div className="text-muted-foreground font-mono text-[11px]">{p.employee?.employee_code}</div>
+                                            </td>
+                                            <td className="text-muted-foreground px-3 py-2 text-xs">
+                                                {p.employee?.bank_name && p.employee.bank_name !== '-'
+                                                    ? `${p.employee.bank_name} ${p.employee.bank_account_hint ?? ''}`
+                                                    : 'Cash / cheque'}
+                                            </td>
+                                            <td className="px-3 py-2 text-xs">
+                                                {label}
+                                                {!preset && <span className="ml-1.5 text-amber-700 dark:text-amber-400">(no payroll bank)</span>}
+                                            </td>
+                                            <td className="px-3 py-2 text-right font-mono tabular-nums">{peso(p.net_pay)}</td>
+                                        </tr>
                                     ))}
-                                    <SelectItem value="none">Cash in Bank (1010)</SelectItem>
-                                </SelectContent>
-                            </Select>
+                                </tbody>
+                                <tfoot className="border-t font-semibold">
+                                    <tr>
+                                        <td className="px-3 py-2" colSpan={3}>
+                                            Total · {rows.length} {rows.length === 1 ? 'employee' : 'employees'}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-mono tabular-nums">{peso(net)}</td>
+                                    </tr>
+                                </tfoot>
+                            </table>
                         </div>
+                        <InputError message={(errors as Record<string, string>).status} />
                     </div>
-                    <InputError message={(errors as Record<string, string>).status} />
-                    <DialogFooter>
+
+                    <DialogFooter className="border-t px-6 py-4">
                         <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={processing}>
+                        <Button type="submit" disabled={processing || rows.length === 0 || blocked}>
                             {processing && <Loader2 className="size-4 animate-spin" />} Release {peso(net)}
                         </Button>
                     </DialogFooter>

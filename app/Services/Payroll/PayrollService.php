@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\AccountType;
 use App\Models\AttendanceRequest;
 use App\Models\BankAccount;
+use App\Models\BankTransaction;
 use App\Models\BenefitProgram;
 use App\Models\DtrEntry;
 use App\Models\Employee;
@@ -20,7 +21,10 @@ use App\Models\PayrollRun;
 use App\Models\Payslip;
 use App\Models\User;
 use App\Services\Accounting\JournalPostingService;
+use App\Support\ChartOfAccounts;
 use Carbon\Carbon;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -31,7 +35,7 @@ use Illuminate\Validation\ValidationException;
  *   approve  -> approved  cut-off time records are locked so the numbers cannot drift
  *   reopen   -> draft     (approved only) unlocks the time records for corrections
  *   post     -> posted    journal entry: salaries + employer contributions vs. statutory payables and net pay
- *   pay      -> paid      payment entry: salaries payable vs. the paying bank; payslips become final
+ *   pay      -> paid      payment entry: salaries payable vs. each employee's registered payroll bank; payslips become final
  *   void     -> void      (draft only) discards the run so the period can be computed again
  */
 class PayrollService
@@ -185,35 +189,101 @@ class PayrollService
     }
 
     /**
-     * Record the release of net pay: Dr Salaries Payable / Cr the paying bank account.
+     * The registered bank account each payslip's net pay is charged to: the employee's payroll bank when it is an
+     * active account the run's company holds or shares, else $fallback (null when none is given).
+     *
+     * @return Collection<int, BankAccount|null> keyed by payslip id
      */
-    public function pay(PayrollRun $run, User $user, string $paidOn, ?BankAccount $bank = null): PayrollRun
+    public function chargeBanks(PayrollRun $run, ?BankAccount $fallback = null): Collection
+    {
+        $banks = BankAccount::query()->withoutEntityScope()->usableBy($run->entity_id)->where('is_active', true)->get()->keyBy('id');
+
+        return $run->payslips()->with('employee:id,charge_bank_account_id')->get()
+            ->mapWithKeys(fn (Payslip $p) => [$p->id => $banks->get($p->employee?->charge_bank_account_id) ?? $fallback]);
+    }
+
+    /**
+     * Record the release of net pay: Dr Salaries Payable / Cr each registered bank account charged. Every employee is
+     * paid from their payroll bank; those without one (cash or cheque) from $fallback, which must then be given.
+     * Each payslip keeps the bank it was paid from.
+     */
+    public function pay(PayrollRun $run, User $user, string $paidOn, ?BankAccount $fallback = null): PayrollRun
     {
         $this->assertStatus($run, PayrollRun::STATUS_POSTED, 'released');
 
-        return DB::transaction(function () use ($run, $user, $paidOn, $bank) {
-            $net = round((float) $run->payslips()->sum('net_pay'), 2);
-            $bankAccountId = $bank?->gl_account_id ?: $this->account('cash_in_bank')->id;
+        $charges = $this->chargeBanks($run, $fallback);
+        $unpaid = $charges->filter(fn (?BankAccount $bank) => $bank === null)->count();
+        if ($unpaid > 0) {
+            throw ValidationException::withMessages(['bank_account_id' => "Choose the registered bank account to pay the {$unpaid} "
+                .str('employee')->plural($unpaid).' without a payroll bank from.']);
+        }
+
+        return DB::transaction(function () use ($run, $user, $paidOn, $charges) {
+            $payslips = $run->payslips()->get();
+            $net = round((float) $payslips->sum('net_pay'), 2);
+            $banks = $charges->filter()->unique('id')->values();
+
+            $credits = $payslips->groupBy(fn (Payslip $p) => $charges[$p->id]->id)
+                ->map(function (Collection $slips) use ($charges, $run) {
+                    $bank = $charges[$slips->first()->id];
+                    $amount = round((float) $slips->sum('net_pay'), 2);
+                    $people = $slips->count().' '.str('employee')->plural($slips->count());
+
+                    return $amount == 0 ? null : [
+                        // The run's company's own Cash in Bank sub-account for the bank (1011, 1012, …).
+                        'account_id' => ChartOfAccounts::ensureBankLedger($bank, (int) $run->entity_id)->id,
+                        'debit' => 0,
+                        'credit' => $amount,
+                        'memo' => "Payroll disbursement — {$bank->name} ({$people})",
+                        'bank' => $bank,
+                        'people' => $people,
+                    ];
+                })
+                ->filter()
+                ->values()
+                ->all();
 
             $entry = $this->journalEntry([
                 'journal_id' => $this->journal()->id,
                 'entry_date' => $paidOn,
                 'reference' => $run->run_no.'-PAY',
-                'memo' => "Release of payroll {$run->period->code}".($bank ? " via {$bank->name}" : ''),
+                'memo' => "Release of payroll {$run->period->code} via ".$banks->pluck('name')->join(', '),
                 'source_system' => 'payroll',
                 'source_type' => 'payroll_payment',
                 'source_id' => $run->id,
-            ], [
+            ], array_values(array_filter([
                 $this->line('salaries_payable', $net, 0, 'Net pay released'),
-                ['account_id' => $bankAccountId, 'debit' => 0, 'credit' => $net, 'memo' => 'Payroll disbursement'],
-            ], $user);
+                ...array_map(fn (array $credit) => Arr::except($credit, ['bank', 'people']), $credits),
+            ])), $user);
+
+            // Each bank's register shows the release, tagged with the run's company, so it can be reconciled.
+            foreach ($credits as $credit) {
+                BankTransaction::query()->create([
+                    'bank_account_id' => $credit['bank']->id,
+                    'entity_id' => $run->entity_id,
+                    'txn_date' => $paidOn,
+                    'description' => "Payroll release {$run->period->code} ({$credit['people']})",
+                    'amount' => $credit['credit'],
+                    'direction' => 'out',
+                    'reference' => $run->run_no.'-PAY',
+                    'source_type' => 'payroll_payment',
+                    'source_id' => $run->id,
+                    'journal_entry_id' => $entry->id,
+                    'is_cleared' => false,
+                ]);
+            }
+
+            foreach ($payslips as $payslip) {
+                $payslip->update(['charge_bank_account_id' => $charges[$payslip->id]->id]);
+            }
 
             $run->update([
                 'status' => PayrollRun::STATUS_PAID,
                 'paid_by' => $user->id,
                 'paid_at' => now(),
                 'paid_on' => $paidOn,
-                'bank_account_id' => $bank?->id,
+                // The run's bank when everyone was paid from one account; each payslip keeps its own.
+                'bank_account_id' => $banks->count() === 1 ? $banks->first()->id : null,
                 'payment_journal_entry_id' => $entry->id,
             ]);
             $run->period->update(['status' => 'paid']);

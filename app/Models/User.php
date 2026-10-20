@@ -3,7 +3,9 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\RoleEnum;
 use App\Support\MissingValue;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -17,11 +19,44 @@ class User extends Authenticatable
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable, TwoFactorAuthenticatable, HasRoles;
 
+    /** The companies (entities) the user was given access to. An Admin opens every company regardless. */
     public function entities(): BelongsToMany
     {
         return $this->belongsToMany(Entity::class)
             ->withPivot('is_default')
             ->withTimestamps();
+    }
+
+    /**
+     * The active companies the user can open: every one for an Admin (the owner), else those they were given. The
+     * company switcher, the current company and the all-company pages (Employee Directory, Bank Accounts) all use this.
+     *
+     * @return Builder<Entity>
+     */
+    public function accessibleEntities(): Builder
+    {
+        $query = Entity::query()->where('entities.is_active', true);
+
+        return $this->hasRole(RoleEnum::Admin->value)
+            ? $query
+            : $query->whereIn('entities.id', $this->entities()->pluck('entities.id'));
+    }
+
+    public function canOpenEntity(int $entityId): bool
+    {
+        return $this->accessibleEntities()->whereKey($entityId)->exists();
+    }
+
+    /**
+     * Companies whose employees the Employee Directory lists: every active company for the Admin and the Accountant,
+     * who keep all the companies' employee records; the companies they can open for everyone else. The company
+     * switcher still follows accessibleEntities().
+     */
+    public function directoryEntities(): Builder
+    {
+        return $this->hasAnyRole([RoleEnum::Admin->value, RoleEnum::Accountant->value])
+            ? Entity::query()->where('entities.is_active', true)
+            : $this->accessibleEntities();
     }
 
     public function employee(): HasOne

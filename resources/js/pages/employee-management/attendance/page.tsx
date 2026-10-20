@@ -234,7 +234,7 @@ export default function AttendancePage(props: Props) {
                 target={requestTarget}
                 employees={employees}
                 today={today}
-                canPickEmployee={canManage}
+                canPickEmployee={!!perspective.canHandleRequests}
             />
             <RejectDayDialog open={rejectEntry !== null} onOpenChange={(o) => !o && setRejectEntry(null)} entry={rejectEntry} />
             <ReviewDialog open={review !== null} onOpenChange={(o) => !o && setReview(null)} request={review?.request ?? null} decision={review?.decision ?? 'approved'} />
