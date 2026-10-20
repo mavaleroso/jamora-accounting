@@ -42,7 +42,8 @@ class EmployeeDashboardController extends Controller
 
         $show = [
             'team' => $can('attendance.manage', 'payroll.manage', 'roster.manage'),
-            'inbox' => $can('leave.approve', 'attendance.manage', 'payroll.manage'),
+            // Deciding on employees' requests is the owner's.
+            'inbox' => $can('requests.approve'),
             'payroll' => $can('payroll.view', 'payroll.run'),
             'compliance' => $can('compliance.view'),
             'people' => $can('libraries.employees.manage', 'payroll.manage', 'payroll.view'),

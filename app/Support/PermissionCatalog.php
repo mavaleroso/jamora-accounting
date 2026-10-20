@@ -21,10 +21,11 @@ class PermissionCatalog
         'payables' => ['Payables', 'Supplier bills and payments.', ['ap']],
         'banking' => ['Banking', 'Bank accounts, transactions and reconciliation.', ['banks']],
         'integration' => ['Optical Integration', 'Sync with the optical clinic system.', ['integration']],
-        'people' => ['People & Payroll', 'Roster, attendance, leave, payroll and the employee portal.', ['roster', 'attendance', 'leave', 'payroll', 'portal']],
+        'people' => ['Employee Management', 'Shifts and roster, time and attendance, leave and employees’ requests, and the employee portal.', ['roster', 'attendance', 'leave', 'requests', 'portal']],
+        'payroll' => ['Payroll', 'Pay periods, payroll runs, adjustments, benefit programs and the release of pay.', ['payroll']],
         'compliance' => ['Compliance', 'Statutory filing calendar: BIR, SSS, PhilHealth, Pag-IBIG, DOLE and LGU.', ['compliance']],
         'libraries' => ['Master Data', 'Reference lists used across modules.', ['libraries']],
-        'admin' => ['Administration', 'Users, access control, audit trail and profile.', ['admin', 'settings']],
+        'admin' => ['Administration', 'Users, access control, system settings, audit trail and profile.', ['admin', 'settings']],
     ];
 
     /** permission key => [label, description] */
@@ -73,14 +74,27 @@ class PermissionCatalog
         'integration.optical.sync' => ['Run optical sync', 'Pull and post documents from the optical system.'],
         'integration.optical.rules-manage' => ['Manage sync rules', 'Edit how optical documents map to accounts.'],
 
-        'roster.view' => ['View rosters', 'See shift schedules.'],
-        'roster.manage' => ['Manage rosters', 'Create shifts and publish rosters.'],
-        'attendance.view' => ['View attendance', 'See time records and the live board.'],
-        'attendance.punch' => ['Clock in / out', 'Record own attendance punches.'],
-        'attendance.manage' => ['Manage attendance', 'Correct, approve and close time records.'],
-        'leave.view' => ['View leave', 'See leave requests and balances.'],
-        'leave.file' => ['File leave', 'File own leave and attendance requests.'],
-        'leave.approve' => ['Approve leave', 'Approve or decline leave and attendance requests.'],
+        'roster.view' => ['View rosters', 'See the weekly roster (staff without roster management see only their own schedule).'],
+        'roster.manage' => ['Manage rosters', 'Set and publish shifts and rest days for the week, and copy last week’s roster.'],
+        'attendance.view' => ['View attendance', 'See time records and the live board (staff see only their own).'],
+        'attendance.punch' => ['Clock in / out', 'Record own attendance punches and accomplishments.'],
+        'attendance.manage' => [
+            'Manage time records',
+            'Correct punches, approve and reopen daily time records, run the daily close and set the branch geofence. '
+            .'See everyone’s requests read only; deciding on them needs "Approve employee requests".',
+        ],
+        'leave.view' => ['View leave', 'See leave balances and leave requests.'],
+        'leave.file' => ['File own requests', 'File and cancel one’s own leave, overtime, time correction and official business requests.'],
+        'requests.approve' => [
+            'Approve employee requests',
+            'Approve or decline employees’ leave, overtime, time correction and official business requests (never one’s own). '
+            .'Owner only by default.',
+        ],
+        'requests.manage' => [
+            'Handle requests for employees',
+            'File a request on an employee’s behalf, cancel an employee’s request (including leave that has started) and open '
+            .'their supporting documents. Owner only by default.',
+        ],
         'payroll.view' => ['View payroll', 'See payroll runs and payslips.'],
         'payroll.manage' => ['Manage payroll setup', 'Pay periods, adjustments and benefit programs.'],
         'payroll.run' => ['Run payroll', 'Compute, approve, post and release payroll.'],
@@ -96,12 +110,14 @@ class PermissionCatalog
         'libraries.cost-centers.manage' => ['Cost centers', 'Maintain cost centers.'],
         'libraries.tax-codes.manage' => ['Tax codes', 'Maintain VAT and withholding codes.'],
         'libraries.employees.manage' => ['Employee directory', 'Maintain employee records.'],
+        'libraries.shifts.manage' => ['Shifts', 'Maintain the shift library: hours, unpaid break, grace period and the company default.'],
         'libraries.partners.manage' => ['Partners', 'Maintain customers and patients.'],
         'libraries.vendors.manage' => ['Vendors', 'Maintain suppliers.'],
 
         'admin.users.manage' => ['Manage users', 'Create users, reset access and assign roles.'],
         'admin.roles-permissions.manage' => ['Manage roles & permissions', 'Change what each role can do.'],
         'admin.audit-trails.view' => ['View audit trail', 'Review the change log.'],
+        'admin.system-settings.manage' => ['Manage system settings', 'Change company-wide policy, such as when overtime is counted.'],
         'settings.profile.manage' => ['Edit own profile', 'Update own profile and password.'],
     ];
 

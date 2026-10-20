@@ -1,9 +1,16 @@
 <?php
 
 use App\Models\User;
+use Spatie\Permission\Models\Permission;
+
+/** The settings pages need the settings.profile.manage permission, which every role is given. */
+beforeEach(function () {
+    $this->user = User::factory()->create();
+    $this->user->givePermissionTo(Permission::findOrCreate('settings.profile.manage', 'web'));
+});
 
 test('profile page is displayed', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)
@@ -13,12 +20,13 @@ test('profile page is displayed', function () {
 });
 
 test('profile information can be updated', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)
         ->patch('/settings/profile', [
-            'name' => 'Test User',
+            'firstname' => 'Test',
+            'lastname' => 'User',
             'email' => 'test@example.com',
         ]);
 
@@ -28,18 +36,19 @@ test('profile information can be updated', function () {
 
     $user->refresh();
 
-    expect($user->name)->toBe('Test User');
+    expect($user->name)->toBe('Test User'); // firstname + lastname
     expect($user->email)->toBe('test@example.com');
     expect($user->email_verified_at)->toBeNull();
 });
 
 test('email verification status is unchanged when the email address is unchanged', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)
         ->patch('/settings/profile', [
-            'name' => 'Test User',
+            'firstname' => 'Test',
+            'lastname' => 'User',
             'email' => $user->email,
         ]);
 
@@ -51,7 +60,7 @@ test('email verification status is unchanged when the email address is unchanged
 });
 
 test('user can delete their account', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)
@@ -68,7 +77,7 @@ test('user can delete their account', function () {
 });
 
 test('correct password must be provided to delete account', function () {
-    $user = User::factory()->create();
+    $user = $this->user;
 
     $response = $this
         ->actingAs($user)

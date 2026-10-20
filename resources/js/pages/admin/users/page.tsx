@@ -175,14 +175,17 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
                                                     <span className="truncate">{user.name}</span>
                                                     {user.id === currentUserId && <YouTag />}
                                                 </p>
-                                                <p className="truncate text-xs text-muted-foreground">
-                                                    @{user.username}
-                                                    {user.email && <span className="hidden sm:inline"> · {user.email}</span>}
-                                                </p>
+                                                {user.email && <p className="truncate text-xs text-muted-foreground">{user.email}</p>}
                                             </div>
                                         </div>
                                     );
                                 },
+                            },
+                            {
+                                id: 'username',
+                                header: 'Username',
+                                className: 'max-w-44 truncate font-mono text-sm',
+                                cell: (user) => user.username || <span className="font-sans text-muted-foreground">—</span>,
                             },
                             {
                                 id: 'role',

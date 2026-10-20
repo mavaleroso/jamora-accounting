@@ -7,20 +7,24 @@ import * as React from 'react';
 import {
     addMonths,
     age,
+    bankLabel,
+    breakRange,
     CIVIL_STATUSES,
     CONTRIBUTIONS,
     EMPLOYMENT_STATUSES,
     EMPLOYMENT_TYPES,
+    fitBreak,
     formatDate,
     formatPay,
+    formatTime,
     labelOf,
     leaveTypesLabel,
     missingStatutory,
     onFile,
     payEquivalents,
     PROBATION_MONTHS,
+    regularShift,
     restDayLabel,
-    shiftRange,
     tenure,
     type Employee,
     type LeaveTypeOption,
@@ -80,7 +84,7 @@ export function OverviewTab({
     const service = tenure(e.hire_date, e.separation_date);
     const equivalents = payEquivalents(e.pay_type, Number(e.basic_pay), policy);
     const probationEnds = e.employment_type === 'probationary' && !e.regularization_date ? addMonths(e.hire_date, PROBATION_MONTHS) : null;
-    const shift = e.default_shift_template;
+    const breakWindow = fitBreak(e.break_start, regularShift(null, policy));
     const active = e.employment_status === 'active';
     const years = age(e.birth_date);
     const address = onFile(e.address);
@@ -192,7 +196,14 @@ export function OverviewTab({
                             {restDayLabel(e.rest_days, policy.defaultRestDays)}
                         </Item>
                         <Item label="Default shift" className="col-span-2">
-                            {shift ? `${shift.name} (${shiftRange(shift)})` : 'Company default'}
+                            {policy.defaultShift?.name ?? 'Company default shift'}
+                        </Item>
+                        <Item label="Break time" className="col-span-2">
+                            {e.break_start
+                                ? breakWindow
+                                    ? breakRange(breakWindow)
+                                    : `${formatTime(e.break_start)} (outside the shift; update it)`
+                                : 'Not set'}
                         </Item>
                     </dl>
                 </Card>
@@ -208,13 +219,13 @@ export function OverviewTab({
                         <Item label="Daily / hourly" mono className="col-span-2">
                             {formatPhpCurrency(equivalents.daily)} / {formatPhpCurrency(equivalents.hourly)}
                         </Item>
-                        <Item label="Payroll bank">{e.bank_name || 'Cash or cheque'}</Item>
+                        <Item label="Payroll bank" className="col-span-2">
+                            {e.charge_bank_account ? bankLabel(e.charge_bank_account) : 'Cash or cheque'}
+                        </Item>
                         <Item label="Account no." mono>
                             {e.bank_account_no}
                         </Item>
-                        <Item label="Account name" className="col-span-2">
-                            {onFile(e.bank_account_name)}
-                        </Item>
+                        <Item label="Account name">{onFile(e.bank_account_name)}</Item>
                     </dl>
                 </Card>
 

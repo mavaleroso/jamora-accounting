@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\SystemSettings;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -44,6 +45,18 @@ class LeaveType extends Model
     public function requests(): HasMany
     {
         return $this->hasMany(LeaveRequest::class);
+    }
+
+    /**
+     * Days ahead this leave must be filed: the leave type's own notice, or the company notice (Admin › System Settings)
+     * when the type is one it covers, whichever is longer.
+     */
+    public function noticeDays(): int
+    {
+        $settings = app(SystemSettings::class);
+        $company = in_array($this->code, $settings->leaveNoticeTypes(), true) ? $settings->leaveNoticeDays() : 0;
+
+        return max((int) $this->min_notice_days, $company);
     }
 
     /**

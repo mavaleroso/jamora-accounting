@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Support\Audit\AuditLogger;
 use App\Support\EntityContext;
+use App\Support\SystemSettings;
+use App\Support\ViewMode;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
 use Illuminate\Console\Events\CommandStarting;
@@ -26,6 +28,8 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(EntityContext::class);
         $this->app->singleton(AuditLogger::class);
+        $this->app->scoped(SystemSettings::class);
+        $this->app->scoped(ViewMode::class);
     }
 
     /**

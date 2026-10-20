@@ -142,7 +142,7 @@ const COLUMN_LABELS: Record<string, string> = {
 };
 
 export function RequestsPanel({ requests, counts, filters, perspective, onFilter, onReview, onNew }: Props) {
-    const { canManage, canViewTeam } = perspective;
+    const { canViewTeam, hasSelf, canReviewRequests = false, canHandleRequests = false } = perspective;
     const total = counts.pending + counts.approved + counts.rejected + counts.cancelled;
 
     // The Type column only earns its place when the list mixes overtime with other requests.
@@ -256,7 +256,7 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
             cell: ({ row: { original: r } }) => {
                 const st = REQUEST_STATUS[r.status];
                 const reviewed = r.reviewer && r.reviewed_at ? `${st.label} by ${r.reviewer.firstname} ${r.reviewer.lastname}` : undefined;
-                return canManage && r.status === 'pending' ? (
+                return canReviewRequests && r.status === 'pending' ? (
                     <div className="flex items-center gap-1.5 whitespace-nowrap">
                         <Button
                             size="sm"
@@ -303,9 +303,9 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                 />
             }
             toolbarExtra={
-                (!canViewTeam || canManage) && (
+                (canHandleRequests || hasSelf) && (
                     <Button size="sm" variant="outline" className="h-9" onClick={onNew}>
-                        <Plus className="size-4" /> {canManage ? 'File overtime on behalf' : 'File overtime'}
+                        <Plus className="size-4" /> {canHandleRequests ? 'File overtime on behalf' : 'File overtime'}
                     </Button>
                 )
             }
@@ -321,7 +321,7 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                 filters.requests_search
                     ? 'No overtime requests match this search.'
                     : filters.request_status === 'pending'
-                      ? canManage
+                      ? canReviewRequests
                           ? 'No overtime waiting on you.'
                           : 'No pending overtime.'
                       : 'No overtime requests here.'

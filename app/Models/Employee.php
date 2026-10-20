@@ -19,11 +19,11 @@ class Employee extends Model
         'gender', 'civil_status', 'birth_date',
         'position', 'email', 'phone', 'address',
         'emergency_contact_name', 'emergency_contact_relationship', 'emergency_contact_phone', 'dependents',
-        'default_shift_template_id', 'rest_days', 'leave_type_ids',
+        'default_shift_template_id', 'rest_days', 'break_start', 'leave_type_ids',
         'hire_date', 'regularization_date', 'separation_date', 'employment_status', 'employment_type',
         'pay_type', 'basic_pay',
         'sss_number', 'philhealth_number', 'pagibig_number', 'tin', 'contribution_settings', 'bank_name',
-        'bank_account_name', 'bank_account_no', 'leave_credits', 'vacation_leave_credits', 'sick_leave_credits',
+        'bank_account_name', 'bank_account_no', 'charge_bank_account_id', 'leave_credits', 'vacation_leave_credits', 'sick_leave_credits',
         'is_active',
     ];
 
@@ -70,13 +70,13 @@ class Employee extends Model
     }
 
     /**
-     * Employees of every active company (branch) the user can open, whichever one is current. The Employee Directory
-     * lists them together.
+     * Employees of every company in the user's Employee Directory (an Admin or Accountant, every active one), whichever
+     * one is current. The directory lists them together.
      */
     public function scopeVisibleTo(Builder $query, User $user): Builder
     {
         return $query->withoutGlobalScope('entity')
-            ->whereIn('employees.entity_id', $user->entities()->where('entities.is_active', true)->pluck('entities.id'));
+            ->whereIn('employees.entity_id', $user->directoryEntities()->pluck('entities.id'));
     }
 
     public function getNameAttribute(): string
@@ -157,6 +157,14 @@ class Employee extends Model
     public function defaultShiftTemplate(): BelongsTo
     {
         return $this->belongsTo(ShiftTemplate::class, 'default_shift_template_id');
+    }
+
+    /**
+     * The company bank account charged when this employee's pay is released.
+     */
+    public function chargeBankAccount(): BelongsTo
+    {
+        return $this->belongsTo(BankAccount::class, 'charge_bank_account_id');
     }
 
     public function leaveBalances(): HasMany

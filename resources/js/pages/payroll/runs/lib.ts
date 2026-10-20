@@ -38,6 +38,17 @@ export function pesoShort(n: number): string {
     return peso(n);
 }
 
+/** A bank account of the run's company. */
+export type CompanyBankAccount = {
+    id: number;
+    name: string;
+    bank_name: string | null;
+    account_number: string | null;
+    is_active: boolean;
+    /** The company the account is registered to. */
+    company: string | null;
+};
+
 export type Check = { key: string; level: 'error' | 'warning' | 'info'; count: number; message: string };
 
 export type PayslipRow = {
@@ -78,6 +89,8 @@ export type PayslipRow = {
     other_deductions: number;
     benefit_deductions: number;
     net_pay: number;
+    /** The company bank charged: the employee's preset until the run is paid, then the bank it was paid from. */
+    charge_bank_account_id: number | null;
     thirteenth_month_accrual: number;
     is_mwe: boolean;
     total_deductions: number;

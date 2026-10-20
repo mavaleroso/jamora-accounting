@@ -7,6 +7,7 @@ use App\Models\AccountType;
 use App\Models\BankAccount;
 use App\Models\Entity;
 use App\Models\PostingRule;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The standard chart of accounts and posting rules for each entity. Codes are shared by all three entities so
@@ -214,37 +215,47 @@ class ChartOfAccounts
     }
 
     /**
-     * Give a bank account its own Cash in Bank sub-account (1011, 1012, …) in its entity's chart, unless it
-     * already points at one of that entity's accounts.
+     * A company's own Cash in Bank sub-account (1011, 1012, …) for a bank account, in that company's chart: the one
+     * already linked, else a new one. Each company sharing an account has its own; linking one to a company shares the
+     * account with it. $entityId defaults to the account's holder, whose ledger may also be picked on the account.
      */
-    public static function ensureBankLedger(BankAccount $bank): Account
+    public static function ensureBankLedger(BankAccount $bank, ?int $entityId = null): Account
     {
-        $existing = $bank->gl_account_id
-            ? Account::withoutGlobalScope('entity')->where('entity_id', $bank->entity_id)->find($bank->gl_account_id)
-            : null;
-        if ($existing) {
-            return $existing;
+        $entityId ??= (int) $bank->entity_id;
+        $isHolder = $entityId === (int) $bank->entity_id;
+        $link = DB::table('bank_account_entity')->where('bank_account_id', $bank->id)->where('entity_id', $entityId)->first();
+
+        $ledgerId = $isHolder ? ($bank->gl_account_id ?: $link?->gl_account_id) : $link?->gl_account_id;
+        $account = $ledgerId ? Account::withoutGlobalScope('entity')->where('entity_id', $entityId)->find($ledgerId) : null;
+
+        if (! $account) {
+            $parent = Account::withoutGlobalScope('entity')->where('entity_id', $entityId)->where('code', '1010')->first();
+            $taken = Account::withTrashed()->withoutGlobalScope('entity')->where('entity_id', $entityId)->pluck('code')->all();
+
+            $code = collect(range(1011, 1019))->map(fn (int $c) => (string) $c)->first(fn (string $c) => ! in_array($c, $taken, true))
+                ?? '1010-'.$bank->id;
+
+            $account = Account::withoutGlobalScope('entity')->create([
+                'entity_id' => $entityId,
+                'code' => $code,
+                'name' => 'Cash in Bank – '.trim($bank->bank_name.' '.$bank->name),
+                'account_type_id' => $parent?->account_type_id ?? self::accountTypes()['Current Assets']->id,
+                'parent_id' => $parent?->id,
+                'is_postable' => true,
+                'is_active' => true,
+                'cash_flow_section' => 'operating',
+                'description' => $bank->account_number ? 'Account no. '.$bank->account_number : null,
+            ]);
         }
 
-        $parent = Account::withoutGlobalScope('entity')->where('entity_id', $bank->entity_id)->where('code', '1010')->first();
-        $taken = Account::withTrashed()->withoutGlobalScope('entity')->where('entity_id', $bank->entity_id)->pluck('code')->all();
-
-        $code = collect(range(1011, 1019))->map(fn (int $c) => (string) $c)->first(fn (string $c) => ! in_array($c, $taken, true))
-            ?? '1010-'.$bank->id;
-
-        $account = Account::withoutGlobalScope('entity')->create([
-            'entity_id' => $bank->entity_id,
-            'code' => $code,
-            'name' => 'Cash in Bank – '.trim($bank->bank_name.' '.$bank->name),
-            'account_type_id' => $parent?->account_type_id ?? self::accountTypes()['Current Assets']->id,
-            'parent_id' => $parent?->id,
-            'is_postable' => true,
-            'is_active' => true,
-            'cash_flow_section' => 'operating',
-            'description' => $bank->account_number ? 'Account no. '.$bank->account_number : null,
-        ]);
-
-        $bank->forceFill(['gl_account_id' => $account->id])->saveQuietly();
+        if (! $link) {
+            DB::table('bank_account_entity')->insert(['bank_account_id' => $bank->id, 'entity_id' => $entityId, 'gl_account_id' => $account->id, 'created_at' => now(), 'updated_at' => now()]);
+        } elseif ((int) $link->gl_account_id !== $account->id) {
+            DB::table('bank_account_entity')->where('id', $link->id)->update(['gl_account_id' => $account->id, 'updated_at' => now()]);
+        }
+        if ($isHolder && (int) $bank->gl_account_id !== $account->id) {
+            $bank->forceFill(['gl_account_id' => $account->id])->saveQuietly();
+        }
 
         return $account;
     }

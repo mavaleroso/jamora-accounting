@@ -15,6 +15,7 @@ use App\Services\People\EmployeeResolver;
 use App\Services\People\LeaveService;
 use App\Support\EntityContext;
 use App\Support\PrivateFiles;
+use App\Support\SystemSettings;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -34,7 +35,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * requests live in attendance_requests (AttendanceRequestService). This controller merges both
  * into one feed and serves three perspectives:
  *  - Employee (linked employee, cannot approve): files requests, tracks them, sees own balances.
- *  - Approver (leave.approve and/or attendance.manage, or payroll.manage): approvals inbox for the
+ *  - Approver (requests.approve, the owner): approvals inbox for the
  *    kinds they may decide, who's out, team history and balances, filing on behalf.
  *  - Viewer (view rights, no linked employee, cannot approve — e.g. Accounting Retainer): team history and
  *    balances, read-only.
@@ -54,7 +55,7 @@ class EmployeeRequestsController extends Controller
         protected EmployeeRequestFeed $requestFeed
     ) {}
 
-    public function index(Request $request, EntityContext $entityContext): Response
+    public function index(Request $request, EntityContext $entityContext, SystemSettings $settings): Response
     {
         $entityId = $entityContext->id();
         $user = $request->user();
@@ -179,10 +180,19 @@ class EmployeeRequestsController extends Controller
                     ->orderBy('lastname')
                     ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender', 'leave_type_ids'])
                 : [],
-            'leaveTypes' => $leaveTypes->map(fn (LeaveType $t) => $t->only([
-                'id', 'code', 'name', 'legal_basis', 'is_paid', 'balance_tracked', 'annual_entitlement', 'max_days_per_filing',
-                'counts_calendar_days', 'gender', 'min_service_months', 'min_notice_days', 'attachment_required_after_days', 'allow_half_day',
-            ])),
+            'leaveTypes' => $leaveTypes->map(fn (LeaveType $t) => [
+                ...$t->only([
+                    'id', 'code', 'name', 'legal_basis', 'is_paid', 'balance_tracked', 'annual_entitlement', 'max_days_per_filing',
+                    'counts_calendar_days', 'gender', 'min_service_months', 'attachment_required_after_days', 'allow_half_day',
+                ]),
+                // The notice in force: the type's own or the company's (Admin › System Settings), whichever is longer.
+                'min_notice_days' => $t->noticeDays(),
+            ]),
+            // When approved overtime is counted (Admin › System Settings), explained on the overtime form.
+            'overtimePolicy' => [
+                'break_minutes' => $settings->overtimeBreakMinutes(),
+                'ceiling' => $settings->overtimeCeiling(),
+            ],
             'today' => $today->toDateString(),
         ]);
     }
@@ -211,7 +221,7 @@ class EmployeeRequestsController extends Controller
             abort(403);
         }
 
-        $onBehalf = $isLeave ? $perspective['canApproveLeave'] : $perspective['canApproveAttendance'];
+        $onBehalf = $perspective['canFileOnBehalf'];
         $employee = $onBehalf && $request->filled('employee_id')
             ? Employee::query()->where('entity_id', $entityId)->findOrFail($request->integer('employee_id'))
             : $self;
@@ -246,7 +256,7 @@ class EmployeeRequestsController extends Controller
     public function reviewLeave(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): RedirectResponse
     {
         $this->assertEntity($leaveRequest->entity_id, $entityContext);
-        if (! $this->employeeResolver->isHr($request->user(), 'leave.approve')) {
+        if (! $this->employeeResolver->may($request->user(), 'requests.approve')) {
             abort(403);
         }
 
@@ -263,7 +273,7 @@ class EmployeeRequestsController extends Controller
     public function reviewAttendance(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
     {
         $this->assertEntity($attendanceRequest->entity_id, $entityContext);
-        if (! $this->employeeResolver->isHr($request->user(), 'attendance.manage')) {
+        if (! $this->employeeResolver->may($request->user(), 'requests.approve')) {
             abort(403);
         }
 
@@ -277,12 +287,13 @@ class EmployeeRequestsController extends Controller
     public function cancelLeave(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): RedirectResponse
     {
         $this->assertEntity($leaveRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'leave.approve');
+        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'requests.manage');
 
-        // Once approved leave has begun, only HR can withdraw it (the days may already be paid).
+        // Once approved leave has begun, only whoever handles employees' requests can withdraw it (the days may
+        // already be paid).
         if ($leaveRequest->status === LeaveRequest::STATUS_APPROVED
             && $leaveRequest->start_date->lte(Carbon::today())
-            && ! $this->employeeResolver->isHr($request->user(), 'leave.approve')) {
+            && ! $this->employeeResolver->may($request->user(), 'requests.manage')) {
             throw ValidationException::withMessages(['status' => 'This leave has already started. Ask HR to cancel it.']);
         }
 
@@ -293,21 +304,34 @@ class EmployeeRequestsController extends Controller
     }
 
     /**
-     * The supporting document of a leave request, for the employee who filed it and leave approvers.
+     * The supporting document of a leave request, for the employee who filed it and whoever decides on or handles
+     * employees' requests.
      */
     public function leaveAttachment(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): StreamedResponse
     {
         $this->assertEntity($leaveRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'leave.approve');
+        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'requests.approve', 'requests.manage');
         abort_unless($leaveRequest->attachment_path, 404);
 
         return PrivateFiles::response($leaveRequest->attachment_path);
     }
 
+    /**
+     * The supporting document of an official business request, for the employee who filed it and attendance approvers.
+     */
+    public function attendanceAttachment(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): StreamedResponse
+    {
+        $this->assertEntity($attendanceRequest->entity_id, $entityContext);
+        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $entityContext, 'requests.approve', 'requests.manage');
+        abort_unless($attendanceRequest->attachment_path, 404);
+
+        return PrivateFiles::response($attendanceRequest->attachment_path);
+    }
+
     public function cancelAttendance(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
     {
         $this->assertEntity($attendanceRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $entityContext, 'attendance.manage');
+        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $entityContext, 'requests.manage');
 
         $this->attendanceRequests->cancel($attendanceRequest);
 
@@ -321,19 +345,20 @@ class EmployeeRequestsController extends Controller
      */
     private function perspective(?User $user, ?Employee $self): array
     {
-        $canApproveLeave = $this->employeeResolver->isHr($user, 'leave.approve');
-        $canApproveAttendance = $this->employeeResolver->isHr($user, 'attendance.manage');
-        $canReview = $canApproveLeave || $canApproveAttendance;
+        // Deciding on requests and handling them for employees are the owner's (requests.approve, requests.manage).
+        $canReview = $this->employeeResolver->may($user, 'requests.approve');
+        $canHandle = $this->employeeResolver->may($user, 'requests.manage');
 
         return [
             'hasSelf' => (bool) $self,
-            'canApproveLeave' => $canApproveLeave,
-            'canApproveAttendance' => $canApproveAttendance,
+            'canApproveLeave' => $canReview,
+            'canApproveAttendance' => $canReview,
             'canReview' => $canReview,
-            'canViewTeam' => $canReview || ! $self,
+            // Staff who manage time records or payroll see everyone's requests, read only.
+            'canViewTeam' => $canReview || $canHandle || ! $self || $this->employeeResolver->isHr($user, 'attendance.manage'),
             'canFileLeave' => (bool) $user?->canAny(['leave.file', 'payroll.manage']),
             'canFileAttendance' => (bool) $user?->canAny(['attendance.view', 'attendance.punch', 'attendance.manage', 'payroll.view', 'payroll.manage']),
-            'canFileOnBehalf' => $canReview,
+            'canFileOnBehalf' => $canHandle,
         ];
     }
 
@@ -457,9 +482,10 @@ class EmployeeRequestsController extends Controller
         }
     }
 
-    private function assertOwnerOr(User $user, int $employeeId, EntityContext $entityContext, string $ability): void
+    /** The employee the request is for, or a user holding one of these permissions. */
+    private function assertOwnerOr(User $user, int $employeeId, EntityContext $entityContext, string ...$abilities): void
     {
-        if ($this->employeeResolver->isHr($user, $ability)) {
+        if ($this->employeeResolver->may($user, ...$abilities)) {
             return;
         }
 

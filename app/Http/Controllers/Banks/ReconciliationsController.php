@@ -16,17 +16,23 @@ use Inertia\Inertia;
 use Inertia\Response;
 
 /**
- * Manual bank reconciliation, one statement at a time per bank account.
+ * Manual bank reconciliation, one statement at a time per bank account (five accounts, per the proposal).
  *
- * Each bank account belongs to one entity, so a statement reconciles that entity's register for the account.
+ * A statement reconciles the whole account: for an account shared between companies, every company's register
+ * lines, each tagged with its company. Any company using the account can open its reconciliations.
  *
  *   cleared balance = beginning balance (previous statement's ending balance) + cleared receipts − cleared payments
  *   difference      = statement ending balance − cleared balance   → must be 0.00 to complete
  */
 class ReconciliationsController extends Controller
 {
-    public function index(Request $request): Response
+    public function index(Request $request): Response|RedirectResponse
     {
+        // Bank Accounts lists every company's accounts: reconciling one of another company opens that company.
+        if ($switched = $this->openAccountCompany($request)) {
+            return $switched;
+        }
+
         $accounts = $this->accessibleAccounts()->get(['id', 'code', 'name', 'bank_name', 'account_number']);
         $accountIds = $accounts->pluck('id');
         $accountFilter = $request->integer('bank_account_id') ?: null;
@@ -115,11 +121,18 @@ class ReconciliationsController extends Controller
             })
             ->orderBy('txn_date')
             ->orderBy('id')
-            ->get(['id', 'txn_date', 'description', 'reference', 'direction', 'amount', 'is_cleared', 'bank_reconciliation_id', 'source_type']);
+            ->get(['id', 'entity_id', 'txn_date', 'description', 'reference', 'direction', 'amount', 'is_cleared', 'bank_reconciliation_id', 'source_type']);
+
+        // The companies sharing the account: each item is tagged with the one whose books it is in.
+        $companies = $bankReconciliation->bankAccount?->companies()->orderBy('name')->pluck('entities.name', 'entities.id') ?? collect();
 
         return Inertia::render('banks/reconciliations/show/page', [
             'reconciliation' => $bankReconciliation,
-            'items' => $items,
+            'isShared' => $companies->count() > 1,
+            'items' => $items->map(fn (BankTransaction $t) => [
+                ...$t->toArray(),
+                'company' => $t->entity_id ? ['id' => (int) $t->entity_id, 'name' => $companies[$t->entity_id] ?? null] : null,
+            ]),
             'laterUnclearedCount' => $this->registerQuery($bankReconciliation->bank_account_id)
                 ->where('is_cleared', false)
                 ->whereDate('txn_date', '>', $bankReconciliation->statement_date)
@@ -218,10 +231,31 @@ class ReconciliationsController extends Controller
         ]);
     }
 
-    /** Register lines for an account (the account's own entity's lines). */
+    /** Register lines for an account: every company's, for a shared account. */
     protected function registerQuery(int $bankAccountId): Builder
     {
         return BankTransaction::query()->withoutGlobalScope('entity')->where('bank_account_id', $bankAccountId);
+    }
+
+    /**
+     * Switch to the holder of the requested bank account when the current company does not use it but the user can
+     * open the holder, and reload.
+     */
+    protected function openAccountCompany(Request $request): ?RedirectResponse
+    {
+        $context = app(EntityContext::class);
+        $account = $request->integer('bank_account_id')
+            ? BankAccount::query()->withoutGlobalScope('entity')->with('entity')->find($request->integer('bank_account_id'))
+            : null;
+
+        if (! $account?->entity || ($context->id() && $account->allowsEntity((int) $context->id()))
+            || ! $request->user()->canOpenEntity((int) $account->entity_id)) {
+            return null;
+        }
+
+        $context->set($account->entity);
+
+        return redirect()->to($request->fullUrl());
     }
 
     protected function accessibleAccounts(): Builder

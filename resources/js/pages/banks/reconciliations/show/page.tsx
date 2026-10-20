@@ -28,6 +28,8 @@ type Item = {
     is_cleared: boolean;
     bank_reconciliation_id: number | null;
     source_type: string | null;
+    /** The company whose books the line is in (a shared account's lines come from each company using it). */
+    company: { id: number; name: string | null } | null;
 };
 type Reconciliation = {
     id: number;
@@ -41,9 +43,9 @@ type Reconciliation = {
     bank_account: { id: number; code: string; name: string; bank_name: string };
     reconciled_by?: { name: string } | null;
 };
-type Props = { reconciliation: Reconciliation; items: Item[]; laterUnclearedCount: number };
+type Props = { reconciliation: Reconciliation; isShared: boolean; items: Item[]; laterUnclearedCount: number };
 
-export default function ReconciliationWorkspace({ reconciliation: rec, items, laterUnclearedCount }: Props) {
+export default function ReconciliationWorkspace({ reconciliation: rec, isShared, items, laterUnclearedCount }: Props) {
     const { auth, errors } = usePage<{ auth: Auth; errors: Record<string, string> }>().props;
     const editable = rec.status === 'open' && hasPermission(auth, 'banks.reconcile');
     const [tab, setTab] = useState<'all' | 'in' | 'out'>('all');
@@ -208,7 +210,13 @@ export default function ReconciliationWorkspace({ reconciliation: rec, items, la
                                             <TableCell className="whitespace-nowrap">{formatDate(i.txn_date)}</TableCell>
                                             <TableCell>
                                                 <div className="font-medium">{i.description}</div>
-                                                {i.reference && <div className="text-muted-foreground font-mono text-xs">{i.reference}</div>}
+                                                {(i.reference || (isShared && i.company?.name)) && (
+                                                    <div className="text-muted-foreground text-xs">
+                                                        {isShared && i.company?.name && <span>{i.company.name}</span>}
+                                                        {isShared && i.company?.name && i.reference && ' · '}
+                                                        {i.reference && <span className="font-mono">{i.reference}</span>}
+                                                    </div>
+                                                )}
                                             </TableCell>
                                             <TableCell className="text-right font-mono tabular-nums">
                                                 {i.direction === 'in' ? formatAmount(i.amount) : ''}

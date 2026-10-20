@@ -340,14 +340,13 @@ class LeaveService
             ]);
         }
 
-        // 2. Minimum notice period
-        if ($leaveType->min_notice_days > 0) {
-            $noticeDays = Carbon::today()->diffInDays($start, false);
-            if ($noticeDays < $leaveType->min_notice_days) {
-                throw ValidationException::withMessages([
-                    'start_date' => "Filing for {$leaveType->name} must be submitted at least {$leaveType->min_notice_days} days in advance.",
-                ]);
-            }
+        // 2. Minimum notice period: the leave type's own, or the company's for leave that can be planned.
+        $notice = $leaveType->noticeDays();
+        if ($notice > 0 && Carbon::today()->diffInDays($start, false) < $notice) {
+            $earliest = Carbon::today()->addDays($notice)->format('M j, Y');
+            throw ValidationException::withMessages([
+                'start_date' => "{$leaveType->name} must be filed at least {$notice} ".str('day')->plural($notice)." before it starts: the earliest start date today is {$earliest}.",
+            ]);
         }
 
         // 3. Overlap check with other active requests

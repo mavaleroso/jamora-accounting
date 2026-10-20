@@ -50,6 +50,8 @@ export type Employee = {
     default_shift_template_id?: number | null;
     default_shift_template?: ShiftTemplate | null;
     rest_days?: number[] | null;
+    /** When the employee's unpaid break starts (HH:MM:SS); its length comes from the shift. Null = no preset. */
+    break_start?: string | null;
     /** Leave types the employee may file; null = all. */
     leave_type_ids?: number[] | null;
     hire_date?: string | null;
@@ -68,12 +70,22 @@ export type Employee = {
     bank_name?: string | null;
     bank_account_name?: string | null;
     bank_account_no?: string | null;
+    /** The payroll bank: a registered bank account of the employee's company, from which pay is released. */
+    charge_bank_account_id?: number | null;
+    charge_bank_account?: CompanyBank | null;
     is_active: boolean;
     /** How SSS / PhilHealth / Pag-IBIG are deducted; a missing agency (or null) = automatic. */
     contribution_settings?: Partial<Record<ContributionAgency, ContributionSetting>> | null;
     /** The login linked to this employee (every new employee gets one). */
     user?: { id: number; username: string | null; email: string | null; status: boolean; roles?: { id: number; name: string }[] } | null;
 };
+
+/** A bank account registered for a company (Banks), from which payroll is released. */
+export type CompanyBank = { id: number; entity_id: number; name: string; bank_name: string | null; account_number: string | null };
+
+/** "Payroll Account · BDO ••1234" */
+export const bankLabel = (b: Pick<CompanyBank, 'name' | 'bank_name' | 'account_number'>) =>
+    [b.name, [b.bank_name, b.account_number ? `••${b.account_number.slice(-4)}` : null].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 
 /** A user who can be linked to a new employee, and the companies where they already are one. */
 export type LinkableUser = {
@@ -103,10 +115,22 @@ export function leaveTypesLabel(ids: number[] | null | undefined, types: LeaveTy
     return picked.map((t) => t.code).join(', ');
 }
 
+/** The shift an employee normally works, as far as breaks are concerned. */
+export type RegularShift = { name?: string; start: string; end: string; break_minutes: number };
+
+/** A co-worker's preset break on their regular shift. Co-workers may share the same break time. */
+export type BreakSlot = { id: number; entity_id: number; name: string; break_start: string; break_end: string };
+
 export type Policy = {
     daysPerYear: number;
     hoursPerDay: number;
     defaultRestDays: number[];
+    /** The shift every employee of the current company works unless rostered otherwise (Libraries › Shifts). */
+    defaultShift?: RegularShift;
+    /** Each company's default shift, by company id: an employee works their own company's. */
+    defaultShifts?: Record<number, RegularShift>;
+    /** Every preset break lasts exactly this long (company policy: one hour). */
+    presetBreakMinutes?: number;
     statutory?: StatutoryTables;
 };
 
@@ -311,6 +335,69 @@ export const formatTime = (value?: string | null) => {
 
 export const shiftRange = (t?: Pick<ShiftTemplate, 'start_time' | 'end_time'> | null) =>
     t ? `${formatTime(t.start_time)} – ${formatTime(t.end_time)}` : '';
+
+/**
+ * The employee's regular shift (their default template, else the company default) with the length of a preset break
+ * on it: always exactly `presetBreakMinutes` (one hour), or 0 when the shift has no break.
+ */
+export const regularShift = (template: ShiftTemplate | null | undefined, policy: Policy): RegularShift | null => {
+    const shift = template
+        ? { start: template.start_time, end: template.end_time, break_minutes: template.break_minutes ?? 60 }
+        : (policy.defaultShift ?? null);
+    return shift && { ...shift, break_minutes: shift.break_minutes > 0 ? (policy.presetBreakMinutes ?? 60) : 0 };
+};
+
+const toMinutes = (time: string) => {
+    const [h, m] = time.split(':').map(Number);
+    return h * 60 + (m || 0);
+};
+
+const toClock = (minutes: number) => {
+    const m = ((minutes % 1440) + 1440) % 1440;
+    return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+};
+
+/**
+ * The break window [start, end] (HH:MM) when a break starting at `breakStart` lies wholly within the shift, else
+ * null. Mirrors App\Services\People\WorkSchedule::fitBreak.
+ */
+export function fitBreak(breakStart: string | null | undefined, shift: RegularShift | null): [string, string] | null {
+    if (!breakStart || !shift || shift.break_minutes <= 0) return null;
+    const start = toMinutes(shift.start);
+    let end = toMinutes(shift.end);
+    if (end <= start) end += 1440;
+    let from = toMinutes(breakStart);
+    if (from < start) from += 1440;
+    const to = from + shift.break_minutes;
+    return to <= end ? [toClock(from), toClock(to)] : null;
+}
+
+/** Break start times that fit the shift, every `step` minutes from the shift start. */
+export function breakStartOptions(shift: RegularShift | null, step = 30): string[] {
+    if (!shift || shift.break_minutes <= 0) return [];
+    const start = toMinutes(shift.start);
+    let end = toMinutes(shift.end);
+    if (end <= start) end += 1440;
+    const options: string[] = [];
+    for (let t = start; t + shift.break_minutes <= end; t += step) options.push(toClock(t));
+    return options;
+}
+
+/** Whether two windows (HH:MM, possibly past midnight) share any minute. */
+export function windowsOverlap(a: [string, string], b: [string, string]): boolean {
+    const span = ([s, e]: [string, string]) => {
+        const from = toMinutes(s);
+        let to = toMinutes(e);
+        if (to <= from) to += 1440;
+        return [from, to] as const;
+    };
+    const [as, ae] = span(a);
+    const [bs, be] = span(b);
+    // Compare on the same day and shifted by a day, for windows either side of midnight.
+    return [-1440, 0, 1440].some((shift) => as < be + shift && bs + shift < ae);
+}
+
+export const breakRange = (window: [string, string] | null) => (window ? `${formatTime(window[0])} – ${formatTime(window[1])}` : '');
 
 export const restDayLabel = (days: number[] | null | undefined, fallback: number[]) => {
     const list = days && days.length > 0 ? days : fallback;

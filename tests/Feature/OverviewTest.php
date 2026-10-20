@@ -12,7 +12,7 @@ uses(RefreshDatabase::class);
 const OVERVIEW_PERMISSIONS = [
     'dashboard.view', 'journals.view', 'periods.view',
     'billing.view', 'integration.optical.view', 'ap.view', 'banks.view',
-    'libraries.employees.manage', 'leave.approve', 'attendance.manage', 'payroll.view', 'compliance.view',
+    'libraries.employees.manage', 'requests.approve', 'requests.manage', 'attendance.manage', 'payroll.view', 'compliance.view',
     'reports.income-statement.view',
     'libraries.partners.manage', 'libraries.vendors.manage', 'libraries.cost-centers.manage', 'libraries.tax-codes.manage',
     'admin.users.manage', 'admin.roles-permissions.manage', 'admin.audit-trails.view',
@@ -59,14 +59,16 @@ test('overview loads metrics for every module the user can access', function () 
 });
 
 test('overview only returns metrics the user is permitted to see', function () {
-    $this->actingAs(overviewUser(['leave.approve']))
+    $this->actingAs(overviewUser(['requests.approve', 'requests.manage']))
         ->get(route('overview'))
         ->assertInertia(fn (Assert $page) => $page
             ->loadDeferredProps(fn (Assert $reload) => $reload
+                // Whoever decides on employees' requests sees both queues.
                 ->has('modules', 1)
-                ->has('modules.Employee Management', 1)
+                ->has('modules.Employee Management', 2)
                 ->where('modules.Employee Management.0.label', 'Leave to approve')
                 ->where('modules.Employee Management.0.value', 0)
+                ->where('modules.Employee Management.1.label', 'Attendance requests')
             )
         );
 });

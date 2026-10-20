@@ -191,6 +191,9 @@ class AttendanceController extends Controller
                 'canManage' => $canManage,
                 'canViewTeam' => $canViewTeam,
                 'hasSelf' => (bool) $self,
+                // Deciding on employees' requests and filing or cancelling them for employees are the owner's.
+                'canReviewRequests' => $this->employeeResolver->may($user, 'requests.approve'),
+                'canHandleRequests' => $this->employeeResolver->may($user, 'requests.manage'),
             ],
             'view' => $view,
             'filters' => [
@@ -407,6 +410,15 @@ class AttendanceController extends Controller
             // Centralized calculation with shift roster schedules
             $employee = Employee::findOrFail($validated['employee_id']);
             $this->attendanceCalculator->compute($dtr, $employee)->save();
+
+            // Breaks are never refused, but one taken off the preset time can leave the branch short: say so.
+            if ($punchType === 'break_out') {
+                $schedule = $this->attendanceCalculator->scheduleFor($employee, $dtr->work_date);
+                if ($schedule->isOffBreakSchedule($timeStr)) {
+                    $preset = Carbon::parse($schedule->breakStart)->format('g:i A').' – '.Carbon::parse($schedule->breakEnd)->format('g:i A');
+                    $statusMsg = "Break started at {$display}. Your scheduled break is {$preset}, so let your team know you're stepping out.";
+                }
+            }
 
             return redirect()->back()->with('status', $statusMsg);
         }
@@ -684,7 +696,8 @@ class AttendanceController extends Controller
     {
         $entityId = $entityContext->id();
         $user = $request->user();
-        $isManager = $this->employeeResolver->isHr($user, 'attendance.manage');
+        // Filing for another employee is for whoever handles employees' requests; everyone else files their own.
+        $isManager = $this->employeeResolver->may($user, 'requests.manage');
 
         $validated = $request->validate(
             ['employee_id' => ['required', 'exists:employees,id'], ...$this->attendanceRequests->rules()],
@@ -710,6 +723,8 @@ class AttendanceController extends Controller
      */
     public function reviewRequest(Request $request, AttendanceRequest $attendanceRequest): RedirectResponse
     {
+        abort_unless($this->employeeResolver->may($request->user(), 'requests.approve'), 403);
+
         $validated = $request->validate([
             'status' => ['required', 'in:approved,rejected'],
             'review_remarks' => ['nullable', 'required_if:status,rejected', 'string', 'max:255'],
@@ -728,7 +743,7 @@ class AttendanceController extends Controller
     public function cancelRequest(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
     {
         $user = $request->user();
-        $isManager = $this->employeeResolver->isHr($user, 'attendance.manage');
+        $isManager = $this->employeeResolver->may($user, 'requests.manage');
         $self = $this->employeeResolver->forUser($user, $entityContext->id());
 
         if (! $isManager && $self?->id !== $attendanceRequest->employee_id) {

@@ -83,6 +83,9 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
     const missingAtCheckout = [!entry?.break_out && 'break-out', !entry?.break_in && 'break-in'].filter(Boolean) as string[];
 
     const shiftStart = schedule.start ? atToday(schedule.start, now) : null;
+    const presetBreak = schedule.break_start ? `${fmtTime(schedule.break_start)} – ${fmtTime(schedule.break_end)}` : null;
+    const breakFrom = schedule.break_start ? atToday(schedule.break_start, now) : null;
+    const breakTo = schedule.break_end ? atToday(schedule.break_end, now) : null;
     const lateNow = notIn && shiftStart && now > new Date(shiftStart.getTime() + schedule.grace_minutes * 60000);
 
     const punch = (type: PunchType, checkout?: { accomplishment: string; remark: string }) => {
@@ -153,9 +156,14 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
         }
         if (working) {
             const mins = minutesBetween(atToday(entry!.time_in!, now), now);
+            const text = `Working since ${fmtTime(entry!.time_in)} · ${fmtMinutes(mins)}${Number(entry!.tardiness_minutes) > 0 ? ` · ${fmtMinutes(entry!.tardiness_minutes)} late` : ''}`;
+            // Point the employee to their preset break.
+            if (!entry?.break_out && breakFrom && breakTo && now >= breakFrom && now < breakTo) {
+                return { tone: 'text-amber-700 dark:text-amber-300', text: `It’s your break time (${presetBreak}). ${text}` };
+            }
             return {
                 tone: 'text-emerald-700 dark:text-emerald-300',
-                text: `Working since ${fmtTime(entry!.time_in)} · ${fmtMinutes(mins)}${Number(entry!.tardiness_minutes) > 0 ? ` · ${fmtMinutes(entry!.tardiness_minutes)} late` : ''}`,
+                text: !entry?.break_out && breakFrom && now < breakFrom ? `${text} · Break at ${fmtTime(schedule.break_start)}` : text,
             };
         }
         if (schedule.is_rest_day) return { tone: 'text-muted-foreground', text: 'It’s your rest day. Work today is paid at rest-day premium once approved.' };
@@ -198,6 +206,7 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                             ) : (
                                 <>
                                     {schedule.shift_name.replace(/\s*\(.*\)$/, '')} · {fmtTime(schedule.start)} – {fmtTime(schedule.end)}
+                                    {presetBreak && <div>Break {presetBreak}</div>}
                                 </>
                             )}
                         </div>
@@ -354,6 +363,7 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                 </div>
                 <p className="px-1 text-[11px] text-muted-foreground">
                     Shift: {fmtDate(myDay.week[0].date)} – {fmtDate(myDay.week[6].date)} · {schedule.grace_minutes}-min grace · {schedule.break_minutes}-min unpaid break
+                    {presetBreak && ` at ${fmtTime(schedule.break_start)}`}
                 </p>
             </div>
 

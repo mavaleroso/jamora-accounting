@@ -92,7 +92,7 @@ class PayrollRunsController extends Controller
     {
         $run = $payrollRun->load([
             'period', 'computer:id,firstname,lastname', 'approver:id,firstname,lastname', 'poster:id,firstname,lastname',
-            'payer:id,firstname,lastname', 'journalEntry:id,entry_no,status', 'paymentJournalEntry:id,entry_no,status', 'bankAccount:id,name,bank_name',
+            'payer:id,firstname,lastname', 'journalEntry:id,entry_no,status', 'paymentJournalEntry:id,entry_no,status',
         ]);
 
         $payslips = $run->payslips()
@@ -103,6 +103,7 @@ class PayrollRunsController extends Controller
 
         $name = fn ($u) => $u ? trim("{$u->firstname} {$u->lastname}") : null;
         $col = fn (string ...$c) => round(collect($c)->sum(fn ($x) => (float) $payslips->sum($x)), 2);
+        $charges = $this->chargeBanks($run);
 
         return Inertia::render('payroll/runs/show', [
             'run' => [
@@ -122,12 +123,13 @@ class PayrollRunsController extends Controller
                     'computed' => ['at' => $run->computed_at?->toIso8601String(), 'by' => $name($run->computer)],
                     'approved' => ['at' => $run->approved_at?->toIso8601String(), 'by' => $name($run->approver)],
                     'posted' => ['at' => $run->posted_at?->toIso8601String(), 'by' => $name($run->poster), 'entry' => $run->journalEntry?->only(['id', 'entry_no', 'status'])],
-                    'paid' => ['at' => $run->paid_at?->toIso8601String(), 'by' => $name($run->payer), 'on' => $run->paid_on?->toDateString(), 'bank' => $run->bankAccount?->name, 'entry' => $run->paymentJournalEntry?->only(['id', 'entry_no', 'status'])],
+                    'paid' => ['at' => $run->paid_at?->toIso8601String(), 'by' => $name($run->payer), 'on' => $run->paid_on?->toDateString(), 'bank' => $charges->filter()->unique('id')->pluck('name')->join(', ') ?: null, 'entry' => $run->paymentJournalEntry?->only(['id', 'entry_no', 'status'])],
                 ],
                 'contribution_share' => app(PayrollCalculator::class)->contributionShare($run->period),
             ],
             'checks' => $run->isDraft() ? $this->payrollService->preflight($run) : ($run->warnings ?? []),
-            'payslips' => $payslips->map(fn (Payslip $p) => PayslipPresenter::present($p)),
+            // Each payslip with the company bank it is charged to: the employee's preset until released, then fixed.
+            'payslips' => $payslips->map(fn (Payslip $p) => [...PayslipPresenter::present($p), 'charge_bank_account_id' => $charges[$p->id]?->id]),
             'totals' => [
                 'basic_pay' => $col('basic_pay'),
                 'deductions_from_basic' => $col('absences', 'tardiness', 'unpaid_leave'),
@@ -152,7 +154,10 @@ class PayrollRunsController extends Controller
                 ['agency' => 'Benefits', 'form' => 'Provider billing (HMO, insurance, savings plans)', 'employee' => $col('benefit_deductions'), 'employer' => $col('employer_benefits'), 'ec' => 0],
             ], fn (array $r) => $r['agency'] !== 'Benefits' || $r['employee'] + $r['employer'] > 0)),
             'adjustmentCategories' => collect(PayrollAdjustment::CATEGORIES)->map(fn ($c, $key) => ['key' => $key, 'kind' => $c[0], 'label' => $c[1], 'taxable' => $c[2]])->values(),
-            'bankAccounts' => BankAccount::query()->where('is_active', true)->orderBy('name')->get(['id', 'name', 'bank_name', 'account_number']),
+            // Accounts the run's company holds or shares, with the holder shown in the options.
+            'bankAccounts' => BankAccount::query()->withoutEntityScope()->with('entity:id,name')->usableBy($run->entity_id)->orderBy('name')
+                ->get(['id', 'entity_id', 'name', 'bank_name', 'account_number', 'is_active'])
+                ->map(fn (BankAccount $b) => [...$b->only(['id', 'name', 'bank_name', 'account_number', 'is_active']), 'company' => $b->entity?->name]),
         ]);
     }
 
@@ -195,11 +200,15 @@ class PayrollRunsController extends Controller
     {
         $data = $request->validate([
             'paid_on' => ['required', 'date'],
-            'bank_account_id' => ['nullable', 'integer', Rule::exists('bank_accounts', 'id')],
+            // A bank account the run's company holds or shares, for employees without a payroll bank (cash or cheque).
+            'bank_account_id' => ['nullable', 'integer'],
         ]);
 
-        $bank = isset($data['bank_account_id']) ? BankAccount::query()->find($data['bank_account_id']) : null;
-        $this->payrollService->pay($payrollRun, $request->user(), $data['paid_on'], $bank);
+        $fallback = isset($data['bank_account_id'])
+            ? BankAccount::query()->withoutEntityScope()->usableBy($payrollRun->entity_id)->where('is_active', true)->find($data['bank_account_id'])
+                ?? throw ValidationException::withMessages(['bank_account_id' => 'Choose an active bank account of this company.'])
+            : null;
+        $this->payrollService->pay($payrollRun, $request->user(), $data['paid_on'], $fallback);
 
         return redirect()->back()->with('status', 'Payroll released. Payslips are now visible to employees.');
     }
@@ -268,7 +277,7 @@ class PayrollRunsController extends Controller
         $filename = "{$payrollRun->run_no}-{$type}.csv";
 
         [$header, $rows] = $type === 'bank'
-            ? $this->bankRows($payslips)
+            ? $this->bankRows($payslips, $this->chargeBanks($payrollRun))
             : $this->registerRows($payslips);
 
         return response()->streamDownload(function () use ($header, $rows) {
@@ -307,20 +316,45 @@ class PayrollRunsController extends Controller
     }
 
     /**
+     * Grouped by the company bank charged, so each bank's list can be uploaded on its own.
+     *
      * @param  Collection<int, Payslip>  $payslips
+     * @param  Collection<int, BankAccount|null>  $charges
      */
-    private function bankRows(Collection $payslips): array
+    private function bankRows(Collection $payslips, Collection $charges): array
     {
+        $paidFrom = fn (Payslip $p) => $charges[$p->id]?->name ?? 'Not set';
+
         $rows = $payslips
             ->filter(fn (Payslip $p) => (float) $p->net_pay > 0)
+            ->sortBy(fn (Payslip $p) => $paidFrom($p).' '.$p->employee?->lastname)
             ->map(fn (Payslip $p) => [
                 $p->employee?->employee_code,
                 $p->employee?->name,
                 $p->employee?->bank_name ?: 'CASH / CHEQUE',
                 $p->employee?->bank_account_no ?: '',
                 number_format((float) $p->net_pay, 2, '.', ''),
+                $paidFrom($p),
             ])->values()->all();
 
-        return [['Employee No.', 'Account name', 'Bank', 'Account number', 'Net pay'], $rows];
+        return [['Employee No.', 'Account name', 'Bank', 'Account number', 'Net pay', 'Paid from'], $rows];
+    }
+
+    /**
+     * The company bank each payslip is charged to: the employee's preset until the run is paid, then the bank it was
+     * paid from (the run's bank for runs paid before payslips kept their own).
+     *
+     * @return Collection<int, BankAccount|null> keyed by payslip id
+     */
+    private function chargeBanks(PayrollRun $run): Collection
+    {
+        if ($run->status !== PayrollRun::STATUS_PAID) {
+            return $this->payrollService->chargeBanks($run);
+        }
+
+        $banks = BankAccount::query()->withoutEntityScope()->usableBy($run->entity_id)->get()->keyBy('id');
+
+        return $run->payslips()->get(['id', 'charge_bank_account_id'])
+            ->mapWithKeys(fn (Payslip $p) => [$p->id => $banks->get($p->charge_bank_account_id ?? $run->bank_account_id)]);
     }
 }

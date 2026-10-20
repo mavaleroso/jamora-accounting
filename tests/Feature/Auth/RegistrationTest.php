@@ -1,19 +1,18 @@
 <?php
 
-test('registration screen can be rendered', function () {
-    $response = $this->get('/register');
+use App\Models\User;
 
-    $response->assertStatus(200);
-});
+/** Accounts are created by an administrator (Admin › Users, or with an employee); nobody can sign themselves up. */
+test('registration is turned off', function () {
+    $this->get('/register')->assertNotFound();
 
-test('new users can register', function () {
-    $response = $this->post('/register', [
+    $this->post('/register', [
         'name' => 'Test User',
         'email' => 'test@example.com',
         'password' => 'password',
         'password_confirmation' => 'password',
-    ]);
+    ])->assertNotFound();
 
-    $this->assertAuthenticated();
-    $response->assertRedirect(route('home', absolute: false));
+    $this->assertGuest();
+    expect(User::query()->where('email', 'test@example.com')->exists())->toBeFalse();
 });

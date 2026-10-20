@@ -6,7 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { cn } from '@/lib/utils';
 import { router } from '@inertiajs/react';
 import type { ColumnDef } from '@tanstack/react-table';
-import { MapPinOff, MoreHorizontal, PartyPopper, Pencil, RefreshCw } from 'lucide-react';
+import { AlertTriangle, MapPinOff, MoreHorizontal, PartyPopper, Pencil, RefreshCw } from 'lucide-react';
 import * as React from 'react';
 import { BOARD_STATUS, DOT, fmtMinutes, fmtTime, fullName, TONE, type Board, type BoardRow, type BoardStatus } from '../lib';
 
@@ -22,6 +22,9 @@ const CHIP_ORDER: BoardStatus[] = [
     'holiday',
     'rest_day',
 ];
+
+// Statuses where the person is (or should be) at work today, so their scheduled break is worth showing.
+const BREAK_EXPECTED: BoardStatus[] = ['late', 'expected', 'working', 'on_break', 'done'];
 
 const COLUMN_LABELS: Record<string, string> = {
     employee: 'Employee',
@@ -131,12 +134,25 @@ function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canMa
         {
             id: 'break',
             header: 'Break',
-            cell: ({ row: { original: r } }) => (
-                <span className="font-mono text-xs whitespace-nowrap">
-                    <Punch value={r.dtr?.break_out} />
-                    {r.dtr?.break_out && <span className="text-muted-foreground"> – {r.dtr.break_in ? fmtTime(r.dtr.break_in) : '…'}</span>}
-                </span>
-            ),
+            cell: ({ row: { original: r } }) => {
+                const preset = r.schedule.break_start ? `${fmtTime(r.schedule.break_start)} – ${fmtTime(r.schedule.break_end)}` : null;
+                return (
+                    <div className="font-mono text-xs whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                            <Punch value={r.dtr?.break_out} />
+                            {r.dtr?.break_out && <span className="text-muted-foreground"> – {r.dtr.break_in ? fmtTime(r.dtr.break_in) : '…'}</span>}
+                            {r.break_off_schedule && (
+                                <span title={`Started away from the scheduled break (${preset})`}>
+                                    <AlertTriangle className="size-3.5 text-amber-500" />
+                                </span>
+                            )}
+                        </span>
+                        {preset && BREAK_EXPECTED.includes(r.status) && (
+                            <div className="text-muted-foreground font-sans text-[11px]">Scheduled {preset}</div>
+                        )}
+                    </div>
+                );
+            },
             enableSorting: false,
         },
         {

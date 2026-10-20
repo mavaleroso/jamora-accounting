@@ -99,10 +99,10 @@ test('the built-in roles are the owner, the accountant, the retainer and employe
 test('the accountant does the work but the owner signs it off', function () {
     $accountant = Role::findByName('Accountant');
 
-    foreach (['journals.create', 'journals.post', 'billing.collect', 'ap.pay', 'banks.reconcile', 'payroll.manage', 'leave.approve', 'attendance.manage', 'compliance.manage', 'portal.view'] as $permission) {
+    foreach (['journals.create', 'journals.post', 'billing.collect', 'ap.pay', 'banks.reconcile', 'payroll.manage', 'attendance.manage', 'compliance.manage', 'portal.view'] as $permission) {
         expect($accountant->hasPermissionTo($permission))->toBeTrue("Accountant should hold {$permission}");
     }
-    foreach (['journals.approve', 'payroll.run', 'compliance.verify', 'periods.close', 'periods.reopen', 'journals.void', 'admin.users.manage', 'admin.roles-permissions.manage', 'admin.audit-trails.view'] as $permission) {
+    foreach (['journals.approve', 'payroll.run', 'compliance.verify', 'periods.close', 'periods.reopen', 'journals.void', 'admin.users.manage', 'admin.roles-permissions.manage', 'admin.audit-trails.view', 'requests.approve', 'requests.manage'] as $permission) {
         expect($accountant->hasPermissionTo($permission))->toBeFalse("Accountant should not hold {$permission}");
     }
 });

@@ -29,7 +29,7 @@ import { hasAnyPermission } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem, SharedData } from '@/types';
 import { AdjustmentDialog, PayslipDialog, ReleaseDialog } from './components';
-import { fmtDate, fmtRange, PAYROLL_URL, peso, remittanceDue, RUN_STATUS, stepIndex, STEPS, TONE, type AdjustmentCategory, type Check as CheckItem, type PayslipRow, type RunStatus } from './lib';
+import { fmtDate, fmtRange, PAYROLL_URL, peso, remittanceDue, RUN_STATUS, stepIndex, STEPS, TONE, type AdjustmentCategory, type Check as CheckItem, type CompanyBankAccount, type PayslipRow, type RunStatus } from './lib';
 
 type Stamp = { at: string | null; by: string | null };
 type EntryRef = { id: number; entry_no: string; status: string } | null;
@@ -75,7 +75,7 @@ type Props = {
     >;
     remittances: { agency: string; form: string; employee: number; employer: number; ec: number }[];
     adjustmentCategories: AdjustmentCategory[];
-    bankAccounts: { id: number; name: string; bank_name: string | null; account_number: string | null }[];
+    bankAccounts: CompanyBankAccount[];
 };
 
 type Confirm = { title: string; description: string; label: string; url: string; destructive?: boolean } | null;
@@ -311,7 +311,15 @@ export default function PayrollRunPage({ run, checks, payslips, totals, remittan
                 payslips={payslips}
                 categories={adjustmentCategories}
             />
-            <ReleaseDialog open={releaseOpen} onOpenChange={setReleaseOpen} runId={run.id} net={run.net_total} payDate={period.pay_date} bankAccounts={bankAccounts} />
+            <ReleaseDialog
+                open={releaseOpen}
+                onOpenChange={setReleaseOpen}
+                runId={run.id}
+                net={run.net_total}
+                payDate={period.pay_date}
+                payslips={payslips}
+                bankAccounts={bankAccounts}
+            />
             <ConfirmDialog
                 open={confirm !== null}
                 onOpenChange={(o) => !o && setConfirm(null)}

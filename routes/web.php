@@ -10,6 +10,7 @@ use App\Http\Controllers\Accounting\PeriodsController;
 use App\Http\Controllers\Admin\AuditTrailsController;
 use App\Http\Controllers\Admin\PermissionsController;
 use App\Http\Controllers\Admin\RolesController;
+use App\Http\Controllers\Admin\SystemSettingsController;
 use App\Http\Controllers\Admin\UsersController;
 use App\Http\Controllers\Ap\BillsController;
 use App\Http\Controllers\Banks\BankAccountsController;
@@ -35,6 +36,7 @@ use App\Http\Controllers\Libraries\EmployeeOverviewController;
 use App\Http\Controllers\Libraries\EmployeesController;
 use App\Http\Controllers\Libraries\JournalsController;
 use App\Http\Controllers\Libraries\PartnersController;
+use App\Http\Controllers\Libraries\ShiftsController;
 use App\Http\Controllers\Libraries\TaxCodesController;
 use App\Http\Controllers\Libraries\VendorsController;
 use App\Http\Controllers\OverviewController;
@@ -49,13 +51,16 @@ use App\Http\Controllers\Reports\IncomeStatementController;
 use App\Http\Controllers\Reports\JournalRegisterController;
 use App\Http\Controllers\Reports\OperationalReportsController;
 use App\Http\Controllers\Reports\TrialBalanceController;
+use App\Http\Controllers\ViewModeController;
 use App\Services\Reports\OperationalReportService;
+use App\Support\ViewMode;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     if (auth()->check()) {
         $user = auth()->user();
-        if ($user->hasRole(RoleEnum::Employee->value)) {
+        // Employees, and an Admin in the employee view, land on their portal.
+        if ($user->hasRole(RoleEnum::Employee->value) || app(ViewMode::class)->asEmployee($user)) {
             return redirect()->route('employee-management.portal.index');
         }
 
@@ -74,6 +79,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/overview', [OverviewController::class, 'index'])->name('overview');
 
     Route::post('/entities/switch', [EntitiesController::class, 'switch'])->name('entities.switch');
+    // An Admin who is also an employee switches between the admin and the employee view.
+    Route::post('/view-mode', ViewModeController::class)->name('view-mode.switch');
 
     Route::get('/accounting/dashboard', [DashboardController::class, 'index'])
         ->name('dashboard');
@@ -207,11 +214,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::delete('{partner}', 'destroy')->name('destroy');
         });
 
+        // The current company's shift library; whoever manages rosters may maintain it too.
+        Route::controller(ShiftsController::class)->prefix('shifts')->name('shifts.')->middleware('permission:libraries.shifts.manage|roster.manage')->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::post('/', 'store')->name('store');
+            Route::put('{shift}', 'update')->name('update');
+            Route::delete('{shift}', 'destroy')->name('destroy');
+        });
+
         Route::controller(EmployeesController::class)->prefix('employees')->name('employees.')->middleware('permission:libraries.employees.manage')->group(function () {
             Route::get('/', 'index')->name('index');
             Route::post('/', 'store')->name('store');
             // Profile view: balances, payroll, requests, time records and activity, loaded on open.
-            // Employees of any company the user can open, not just the current one (resolved in the controllers).
+            // Employees of any company in the user's directory, not just the current one (resolved in the controllers).
             Route::get('{employee}/overview', EmployeeOverviewController::class)->name('overview')->whereNumber('employee');
             Route::put('{employee}', 'update')->name('update')->whereNumber('employee');
             Route::delete('{employee}', 'destroy')->name('destroy')->whereNumber('employee');
@@ -333,6 +348,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index');
             Route::get('export', 'export')->name('export');
         });
+
+        Route::controller(SystemSettingsController::class)->prefix('system-settings')->name('system-settings.')->middleware('permission:admin.system-settings.manage')->group(function () {
+            Route::get('/', 'index')->name('index');
+            Route::put('/', 'update')->name('update');
+            Route::put('leave', 'updateLeave')->name('leave.update');
+        });
     });
 
     Route::prefix('integration/inventory')->name('integration.inventory.')->group(function () {
@@ -346,15 +367,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::prefix('employee-management')->name('employee-management.')->group(function () {
         Route::get('/', [EmployeeDashboardController::class, 'index'])->name('dashboard')
-            ->middleware('permission:attendance.manage|leave.approve|payroll.view|payroll.manage|payroll.run|roster.manage|libraries.employees.manage|compliance.view');
+            ->middleware('permission:attendance.manage|requests.approve|payroll.view|payroll.manage|payroll.run|roster.manage|libraries.employees.manage|compliance.view');
 
         Route::controller(ShiftRosterController::class)->prefix('roster')->name('roster.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:roster.view|payroll.view');
             Route::post('/', 'store')->name('store')->middleware('permission:roster.manage|payroll.manage');
             Route::post('publish', 'publish')->name('publish')->middleware('permission:roster.manage|payroll.manage');
             Route::post('copy-previous-week', 'copyPreviousWeek')->name('copy-previous')->middleware('permission:roster.manage|payroll.manage');
-            Route::post('templates', 'storeTemplate')->name('templates.store')->middleware('permission:roster.manage|payroll.manage');
-            Route::delete('templates/{template}', 'destroyTemplate')->name('templates.destroy')->middleware('permission:roster.manage|payroll.manage');
+            // Shifts are added and edited in Libraries › Shifts.
             Route::delete('{roster}', 'destroy')->name('destroy')->middleware('permission:roster.manage|payroll.manage');
         });
 
@@ -364,7 +384,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('accomplishments', 'updateAccomplishment')->name('accomplishments.update')->middleware('permission:attendance.view|attendance.punch');
             Route::post('geofence', 'updateGeofence')->name('geofence')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('requests', 'storeRequest')->name('requests.store')->middleware('permission:attendance.view|attendance.punch|payroll.view');
-            Route::post('requests/{attendanceRequest}/review', 'reviewRequest')->name('requests.review')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('requests/{attendanceRequest}/review', 'reviewRequest')->name('requests.review')->middleware('permission:requests.approve');
             Route::post('requests/{attendanceRequest}/cancel', 'cancelRequest')->name('requests.cancel')->middleware('permission:attendance.view|attendance.punch|payroll.view');
             Route::post('daily-close', 'runDailyClose')->name('daily-close')->middleware('permission:attendance.manage|payroll.manage');
             Route::post('approve-bulk', 'approveBulk')->name('approve-bulk')->middleware('permission:attendance.manage|payroll.manage');
@@ -376,19 +396,20 @@ Route::middleware(['auth', 'verified'])->group(function () {
         });
 
         Route::controller(EmployeeRequestsController::class)->prefix('requests')->name('requests.')->group(function () {
-            $any = 'permission:leave.view|leave.file|leave.approve|attendance.view|attendance.punch|attendance.manage|payroll.view|payroll.manage';
+            $any = 'permission:leave.view|leave.file|requests.approve|requests.manage|attendance.view|attendance.punch|attendance.manage|payroll.view|payroll.manage';
             Route::get('/', 'index')->name('index')->middleware($any);
             Route::post('/', 'store')->name('store')->middleware($any);
-            Route::post('leave/{leaveRequest}/review', 'reviewLeave')->name('leave.review')->middleware('permission:leave.approve|payroll.manage');
+            Route::post('leave/{leaveRequest}/review', 'reviewLeave')->name('leave.review')->middleware('permission:requests.approve');
             Route::post('leave/{leaveRequest}/cancel', 'cancelLeave')->name('leave.cancel')->middleware($any);
             Route::get('leave/{leaveRequest}/attachment', 'leaveAttachment')->name('leave.attachment')->middleware($any);
-            Route::post('attendance/{attendanceRequest}/review', 'reviewAttendance')->name('attendance.review')->middleware('permission:attendance.manage|payroll.manage');
+            Route::post('attendance/{attendanceRequest}/review', 'reviewAttendance')->name('attendance.review')->middleware('permission:requests.approve');
             Route::post('attendance/{attendanceRequest}/cancel', 'cancelAttendance')->name('attendance.cancel')->middleware($any);
+            Route::get('attendance/{attendanceRequest}/attachment', 'attendanceAttachment')->name('attendance.attachment')->middleware($any);
         });
 
         // Old Leave page address; leave is filed, decided and cancelled in Employee Requests.
         Route::get('leave', [LeaveManagementController::class, 'index'])->name('leave.index')
-            ->middleware('permission:leave.view|leave.file|leave.approve|payroll.view');
+            ->middleware('permission:leave.view|leave.file|requests.approve|payroll.view');
 
         Route::controller(BenefitsAdministrationController::class)->prefix('benefits')->name('benefits.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.manage|libraries.employees.manage');

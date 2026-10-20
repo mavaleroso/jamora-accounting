@@ -8,6 +8,7 @@ use App\Models\BankTransaction;
 use App\Models\Journal;
 use App\Models\JournalEntry;
 use App\Models\User;
+use App\Support\ChartOfAccounts;
 use App\Support\EntityContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -18,7 +19,9 @@ use Illuminate\Validation\ValidationException;
  * cash/bank records, fund transfers, the optical sync) goes through here so the ledger, the bank register and
  * reconciliation always agree.
  *
- * Every bank account belongs to exactly one entity and has its own Cash in Bank ledger account.
+ * A bank account may be shared between companies (see BankAccount). Each company posts to its own Cash in Bank
+ * sub-account for the account, and the register line is tagged with the company whose books it is in, so a shared
+ * account's disbursements stay in the right company's expenses.
  */
 class CashMovementService
 {
@@ -37,7 +40,7 @@ class CashMovementService
     public function __construct(protected JournalPostingService $journalPostingService) {}
 
     /**
-     * The current entity's bank account, validated as active.
+     * A bank account the current company holds or shares, validated as active.
      */
     public function bankAccountFor(?int $bankAccountId): ?BankAccount
     {
@@ -45,12 +48,12 @@ class CashMovementService
             return null;
         }
 
-        $bank = BankAccount::query()->withoutGlobalScope('entity')->with('glAccount')->findOrFail($bankAccountId);
+        $bank = BankAccount::query()->withoutGlobalScope('entity')->findOrFail($bankAccountId);
         $entityId = app(EntityContext::class)->id();
 
-        if ($entityId && (int) $bank->entity_id !== (int) $entityId) {
+        if ($entityId && ! $bank->allowsEntity((int) $entityId)) {
             throw ValidationException::withMessages([
-                'bank_account_id' => 'This bank account belongs to another entity.',
+                'bank_account_id' => 'This bank account is not shared with this company.',
             ]);
         }
 
@@ -62,16 +65,16 @@ class CashMovementService
     }
 
     /**
-     * Cash-side GL account: the bank's own ledger account when money goes through a bank, otherwise the clearing
-     * account for the payment method.
+     * Cash-side GL account: the current company's own ledger account for the bank when money goes through a bank,
+     * otherwise the clearing account for the payment method.
      */
     public function cashAccountFor(string $method, ?BankAccount $bank = null): Account
     {
-        if ($bank?->glAccount) {
-            return $bank->glAccount;
+        if ($bank) {
+            return ChartOfAccounts::ensureBankLedger($bank, app(EntityContext::class)->id() ?? (int) $bank->entity_id);
         }
 
-        $code = $bank ? config('accounting.default_accounts.cash_in_bank', '1010') : match ($method) {
+        $code = match ($method) {
             'card' => '1020',
             'gcash', 'e_wallet' => '1030',
             'check', 'bank_transfer' => '1010',
@@ -108,13 +111,14 @@ class CashMovementService
     }
 
     /**
-     * Record the bank-register line for a movement through a bank account.
+     * Record the bank-register line for a movement through a bank account, tagged with the company whose books it
+     * is in (the current one, unless given).
      */
     public function recordBankLine(BankAccount $bank, array $data): BankTransaction
     {
         return BankTransaction::query()->create([
             'bank_account_id' => $bank->id,
-            'entity_id' => $bank->entity_id ?? app(EntityContext::class)->id(),
+            'entity_id' => $data['entity_id'] ?? app(EntityContext::class)->id() ?? $bank->entity_id,
             'txn_date' => $data['txn_date'],
             'description' => $data['description'],
             'amount' => round((float) $data['amount'], 2),
@@ -225,8 +229,9 @@ class CashMovementService
             config('accounting.default_accounts.ewallet_clearing', '1030'),
         ]));
 
+        // Every company's own ledger for each bank account it holds or shares.
         return Account::query()->whereIn('code', $codes)->pluck('id')
-            ->merge(BankAccount::query()->whereNotNull('gl_account_id')->pluck('gl_account_id'))
+            ->merge(DB::table('bank_account_entity')->whereNotNull('gl_account_id')->pluck('gl_account_id'))
             ->unique()->map(fn ($id) => (int) $id)->values()->all();
     }
 }

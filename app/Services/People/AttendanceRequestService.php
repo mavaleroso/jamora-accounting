@@ -7,7 +7,9 @@ use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\ShiftRoster;
 use App\Models\User;
+use App\Support\PrivateFiles;
 use Carbon\Carbon;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -38,6 +40,8 @@ class AttendanceRequestService
             'destination' => ['nullable', 'required_if:request_type,official_business', 'string', 'max:255'],
             'requested_rest_day' => ['nullable', 'boolean'],
             'reason' => ['required', 'string', 'min:5', 'max:500'],
+            // Official business only: a travel order, invitation, memo or receipt.
+            'attachment' => ['nullable', 'exclude_unless:request_type,official_business', 'file', 'mimes:pdf,jpg,jpeg,png,webp,heic', 'max:5120'],
         ];
     }
 
@@ -45,6 +49,8 @@ class AttendanceRequestService
     {
         return [
             'destination.required_if' => 'Where will you be? e.g. client site, supplier, government office.',
+            'attachment.mimes' => 'Attach a PDF or a photo (JPG, PNG, WebP or HEIC).',
+            'attachment.max' => 'The document must not be larger than 5 MB.',
         ];
     }
 
@@ -136,6 +142,12 @@ class AttendanceRequestService
             throw ValidationException::withMessages(['work_date' => "There is already a pending {$label} request for this day."]);
         }
 
+        // Stored only once the request is accepted, so a refused filing leaves no file behind.
+        $attachment = $data['attachment'] ?? null;
+        $attachmentPath = $type === AttendanceRequest::TYPE_OFFICIAL_BUSINESS && $attachment instanceof UploadedFile
+            ? $attachment->store('official-business', PrivateFiles::DISK)
+            : null;
+
         return AttendanceRequest::create([
             'entity_id' => $employee->entity_id,
             'employee_id' => $employee->id,
@@ -148,6 +160,7 @@ class AttendanceRequestService
             'destination' => $type === AttendanceRequest::TYPE_OFFICIAL_BUSINESS ? $data['destination'] : null,
             'requested_rest_day' => $restDay,
             'reason' => $data['reason'],
+            'attachment_path' => $attachmentPath,
             'status' => 'pending',
             'filed_by' => $filedBy?->id,
         ]);

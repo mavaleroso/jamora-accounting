@@ -44,7 +44,7 @@ class EmployeeOverviewController extends Controller
 
     public function __invoke(Request $request, int $id): JsonResponse
     {
-        // The directory lists every company the user can open; the employee's own company is current for the lookups.
+        // The directory lists several companies' employees; the employee's own company is current for the lookups.
         $employee = Employee::query()->visibleTo($request->user())->findOrFail($id);
 
         return $this->entityContext->runAs($employee->entity, fn () => $this->overview($request, $employee));
@@ -55,7 +55,7 @@ class EmployeeOverviewController extends Controller
         $user = $request->user();
         $can = [
             'payroll' => $user->canAny(['payroll.view', 'payroll.manage', 'payroll.run']),
-            'requests' => $user->canAny(['leave.view', 'leave.approve', 'attendance.view', 'attendance.manage', 'payroll.manage']),
+            'requests' => $user->canAny(['leave.view', 'requests.approve', 'attendance.view', 'attendance.manage', 'payroll.manage']),
             'attendance' => $user->canAny(['attendance.view', 'attendance.manage', 'payroll.manage']),
             'activity' => $user->can('admin.audit-trails.view'),
         ];

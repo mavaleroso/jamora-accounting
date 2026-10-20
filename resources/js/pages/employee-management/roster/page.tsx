@@ -1,4 +1,4 @@
-import { Head, router, usePage } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
     Calendar,
     ChevronLeft,
@@ -61,6 +61,10 @@ type DayInfo = {
 
 type ShiftData = {
     id: number | null;
+    /** The library shift the day was made with, if any. */
+    shift_template_id?: number | null;
+    break_minutes?: number;
+    grace_minutes?: number;
     shift_name: string;
     shift_start: string | null;
     shift_end: string | null;
@@ -93,6 +97,31 @@ type Props = {
         position: string;
     }>;
     rosterMatrix: RosterRow[];
+    /** The shift everyone works unless rostered otherwise: the company default in Libraries › Shifts. */
+    defaultShift: { id?: number | null; name: string; start: string; end: string; break_minutes?: number; grace_minutes?: number };
+    /** The company's active shifts (Libraries › Shifts), the default first: offered as presets. */
+    shiftTemplates?: LibraryShift[];
+    canManageShifts?: boolean;
+};
+
+type LibraryShift = {
+    id: number;
+    code: string;
+    name: string;
+    start_time: string;
+    end_time: string;
+    break_minutes: number;
+    grace_minutes: number;
+    color: string | null;
+    is_default: boolean;
+};
+
+const REST_PRESET = 'rest';
+
+/** "13:05:00" → "1:05 PM" */
+const clock = (time: string) => {
+    const [h, m] = time.split(':').map(Number);
+    return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
 };
 
 export default function ShiftRosterPage({
@@ -101,6 +130,9 @@ export default function ShiftRosterPage({
     weekEnd,
     employees,
     rosterMatrix,
+    defaultShift,
+    shiftTemplates = [],
+    canManageShifts = false,
 }: Props) {
     const { auth } = usePage<{ auth: Auth }>().props;
     const canManageRoster = hasAnyPermission(auth, ['roster.manage', 'payroll.manage']);
@@ -113,50 +145,62 @@ export default function ShiftRosterPage({
     const [formState, setFormState] = React.useState({
         employee_id: employees[0]?.id ? String(employees[0].id) : '',
         roster_date: days[0]?.date || new Date().toISOString().split('T')[0],
-        shift_name: 'Regular Shift (08:00 AM - 05:00 PM)',
-        shift_start: '08:00',
-        shift_end: '17:00',
+        // The library shift picked, if any; typing other hours makes it a custom shift for the day.
+        shift_template_id: defaultShift.id ? String(defaultShift.id) : '',
+        shift_name: defaultShift.name,
+        shift_start: defaultShift.start.substring(0, 5),
+        shift_end: defaultShift.end.substring(0, 5),
+        break_minutes: defaultShift.break_minutes ?? 60,
+        grace_minutes: defaultShift.grace_minutes ?? 5,
         is_rest_day: false,
         notes: '',
     });
 
+    // The company's shifts from Libraries › Shifts (else its default shift), or a rest day. Other hours for a day can
+    // still be typed in.
+    const libraryShifts: LibraryShift[] = shiftTemplates.length
+        ? shiftTemplates
+        : [
+              {
+                  id: 0,
+                  code: 'DEFAULT',
+                  name: defaultShift.name,
+                  start_time: defaultShift.start,
+                  end_time: defaultShift.end,
+                  break_minutes: defaultShift.break_minutes ?? 60,
+                  grace_minutes: defaultShift.grace_minutes ?? 5,
+                  color: null,
+                  is_default: true,
+              },
+          ];
     const shiftPresets = [
-        {
-            label: 'Morning Shift (08:00 AM - 05:00 PM)',
-            name: 'Morning Shift',
-            start: '08:00',
-            end: '17:00',
+        ...libraryShifts.map((s) => ({
+            key: String(s.id),
+            label: `${s.name} (${clock(s.start_time)} – ${clock(s.end_time)})${s.is_default ? ' · default' : ''}`,
+            templateId: s.id ? String(s.id) : '',
+            name: s.name,
+            start: s.start_time.substring(0, 5),
+            end: s.end_time.substring(0, 5),
+            breakMinutes: s.break_minutes,
+            graceMinutes: s.grace_minutes,
             isRest: false,
-        },
+        })),
         {
-            label: 'Mid / Clinic Shift (10:00 AM - 07:00 PM)',
-            name: 'Mid / Clinic Shift',
-            start: '10:00',
-            end: '19:00',
-            isRest: false,
-        },
-        {
-            label: 'Optometrist Clinic Schedule (09:00 AM - 06:00 PM)',
-            name: 'Optometrist Clinic Hours',
-            start: '09:00',
-            end: '18:00',
-            isRest: false,
-        },
-        {
-            label: 'Closing Shift (11:00 AM - 08:00 PM)',
-            name: 'Closing Shift',
-            start: '11:00',
-            end: '20:00',
-            isRest: false,
-        },
-        {
+            key: REST_PRESET,
             label: 'Scheduled Rest Day / Day Off',
+            templateId: '',
             name: 'Rest Day',
             start: '',
             end: '',
+            breakMinutes: 0,
+            graceMinutes: 0,
             isRest: true,
         },
     ];
+    // The preset matching the form: rest day, the library shift picked, or none (custom hours).
+    const presetValue = formState.is_rest_day
+        ? REST_PRESET
+        : shiftPresets.find((p) => !p.isRest && p.templateId === formState.shift_template_id && p.start === formState.shift_start && p.end === formState.shift_end)?.key ?? '';
 
     const handleNavigateWeek = (direction: 'prev' | 'next' | 'current') => {
         if (direction === 'current') {
@@ -180,23 +224,29 @@ export default function ShiftRosterPage({
         setFormState({
             employee_id: String(employee.id),
             roster_date: date,
-            shift_name: shift.shift_name || 'Regular Shift',
-            shift_start: shift.shift_start ? shift.shift_start.substring(0, 5) : '08:00',
-            shift_end: shift.shift_end ? shift.shift_end.substring(0, 5) : '17:00',
+            shift_template_id: shift.shift_template_id ? String(shift.shift_template_id) : '',
+            shift_name: shift.shift_name || defaultShift.name,
+            shift_start: (shift.shift_start ?? defaultShift.start).substring(0, 5),
+            shift_end: (shift.shift_end ?? defaultShift.end).substring(0, 5),
+            break_minutes: shift.break_minutes ?? defaultShift.break_minutes ?? 60,
+            grace_minutes: shift.grace_minutes ?? defaultShift.grace_minutes ?? 5,
             is_rest_day: shift.is_rest_day,
             notes: shift.notes || '',
         });
         setIsShiftModalOpen(true);
     };
 
-    const handlePresetChange = (presetLabel: string) => {
-        const found = shiftPresets.find((p) => p.label === presetLabel);
+    const handlePresetChange = (key: string) => {
+        const found = shiftPresets.find((p) => p.key === key);
         if (found) {
             setFormState((prev) => ({
                 ...prev,
+                shift_template_id: found.templateId,
                 shift_name: found.name,
                 shift_start: found.start,
                 shift_end: found.end,
+                break_minutes: found.breakMinutes,
+                grace_minutes: found.graceMinutes,
                 is_rest_day: found.isRest,
             }));
         }
@@ -278,6 +328,15 @@ export default function ShiftRosterPage({
                         >
                             <ChevronRight className="h-4 w-4" />
                         </Button>
+
+                        {canManageShifts && (
+                            <Button variant="outline" asChild className="gap-1.5">
+                                <Link href="/libraries/shifts">
+                                    <Clock className="h-4 w-4" />
+                                    Shifts
+                                </Link>
+                            </Button>
+                        )}
 
                         <Button
                             variant="secondary"
@@ -450,19 +509,28 @@ export default function ShiftRosterPage({
                             </div>
 
                             <div className="space-y-2">
-                                <Label>Shift Preset</Label>
-                                <Select onValueChange={handlePresetChange}>
+                                <Label>Shift</Label>
+                                <Select value={presetValue} onValueChange={handlePresetChange}>
                                     <SelectTrigger>
-                                        <SelectValue placeholder="Choose standard preset..." />
+                                        <SelectValue placeholder="Custom hours" />
                                     </SelectTrigger>
                                     <SelectContent>
                                         {shiftPresets.map((p) => (
-                                            <SelectItem key={p.label} value={p.label}>
+                                            <SelectItem key={p.key} value={p.key}>
                                                 {p.label}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
+                                {canManageShifts && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Shifts come from{' '}
+                                        <Link href="/libraries/shifts" className="underline underline-offset-2">
+                                            Libraries › Shifts
+                                        </Link>
+                                        .
+                                    </p>
+                                )}
                             </div>
 
                             <div className="flex items-center justify-between rounded-lg border border-border p-3">
@@ -478,6 +546,7 @@ export default function ShiftRosterPage({
                                             ...formState,
                                             is_rest_day: checked,
                                             shift_name: checked ? 'Rest Day' : formState.shift_name,
+                                            shift_template_id: checked ? '' : formState.shift_template_id,
                                         })
                                     }
                                 />
@@ -502,7 +571,7 @@ export default function ShiftRosterPage({
                                                 id="shift_start"
                                                 type="time"
                                                 value={formState.shift_start}
-                                                onChange={(e) => setFormState({ ...formState, shift_start: e.target.value })}
+                                                onChange={(e) => setFormState({ ...formState, shift_start: e.target.value, shift_template_id: '' })}
                                                 required
                                             />
                                         </div>
@@ -513,7 +582,7 @@ export default function ShiftRosterPage({
                                                 id="shift_end"
                                                 type="time"
                                                 value={formState.shift_end}
-                                                onChange={(e) => setFormState({ ...formState, shift_end: e.target.value })}
+                                                onChange={(e) => setFormState({ ...formState, shift_end: e.target.value, shift_template_id: '' })}
                                                 required
                                             />
                                         </div>

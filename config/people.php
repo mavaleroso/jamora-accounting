@@ -38,8 +38,20 @@ return [
         'ot_minimum_minutes' => 30,
         // Company policy: rendered OT is floored to blocks of N minutes.
         'ot_block_minutes' => 15,
+        // Company policy: unpaid break between the end of regular hours and the start of OT, so with 60 a shift
+        // ending at 6:00 PM counts OT from 7:00 PM. Default only; the owner sets it in Admin > System Settings.
+        'ot_break_minutes' => 0,
+        // Company policy: OT is not counted past this time of day ("H:i", e.g. "00:00" = midnight); null = no
+        // ceiling. Default only; the owner sets it in Admin > System Settings.
+        'ot_ceiling' => null,
         // Unpaid meal break deducted when no break punches are recorded and span exceeds this.
         'auto_break_after_minutes' => 300,
+        // Company policy: an employee's preset break lasts exactly this long, on any shift that has a break.
+        // Co-workers may share the same break time.
+        'preset_break_minutes' => 60,
+        // Company policy: a break started more than this many minutes from the employee's preset break time is
+        // flagged as off-schedule (never refused).
+        'break_tolerance_minutes' => 15,
         // Art. 86 - night shift differential: 10% for work between 10:00 PM and 6:00 AM.
         'night_diff_start' => '22:00',
         'night_diff_end' => '06:00',
@@ -144,8 +156,20 @@ return [
             'other_deductions_payable' => ['code' => '2440', 'name' => 'Other Payroll Deductions Payable', 'type' => 'Current Liabilities'],
             'benefits_payable' => ['code' => '2450', 'name' => 'Employee Benefits Payable', 'type' => 'Current Liabilities'],
             'salaries_payable' => ['code' => '2500', 'name' => 'Salaries Payable', 'type' => 'Current Liabilities'],
-            'cash_in_bank' => ['code' => '1010', 'name' => 'Cash in Bank', 'type' => 'Current Assets'],
+            // Net pay is released from each employee's registered payroll bank, to that bank's own Cash in Bank
+            // sub-account (see ChartOfAccounts::ensureBankLedger).
         ],
+    ],
+
+    /*
+    | Leave filing (company policy). Defaults only: the owner changes them in Admin > System Settings.
+    */
+    'leave' => [
+        // Leave of the types below must be filed at least this many days before it starts.
+        'min_notice_days' => 5,
+        // Leave that can be planned. Sick, emergency, bereavement, maternity and paternity leave can't always be filed
+        // ahead, so they keep only the notice set on their own leave type.
+        'notice_leave_types' => ['VL', 'SIL', 'LWOP'],
     ],
 
     /*

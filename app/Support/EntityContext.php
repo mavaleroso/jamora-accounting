@@ -80,11 +80,9 @@ class EntityContext
     {
         $sessionId = Session::get(self::SESSION_KEY);
 
+        // Any company the user can open (an Admin, every one) may be the current one.
         if ($sessionId) {
-            $fromSession = $user->entities()
-                ->where('entities.id', $sessionId)
-                ->where('entities.is_active', true)
-                ->first();
+            $fromSession = $user->accessibleEntities()->whereKey($sessionId)->first();
 
             if ($fromSession) {
                 $this->set($fromSession);
@@ -93,11 +91,12 @@ class EntityContext
             }
         }
 
+        // Their default company, else (an Admin given none) the first one they can open.
         $default = $user->entities()
             ->where('entities.is_active', true)
             ->orderByDesc('entity_user.is_default')
             ->orderBy('entities.name')
-            ->first();
+            ->first() ?? $user->accessibleEntities()->orderBy('entities.name')->first();
 
         $this->set($default);
 
