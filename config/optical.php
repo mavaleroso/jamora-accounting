@@ -28,6 +28,10 @@ return [
         'page_size' => 100,
     ],
 
+    // Whether logins copied from optical-new sign in with their optical-new password, checked by optical-new. Off:
+    // every login signs in with the password kept here, and sign-in never calls optical-new.
+    'password_check' => (bool) env('OPTICAL_PASSWORD_CHECK', false),
+
     // Go-live date. Nothing dated earlier is booked: it belongs in the opening balances. Payments received before
     // go-live on orders still open at go-live are carried in as customer deposits against Opening Balance Equity.
     'start_date' => env('OPTICAL_SYNC_START_DATE'),

@@ -83,12 +83,12 @@ class FortifyServiceProvider extends ServiceProvider
     }
 
     /**
-     * Users copied from optical-new sign in with their optical-new password, which optical-new checks. Only when it
-     * can't be reached does the password kept here count.
+     * With optical.password_check on, users copied from optical-new sign in with their optical-new password, which
+     * optical-new checks; only when it can't be reached does the password kept here count. Off, it always counts.
      */
     private function passwordMatches(User $user, string $password): bool
     {
-        if ($user->optical_user_id) {
+        if ($user->optical_user_id && config('optical.password_check')) {
             $valid = app(OpticalApiClient::class)->checkPassword((int) $user->optical_user_id, $password);
 
             if ($valid !== null) {

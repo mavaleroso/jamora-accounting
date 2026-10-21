@@ -228,6 +228,7 @@ test('the employee directory counts "-" government IDs as missing and leaves "-"
 });
 
 test('a copied user signs in with their optical-new password, checked by optical-new', function () {
+    config(['optical.password_check' => true]);
     $this->users = [opticalUser()];
     $this->passwords = [11 => 'Optical-pass-1'];
     ($this->sync)();
@@ -242,6 +243,7 @@ test('a copied user signs in with their optical-new password, checked by optical
 });
 
 test('when optical-new can\'t be reached, the password kept here counts', function () {
+    config(['optical.password_check' => true]);
     $this->users = [opticalUser()];
     ($this->sync)();
     $user = User::where('optical_user_id', 11)->sole();
@@ -250,6 +252,22 @@ test('when optical-new can\'t be reached, the password kept here counts', functi
 
     $this->post('/login', ['username' => 'eandong', 'password' => 'Local-pass-1']);
     $this->assertAuthenticatedAs($user);
+});
+
+test('with the optical-new password check off, a copied user signs in with the password kept here', function () {
+    config(['optical.password_check' => false]);
+    $this->users = [opticalUser()];
+    $this->passwords = [11 => 'Optical-pass-1'];
+    ($this->sync)();
+    $user = User::where('optical_user_id', 11)->sole();
+    $user->update(['password' => 'Local-pass-1']);
+
+    $this->post('/login', ['username' => 'eandong', 'password' => 'Optical-pass-1'])->assertSessionHasErrors('username');
+    $this->assertGuest();
+
+    $this->post('/login', ['username' => 'eandong', 'password' => 'Local-pass-1']);
+    $this->assertAuthenticatedAs($user);
+    Http::assertNotSent(fn (Request $r) => str_contains($r->url(), 'check-password'));
 });
 
 test('a login not copied from optical-new keeps its own password', function () {
