@@ -295,7 +295,7 @@ class DashboardController extends Controller
     private function lastSyncRun(): ?array
     {
         $run = SyncRun::query()
-            ->with('triggeredByUser:id,name,username')
+            ->with('triggeredByUser:id,firstname,middlename,lastname,username')
             ->orderByDesc('started_at')
             ->first();
 

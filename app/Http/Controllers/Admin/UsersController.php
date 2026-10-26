@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Enums\RoleEnum;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\UserRbacUpdateRequest;
 use App\Http\Requests\Admin\UserStatusUpdateRequest;
 use App\Http\Requests\Admin\UserStoreRequest;
 use App\Http\Requests\Admin\UserUpdateRequest;
+use App\Models\JournalEntry;
 use App\Models\User;
 use App\Services\Admin\UserService;
 use App\Support\PermissionCatalog;
@@ -86,6 +88,7 @@ class UsersController extends Controller
             'filters' => $filters,
             'summary' => $this->summary(),
             'currentUserId' => $request->user()?->id,
+            'canDelete' => (bool) $request->user()?->hasRole(RoleEnum::Admin->value),
             'roles' => $roles,
             'permissions' => $permissions,
             'modules' => PermissionCatalog::modules(),
@@ -152,6 +155,40 @@ class UsersController extends Controller
             ->with('status', $request->validated('status') ? "{$user->name} enabled." : "{$user->name} disabled.");
     }
 
+    /**
+     * Admin only. Records the user filed or approved keep their rows (the reference is cleared) and a linked employee
+     * stays in the directory without a login; someone who touched journal entries must be disabled instead.
+     */
+    public function destroy(Request $request, User $user): RedirectResponse
+    {
+        if ($request->user()?->is($user)) {
+            throw ValidationException::withMessages(['user' => 'You cannot delete your own account.']);
+        }
+
+        $inJournals = JournalEntry::withTrashed()
+            ->where(fn ($q) => $q->where('prepared_by', $user->id)
+                ->orWhere('approved_by', $user->id)
+                ->orWhere('posted_by', $user->id)
+                ->orWhere('voided_by', $user->id))
+            ->exists();
+
+        if ($inJournals) {
+            throw ValidationException::withMessages([
+                'user' => "{$user->name} prepared, approved, posted or voided journal entries, so the account is kept for the books. Disable it instead.",
+            ]);
+        }
+
+        $name = $user->name;
+        $this->userService->delete($user);
+
+        if ($this->usesDatabaseSessions()) {
+            DB::table(config('session.table', 'sessions'))->where('user_id', $user->id)->delete();
+        }
+
+        return redirect()->back()
+            ->with('status', "{$name} deleted.");
+    }
+
     // -----------------------------------------------------------------------------------------
 
     /**
@@ -175,13 +212,12 @@ class UsersController extends Controller
         }
     }
 
-    /** @return array{total: int, active: int, disabled: int, twoFactor: int, online: int} */
+    /** @return array{total: int, active: int, disabled: int, online: int} */
     private function summary(): array
     {
         $counts = User::query()
             ->selectRaw('count(*) as total')
             ->selectRaw('sum(case when status = 1 then 1 else 0 end) as active')
-            ->selectRaw('sum(case when two_factor_confirmed_at is not null then 1 else 0 end) as two_factor')
             ->first();
 
         $online = $this->usesDatabaseSessions()
@@ -199,7 +235,6 @@ class UsersController extends Controller
             'total' => $total,
             'active' => $active,
             'disabled' => $total - $active,
-            'twoFactor' => (int) $counts->two_factor,
             'online' => $online,
         ];
     }

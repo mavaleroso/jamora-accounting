@@ -38,7 +38,7 @@ class ReconciliationsController extends Controller
         $accountFilter = $request->integer('bank_account_id') ?: null;
 
         $reconciliations = BankReconciliation::query()
-            ->with(['bankAccount:id,code,name,bank_name', 'reconciledBy:id,name'])
+            ->with(['bankAccount:id,code,name,bank_name', 'reconciledBy:id,firstname,middlename,lastname,username'])
             ->whereIn('bank_account_id', $accountFilter ? [$accountFilter] : $accountIds)
             ->orderByRaw("case when status = 'open' then 0 else 1 end")
             ->orderByDesc('statement_date')
@@ -109,7 +109,7 @@ class ReconciliationsController extends Controller
     public function show(BankReconciliation $bankReconciliation): Response
     {
         $this->authorizeAccount($bankReconciliation->bank_account_id);
-        $bankReconciliation->load(['bankAccount:id,code,name,bank_name,account_number', 'reconciledBy:id,name']);
+        $bankReconciliation->load(['bankAccount:id,code,name,bank_name,account_number', 'reconciledBy:id,firstname,middlename,lastname,username']);
 
         $items = $this->registerQuery($bankReconciliation->bank_account_id)
             ->where(function (Builder $q) use ($bankReconciliation) {

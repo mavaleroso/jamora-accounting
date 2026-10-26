@@ -21,7 +21,7 @@ export type PermissionInfo = { key: string; label: string; description: string; 
 
 export type UserFilters = { role: string | null; status: 'active' | 'disabled' | null; sort: 'newest' | 'oldest' | 'name' };
 
-export type UserSummary = { total: number; active: number; disabled: number; twoFactor: number; online: number };
+export type UserSummary = { total: number; active: number; disabled: number; online: number };
 
 /** Shared by the form, access and details dialogs. */
 export type AccessCatalog = { roles: RoleOption[]; permissions: PermissionInfo[]; modules: Module[] };

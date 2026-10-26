@@ -1,9 +1,16 @@
 <?php
 
+use App\Models\Account;
+use App\Models\Employee;
 use App\Models\Entity;
+use App\Models\Journal;
 use App\Models\User;
+use App\Services\Accounting\JournalPostingService;
+use App\Support\EntityContext;
+use Database\Seeders\AccountingSetupSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Inertia\Testing\AssertableInertia as Assert;
 
 uses(RefreshDatabase::class);
@@ -69,4 +76,54 @@ test('extra permissions are stored as direct permissions on top of the role', fu
     $staff = $this->staff->fresh();
     expect($staff->hasRole('Employee'))->toBeTrue()
         ->and($staff->getDirectPermissions()->pluck('name')->all())->toBe(['reports.trial-balance.view']);
+});
+
+test('an admin deletes a user, keeping their linked employee without a login', function () {
+    $employee = Employee::create(['entity_id' => $this->entity->id, 'employee_code' => 'EE-1', 'firstname' => 'Sam', 'lastname' => 'Staff', 'user_id' => $this->staff->id]);
+
+    ($this->as)()->delete("/admin/users/{$this->staff->id}")->assertSessionHasNoErrors()->assertSessionHas('status', 'Sam Staff deleted.');
+
+    expect(User::find($this->staff->id))->toBeNull()
+        ->and($employee->fresh()->user_id)->toBeNull()
+        ->and(DB::table('model_has_roles')->where('model_id', $this->staff->id)->exists())->toBeFalse();
+});
+
+test('an admin cannot delete their own account', function () {
+    ($this->as)()->delete("/admin/users/{$this->admin->id}")->assertSessionHasErrors('user');
+
+    expect(User::find($this->admin->id))->not->toBeNull();
+});
+
+test('only the Admin role can delete users, even with user management access', function () {
+    $manager = User::factory()->create();
+    $manager->assignRole('Accountant');
+    $manager->givePermissionTo('admin.users.manage');
+    $manager->entities()->attach($this->entity->id, ['is_default' => true]);
+
+    $this->actingAs($manager)->withSession(['current_entity_id' => $this->entity->id])
+        ->delete("/admin/users/{$this->staff->id}")->assertForbidden();
+
+    expect(User::find($this->staff->id))->not->toBeNull();
+
+    $this->actingAs($manager)->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/admin/users')->assertInertia(fn (Assert $page) => $page->where('canDelete', false));
+    ($this->as)()->get('/admin/users')->assertInertia(fn (Assert $page) => $page->where('canDelete', true));
+});
+
+test('a user who touched journal entries cannot be deleted', function () {
+    $this->seed(AccountingSetupSeeder::class);
+    app(EntityContext::class)->set($this->entity);
+    $entry = app(JournalPostingService::class)->create([
+        'journal_id' => Journal::where('code', 'GJ')->value('id'),
+        'entry_date' => now()->toDateString(),
+        'memo' => 'Reclass',
+    ], [
+        ['account_id' => Account::where('code', '6100')->value('id'), 'debit' => 500, 'credit' => 0],
+        ['account_id' => Account::where('code', '6200')->value('id'), 'debit' => 0, 'credit' => 500],
+    ], $this->staff);
+    $entry->delete();
+
+    ($this->as)()->delete("/admin/users/{$this->staff->id}")->assertSessionHasErrors('user');
+
+    expect(User::find($this->staff->id))->not->toBeNull();
 });

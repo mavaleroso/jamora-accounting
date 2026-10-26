@@ -18,7 +18,7 @@ class SetCurrentEntity
         if ($user) {
             $entity = $this->entityContext->resolveForUser($user);
 
-            if (! $entity && ! $request->routeIs('entities.switch', 'logout', 'login', 'password.*', 'two-factor.*', 'verification.*')) {
+            if (! $entity && ! $request->routeIs('entities.switch', 'logout', 'login', 'password.*', 'verification.*')) {
                 // Allow admins with no pivot yet to continue; seed will attach.
                 if (! $user->hasRole('Admin') || $user->entities()->exists()) {
                     // Still proceed — Admin may need to attach entities.

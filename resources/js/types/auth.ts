@@ -15,7 +15,6 @@ export type User = {
     date_started?: string | null;
     status?: boolean;
     email_verified_at: string | null;
-    two_factor_enabled?: boolean;
     roles?: string[];
     permissions?: string[];
     /** Linked employee record in the current branch, if any. */
@@ -32,13 +31,4 @@ export type Auth = {
     user: User;
     /** The view in use, for an Admin who is also an employee; null for everyone else. */
     viewMode?: ViewMode | null;
-};
-
-export type TwoFactorSetupData = {
-    svg: string;
-    url: string;
-};
-
-export type TwoFactorSecretKey = {
-    secretKey: string;
 };

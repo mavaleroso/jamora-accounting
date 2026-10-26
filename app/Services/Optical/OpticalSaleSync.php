@@ -376,6 +376,12 @@ class OpticalSaleSync
 
         foreach ($productLines as $line) {
             $cost = round($line['unit_cost'] * $line['quantity'], 2);
+            // A cost above the selling price is a cost code keyed without its "."; book no cost rather than a wrong one.
+            $overcost = $cost > 0 && $line['gross'] > 0 && $cost > $line['gross'];
+            if ($overcost) {
+                $meta['warnings'][] = 'Cost ₱'.number_format($cost, 2)." for {$line['label']} is above its selling price ₱".number_format($line['gross'], 2).' — check the cost code in the optical POS; cost of goods sold not booked for it.';
+                $cost = 0.0;
+            }
             $total += $cost;
 
             $movements[] = InventoryMovement::query()->create([
@@ -383,11 +389,15 @@ class OpticalSaleSync
                 'movement_reference' => (string) $order['ts_no'],
                 'movement_type' => 'sales_issue',
                 'quantity' => -$line['quantity'],
-                'unit_cost' => $line['unit_cost'],
+                'unit_cost' => $overcost ? 0 : $line['unit_cost'],
                 'total_cost' => $cost,
                 'accounting_link_type' => 'cogs',
                 'review_status' => $cost > 0 ? 'matched' : 'needs_review',
-                'notes' => $cost > 0 ? null : 'No decodable cost in the optical POS — cost of goods sold not booked for this item.',
+                'notes' => match (true) {
+                    $overcost => 'Cost in the optical POS is above the selling price — cost of goods sold not booked for this item.',
+                    $cost > 0 => null,
+                    default => 'No decodable cost in the optical POS — cost of goods sold not booked for this item.',
+                },
                 'source_system' => 'optical',
                 'source_ref' => ($line['item']['stock_type'] ?? 'item').':'.($line['item']['products_id'] ?? ''),
                 'stock_type' => $line['item']['stock_type'] ?? null,
@@ -397,7 +407,7 @@ class OpticalSaleSync
                 'occurred_on' => $date,
             ]);
 
-            if ($cost <= 0) {
+            if ($cost <= 0 && ! $overcost) {
                 $meta['warnings'][] = "No cost for {$line['label']}.";
             }
         }

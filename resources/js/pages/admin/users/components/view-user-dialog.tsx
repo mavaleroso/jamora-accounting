@@ -112,8 +112,7 @@ export function ViewUserDialog({ open, onOpenChange, user, isSelf, onEdit, onAcc
                         </Info>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <Fact label="Two-factor" value={user.two_factor_enabled ? 'On' : 'Off'} good={user.two_factor_enabled} />
+                    <div className="grid grid-cols-3 gap-2">
                         <Fact label="Email" value={user.email_verified_at ? 'Verified' : 'Unverified'} good={!!user.email_verified_at} />
                         <Fact label="Created" value={fmtDate(user.created_at)} />
                         <Fact label="Updated" value={fmtDate(user.updated_at)} />

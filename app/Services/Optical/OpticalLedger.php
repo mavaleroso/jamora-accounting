@@ -82,12 +82,12 @@ class OpticalLedger
     }
 
     /**
-     * Reverse entries a document booked: posted entries get a mirror entry dated today (in their own entity),
-     * drafts are deleted, entries already voided are left alone.
+     * Reverse entries a document booked: posted entries get a mirror entry dated today (in their own entity), or on
+     * their own date when $onOriginalDate, drafts are deleted, entries already voided are left alone.
      *
      * @param  list<int>  $journalEntryIds
      */
-    public function reverse(array $journalEntryIds, string $memo): void
+    public function reverse(array $journalEntryIds, string $memo, bool $onOriginalDate = false): void
     {
         foreach (array_reverse($journalEntryIds) as $id) {
             $entry = JournalEntry::query()->withoutGlobalScope('entity')->find($id);
@@ -97,9 +97,9 @@ class OpticalLedger
 
             $entity = Entity::query()->findOrFail($entry->entity_id);
 
-            $this->in($entity, function () use ($entry, $memo) {
+            $this->in($entity, function () use ($entry, $memo, $onOriginalDate) {
                 if ($entry->status === 'posted') {
-                    $this->posting->void($entry, null, $memo.' — '.$entry->entry_no);
+                    $this->posting->void($entry, null, $memo.' — '.$entry->entry_no, $onOriginalDate ? $entry->entry_date->toDateString() : null);
                 } else {
                     $this->posting->delete($entry->forceFill(['status' => 'draft']));
                 }

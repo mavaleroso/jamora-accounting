@@ -34,7 +34,7 @@ class PeriodsController extends Controller
 
         if ($selectedFiscalYear) {
             $periods = AccountingPeriod::query()
-                ->with(['closedByUser:id,name'])
+                ->with(['closedByUser:id,firstname,middlename,lastname,username'])
                 ->where('fiscal_year_id', $selectedFiscalYear->id)
                 ->orderBy('period_no')
                 ->get()
@@ -88,7 +88,7 @@ class PeriodsController extends Controller
     }
 
     /**
-     * @param  callable(): \App\Models\AccountingPeriod  $action
+     * @param  callable(): AccountingPeriod  $action
      */
     private function handlePeriodAction(callable $action, string $successMessage): RedirectResponse
     {

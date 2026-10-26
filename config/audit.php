@@ -35,7 +35,7 @@ return [
     'masked_request_fields' => ['password', 'password_confirmation', 'current_password', 'new_password', 'token', '_token'],
 
     // Routes whose requests are never logged as request entries (model changes are still recorded).
-    'exclude_routes' => ['audit-trails.*', 'login.store', 'logout', 'password.*', 'two-factor.*', 'verification.*'],
+    'exclude_routes' => ['audit-trails.*', 'login.store', 'logout', 'password.*', 'verification.*'],
 
     // Artisan commands that run unaudited (bulk setup, not user activity).
     'skip_commands' => ['db:seed', 'migrate', 'migrate:fresh', 'migrate:refresh', 'migrate:reset', 'migrate:rollback', 'db:wipe', 'test'],

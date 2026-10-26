@@ -1,6 +1,6 @@
 import { Head, router, usePage } from '@inertiajs/react';
 import type { LucideIcon } from 'lucide-react';
-import { Eye, KeyRound, MoreHorizontal, Pencil, Plus, Power, ShieldCheck, UserCheck, Users as UsersIcon, UserX, Wifi } from 'lucide-react';
+import { Eye, KeyRound, MoreHorizontal, Pencil, Plus, Power, Trash2, UserCheck, Users as UsersIcon, UserX, Wifi } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 import { ConfirmDialog } from '@/components/confirm-dialog';
@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import { RbacUserDialog, RoleBadge, StatusBadge, UserAvatar, UserFormDialog, ViewUserDialog } from './components';
 import type { Module, PermissionInfo, RoleOption, UserFilters, UserRow, UserSummary } from './lib';
-import { fmtLastSeen, isOnline, USERS_URL } from './lib';
+import { fmtDate, fmtLastSeen, isOnline, USERS_URL } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Administration', href: USERS_URL },
@@ -31,6 +31,7 @@ type Props = {
     filters: UserFilters;
     summary: UserSummary;
     currentUserId: number | null;
+    canDelete: boolean;
     roles: RoleOption[];
     permissions: PermissionInfo[];
     modules: Module[];
@@ -41,7 +42,7 @@ type Query = { page?: number; per_page?: number; search?: string; role?: string 
 const ALL = 'all';
 const RELOAD = ['users', 'totalUsers', 'pageSize', 'currentPage', 'search', 'filters', 'summary'];
 
-export default function Users({ users, totalUsers, pageSize, currentPage, search = '', filters, summary, currentUserId, roles, permissions, modules }: Props) {
+export default function Users({ users, totalUsers, pageSize, currentPage, search = '', filters, summary, currentUserId, canDelete, roles, permissions, modules }: Props) {
     const { errors = {} } = usePage().props as { errors?: Record<string, string> };
     const [loading, setLoading] = React.useState(false);
     const [selectedId, setSelectedId] = React.useState<number | null>(null);
@@ -49,6 +50,7 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
     const [formUser, setFormUser] = React.useState<UserRow | null>(null);
     const [confirmUser, setConfirmUser] = React.useState<UserRow | null>(null);
     const [pendingStatus, setPendingStatus] = React.useState<number | null>(null);
+    const [deleteUser, setDeleteUser] = React.useState<UserRow | null>(null);
 
     const catalog = { roles, permissions, modules };
     // Keep the open dialog in sync with fresh server data after saves
@@ -82,6 +84,15 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
     // Disabling locks someone out, so confirm it; enabling is instant
     const toggleStatus = (user: UserRow) => (user.status !== false ? setConfirmUser(user) : setStatus(user, true));
 
+    const destroy = (user: UserRow) =>
+        router.delete(`${USERS_URL}/${user.id}`, {
+            preserveScroll: true,
+            preserveState: true,
+            only: [...RELOAD, 'flash', 'errors'],
+            onSuccess: () => selectedId === user.id && setDialog(null),
+            onError: (errs) => toast.error(errs.user ?? 'Could not delete the user.'),
+        });
+
     const anyFilter = Boolean(search || filters.role || filters.status);
     const clearAll = () => {
         apply({ search: '', role: null, status: null });
@@ -101,11 +112,10 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
                     </Button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                     <Stat icon={UsersIcon} label="Total users" value={summary.total} hint={filters.status ? 'Click to show all' : undefined} onClick={() => apply({ status: null })} />
                     <Stat icon={UserCheck} label="Active" value={summary.active} tone="emerald" active={filters.status === 'active'} onClick={() => apply({ status: filters.status === 'active' ? null : 'active' })} />
                     <Stat icon={UserX} label="Disabled" value={summary.disabled} tone="rose" active={filters.status === 'disabled'} onClick={() => apply({ status: filters.status === 'disabled' ? null : 'disabled' })} />
-                    <Stat icon={ShieldCheck} label="Two-factor on" value={summary.twoFactor} hint={summary.total ? `${Math.round((summary.twoFactor / summary.total) * 100)}% of users` : undefined} />
                     <Stat icon={Wifi} label="Online now" value={summary.online} tone="emerald" hint="Active in the last 5 min" />
                 </div>
 
@@ -160,7 +170,7 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
                         onRowClick={(user) => open('view', user)}
                         rowClassName={(user) => (user.status === false ? 'bg-muted/20' : undefined)}
                         rowAccent={(user) => (user.status === false ? 'bg-muted-foreground/50' : 'bg-primary')}
-                        actions={(user) => <RowActions user={user} self={user.id === currentUserId} onView={() => open('view', user)} onEdit={() => openForm(user)} onAccess={() => open('access', user)} onToggle={() => toggleStatus(user)} />}
+                        actions={(user) => <RowActions user={user} self={user.id === currentUserId} onView={() => open('view', user)} onEdit={() => openForm(user)} onAccess={() => open('access', user)} onToggle={() => toggleStatus(user)} onDelete={canDelete ? () => setDeleteUser(user) : undefined} />}
                         columns={[
                             {
                                 id: 'user',
@@ -228,6 +238,20 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
                                         {fmtLastSeen(user.last_seen_at)}
                                     </span>
                                 ),
+                            },
+                            {
+                                id: 'created_at',
+                                header: 'Created at',
+                                minScreen: 'lg',
+                                className: 'text-xs whitespace-nowrap text-muted-foreground',
+                                cell: (user) => <span title={user.created_at ?? undefined}>{fmtDate(user.created_at)}</span>,
+                            },
+                            {
+                                id: 'updated_at',
+                                header: 'Updated at',
+                                minScreen: 'lg',
+                                className: 'text-xs whitespace-nowrap text-muted-foreground',
+                                cell: (user) => <span title={user.updated_at ?? undefined}>{fmtDate(user.updated_at)}</span>,
                             },
                         ]}
                         mobileRow={(user) => (
@@ -304,6 +328,15 @@ export default function Users({ users, totalUsers, pageSize, currentPage, search
                 variant="destructive"
                 onConfirm={() => confirmUser && setStatus(confirmUser, false)}
             />
+            <ConfirmDialog
+                open={deleteUser !== null}
+                onOpenChange={(o) => !o && setDeleteUser(null)}
+                title={`Delete ${deleteUser?.name ?? 'user'}?`}
+                description="The account is removed permanently and they can no longer sign in. Records they filed or approved are kept, and a linked employee stays in the directory without a login. To keep the account, disable it instead."
+                confirmLabel="Delete user"
+                variant="destructive"
+                onConfirm={() => deleteUser && destroy(deleteUser)}
+            />
         </AppLayout>
     );
 }
@@ -317,7 +350,7 @@ function extraCount(user: UserRow, roles: RoleOption[]): number {
     return (user.permissions ?? []).filter((p) => !fromRole.has(p)).length;
 }
 
-function RowActions({ user, self, onView, onEdit, onAccess, onToggle }: { user: UserRow; self: boolean; onView: () => void; onEdit: () => void; onAccess: () => void; onToggle: () => void }) {
+function RowActions({ user, self, onView, onEdit, onAccess, onToggle, onDelete }: { user: UserRow; self: boolean; onView: () => void; onEdit: () => void; onAccess: () => void; onToggle: () => void; onDelete?: () => void }) {
     const active = user.status !== false;
     return (
         <DropdownMenu>
@@ -340,6 +373,11 @@ function RowActions({ user, self, onView, onEdit, onAccess, onToggle }: { user: 
                 <DropdownMenuItem onSelect={onToggle} disabled={self} variant={active ? 'destructive' : 'default'}>
                     <Power className="size-4" /> {active ? 'Disable account' : 'Enable account'}
                 </DropdownMenuItem>
+                {onDelete && (
+                    <DropdownMenuItem onSelect={onDelete} disabled={self} variant="destructive">
+                        <Trash2 className="size-4" /> Delete user
+                    </DropdownMenuItem>
+                )}
             </DropdownMenuContent>
         </DropdownMenu>
     );

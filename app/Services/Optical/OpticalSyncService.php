@@ -2,6 +2,7 @@
 
 namespace App\Services\Optical;
 
+use App\Jobs\RunOpticalSync;
 use App\Models\Entity;
 use App\Models\SyncCursor;
 use App\Models\SyncDocument;
@@ -31,6 +32,14 @@ class OpticalSyncService
 {
     public const STREAMS = ['users', 'clients', 'suppliers', 'payments', 'orders', 'receipts', 'movements'];
 
+    protected const LOCK = 'optical-sync';
+
+    /** Upper bound only: a run whose heartbeat stops for STALE_MINUTES is closed and its lock released. */
+    protected const LOCK_SECONDS = 12 * 3600;
+
+    /** A running run touches itself after every page; one silent this long has died (or no worker took a queued one). */
+    public const STALE_MINUTES = 15;
+
     protected SyncRun $run;
 
     /** @var array<string, array{read: int, booked: int, skipped: int, failed: int, error?: string}> */
@@ -50,26 +59,64 @@ class OpticalSyncService
     ) {}
 
     /**
+     * Record a run and hand it to the queue, so a long sync never holds a web request open.
+     *
      * @param  array{full?: bool, streams?: list<string>, retry_failed?: bool}  $options
      */
-    public function run(?User $user = null, array $options = []): SyncRun
+    public function queue(?User $user = null, array $options = []): SyncRun
     {
         if (! $this->api->isConfigured()) {
             throw new RuntimeException('The optical API is not configured: set OPTICAL_API_BASE_URL and OPTICAL_API_TOKEN.');
         }
 
-        $lock = Cache::lock('optical-sync', 3600);
-        if (! $lock->get()) {
-            throw new RuntimeException('An optical sync is already running. Try again when it finishes.');
+        if ($this->active()) {
+            throw new RuntimeException('An optical sync is already queued or running. Try again when it finishes.');
         }
 
+        $run = SyncRun::query()->create(['started_at' => now(), 'status' => 'queued', 'triggered_by' => $user?->id]);
+        RunOpticalSync::dispatch($run->id, $options);
+
+        return $run;
+    }
+
+    /**
+     * The run that is queued or running, after closing any that stopped without finishing.
+     */
+    public function active(): ?SyncRun
+    {
+        $this->closeStaleRuns();
+
+        return SyncRun::query()->whereIn('status', ['queued', 'running'])->latest('id')->first();
+    }
+
+    /**
+     * @param  array{full?: bool, streams?: list<string>, retry_failed?: bool}  $options
+     * @param  SyncRun|null  $run  a queued run to carry out; a new one is recorded otherwise
+     */
+    public function run(?User $user = null, array $options = [], ?SyncRun $run = null): SyncRun
+    {
+        if (! $this->api->isConfigured()) {
+            throw new RuntimeException('The optical API is not configured: set OPTICAL_API_BASE_URL and OPTICAL_API_TOKEN.');
+        }
+
+        $lock = Cache::lock(self::LOCK, self::LOCK_SECONDS);
+        if (! $lock->get()) {
+            // The lock outlives a process that died mid-run; free it when the run holding it has gone silent.
+            $this->closeStaleRuns();
+            if (SyncRun::query()->where('status', 'running')->exists()) {
+                throw new RuntimeException('An optical sync is already running. Try again when it finishes.');
+            }
+            $lock->forceRelease();
+            if (! $lock->get()) {
+                throw new RuntimeException('An optical sync is already running. Try again when it finishes.');
+            }
+        }
+
+        $this->closeStaleRuns();
         $this->stats = [];
         $this->resyncOrders = [];
-        $this->run = SyncRun::query()->create([
-            'started_at' => now(),
-            'status' => 'running',
-            'triggered_by' => $user?->id,
-        ]);
+        $this->run = $run ?? new SyncRun(['triggered_by' => $user?->id]);
+        $this->run->fill(['started_at' => now(), 'status' => 'running'])->save();
 
         try {
             if ($options['retry_failed'] ?? true) {
@@ -159,6 +206,13 @@ class OpticalSyncService
                 if ($updated && (! $newest || $updated->greaterThan($newest))) {
                     $newest = $updated;
                 }
+            }, function () use ($stream, $cursor, &$newest) {
+                // These feeds come oldest change first, so a run that stops resumes after the last finished page.
+                // (Clients and suppliers come by name: their cursor only moves once the whole list is read.)
+                if (in_array($stream, ['payments', 'orders', 'receipts', 'movements'], true)) {
+                    $cursor->update(['cursor_at' => $newest, 'last_run_id' => $this->run->id]);
+                }
+                $this->heartbeat();
             });
 
             $cursor->update(['cursor_at' => $newest, 'last_run_id' => $this->run->id]);
@@ -291,7 +345,28 @@ class OpticalSyncService
                 $this->stats['retries']['read']++;
                 $this->handle($stream, $record, 'retries');
             }
+            $this->heartbeat();
         }
+    }
+
+    /** Tell other requests this run is still alive. */
+    protected function heartbeat(): void
+    {
+        $this->run->touch();
+    }
+
+    /**
+     * Close runs that stopped without finishing: a running one whose heartbeat went silent (its process died), or a
+     * queued one that no queue worker picked up.
+     */
+    protected function closeStaleRuns(): void
+    {
+        $cutoff = now()->subMinutes(self::STALE_MINUTES);
+
+        SyncRun::query()->where('status', 'running')->where('updated_at', '<', $cutoff)
+            ->update(['status' => 'failed', 'finished_at' => now(), 'message' => 'Stopped without finishing (the process ended). The next run picks up where it stopped.']);
+        SyncRun::query()->where('status', 'queued')->where('updated_at', '<', $cutoff)
+            ->update(['status' => 'failed', 'finished_at' => now(), 'message' => 'Never started: no queue worker took it. Start one with "php artisan queue:work".']);
     }
 
     protected function count(string $stream, string $outcome): void

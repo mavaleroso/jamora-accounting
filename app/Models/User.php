@@ -5,19 +5,19 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Enums\RoleEnum;
 use App\Support\MissingValue;
+use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Fortify\TwoFactorAuthenticatable;
 use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, TwoFactorAuthenticatable, HasRoles;
+    /** @use HasFactory<UserFactory> */
+    use HasFactory, HasRoles, Notifiable;
 
     /** The companies (entities) the user was given access to. An Admin opens every company regardless. */
     public function entities(): BelongsToMany
@@ -103,7 +103,7 @@ class User extends Authenticatable
      *
      * @var list<string>
      */
-    protected $appends = ['name', 'two_factor_enabled'];
+    protected $appends = ['name'];
 
     /**
      * Get the display name (firstname + lastname, or username).
@@ -120,14 +120,6 @@ class User extends Authenticatable
     }
 
     /**
-     * Whether the user has two-factor authentication enabled.
-     */
-    public function getTwoFactorEnabledAttribute(): bool
-    {
-        return ! is_null($this->two_factor_confirmed_at);
-    }
-
-    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>
@@ -137,7 +129,6 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'two_factor_confirmed_at' => 'datetime',
             'birthdate' => 'date',
             'date_started' => 'date',
             'status' => 'boolean',

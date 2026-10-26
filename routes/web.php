@@ -327,6 +327,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::put('{user}', 'update')->name('update');
             Route::patch('{user}/rbac', 'updateRbac')->name('rbac.update');
             Route::patch('{user}/status', 'updateStatus')->name('status.update');
+            Route::delete('{user}', 'destroy')->name('destroy')->middleware('role:'.RoleEnum::Admin->value);
         });
 
         Route::controller(RolesController::class)->prefix('roles')->name('roles.')->middleware('permission:admin.roles-permissions.manage')->group(function () {

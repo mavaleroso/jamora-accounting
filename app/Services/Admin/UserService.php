@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 
 class UserService
 {
@@ -153,5 +154,17 @@ class UserService
         $user->update(['status' => $status]);
 
         return $user->fresh();
+    }
+
+    /**
+     * Delete a user and their avatar; Spatie drops their role / permission assignments.
+     */
+    public function delete(User $user): void
+    {
+        $user->delete();
+
+        if ($user->avatar) {
+            Storage::disk('public')->delete($user->avatar);
+        }
     }
 }

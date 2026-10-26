@@ -27,6 +27,8 @@ class OpticalSyncController extends Controller
 
     public function index(OpticalApiClient $api): Response
     {
+        $this->syncService->active(); // closes runs that stopped without finishing
+
         $runs = SyncRun::query()
             ->with('triggeredByUser:id,firstname,lastname,username')
             ->orderByDesc('started_at')
@@ -76,15 +78,12 @@ class OpticalSyncController extends Controller
         ]);
 
         try {
-            $run = $this->syncService->run($request->user(), ['full' => (bool) ($validated['full'] ?? false)]);
+            $this->syncService->queue($request->user(), ['full' => (bool) ($validated['full'] ?? false)]);
         } catch (\RuntimeException $e) {
             return redirect()->back()->with('error', $e->getMessage());
         }
 
-        return redirect()->back()->with(
-            $run->status === 'failed' ? 'error' : 'status',
-            "Sync {$run->status}: {$run->processed} read, {$run->created_entries} booked, {$run->failed} failed."
-        );
+        return redirect()->back()->with('status', 'Sync started. It runs in the background; this page updates as it goes.');
     }
 
     public function exceptions(Request $request): Response

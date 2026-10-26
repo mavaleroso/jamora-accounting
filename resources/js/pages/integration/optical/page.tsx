@@ -53,7 +53,7 @@ function formatDateTime(value: string | null | undefined): string {
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
     if (status === 'completed') return 'default';
-    if (status === 'running') return 'secondary';
+    if (status === 'running' || status === 'queued') return 'secondary';
     if (status === 'failed' || status === 'completed_with_errors') return 'destructive';
     return 'outline';
 }
@@ -89,6 +89,14 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
     const [full, setFull] = React.useState(false);
     const [syncing, setSyncing] = React.useState(false);
     const confirm = useConfirm();
+    const active = lastRun?.status === 'queued' || lastRun?.status === 'running';
+
+    // The sync runs on the queue: follow it until it finishes.
+    React.useEffect(() => {
+        if (!active) return;
+        const timer = window.setInterval(() => router.reload({ only: ['runs', 'lastRun', 'failedCount', 'reviewCount', 'cursors'] }), 5000);
+        return () => window.clearInterval(timer);
+    }, [active]);
 
     const handleSync = async () => {
         const ok = await confirm({
@@ -152,9 +160,9 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                                     </span>
                                 </span>
                             </label>
-                            <Button onClick={handleSync} disabled={syncing || !settings.configured} className="self-start">
-                                {syncing ? <RefreshCwIcon className="size-4 animate-spin" /> : <PlayIcon className="size-4" />}
-                                Sync now
+                            <Button onClick={handleSync} disabled={syncing || active || !settings.configured} className="self-start">
+                                {syncing || active ? <RefreshCwIcon className="size-4 animate-spin" /> : <PlayIcon className="size-4" />}
+                                {active ? (lastRun?.status === 'queued' ? 'Waiting for the queue…' : 'Syncing…') : 'Sync now'}
                             </Button>
                             {!settings.configured && (
                                 <p className="text-destructive text-sm">

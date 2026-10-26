@@ -129,15 +129,16 @@ class JournalPostingService
     }
 
     /**
-     * Reverse a posted entry with a posted mirror entry dated today. A null user means the system reversed it.
+     * Reverse a posted entry with a posted mirror entry dated today, or on $date (e.g. the entry's own date, to take
+     * back something that should never have been booked). A null user means the system reversed it.
      */
-    public function void(JournalEntry $entry, ?User $user = null, ?string $memo = null): JournalEntry
+    public function void(JournalEntry $entry, ?User $user = null, ?string $memo = null, ?string $date = null): JournalEntry
     {
         if ($entry->status !== 'posted') {
             throw new AccountingException('Only posted journal entries can be voided.');
         }
 
-        return DB::transaction(function () use ($entry, $user, $memo) {
+        return DB::transaction(function () use ($entry, $user, $memo, $date) {
             $entry->load(['lines', 'journal', 'accountingPeriod']);
 
             if ($entry->accountingPeriod->status === 'closed') {
@@ -160,7 +161,7 @@ class JournalPostingService
 
             $reversingEntry = $this->create([
                 'journal_id' => $entry->journal_id,
-                'entry_date' => now('Asia/Manila')->toDateString(),
+                'entry_date' => $date ?? now('Asia/Manila')->toDateString(),
                 'reference' => $entry->entry_no,
                 'memo' => $memo ?? "Void of {$entry->entry_no}",
                 'source_system' => $entry->source_system,

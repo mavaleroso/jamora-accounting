@@ -63,11 +63,12 @@ class OpticalApiClient
     }
 
     /**
-     * Call $callback for every record of a paginated list, page by page.
+     * Call $callback for every record of a paginated list, page by page, and $afterPage once each page is done.
      *
      * @param  callable(array<string, mixed>): void  $callback
+     * @param  (callable(): void)|null  $afterPage
      */
-    public function each(string $path, array $query, callable $callback): int
+    public function each(string $path, array $query, callable $callback, ?callable $afterPage = null): int
     {
         $page = 1;
         $count = 0;
@@ -79,6 +80,10 @@ class OpticalApiClient
             foreach ($response['data'] ?? [] as $record) {
                 $callback($record);
                 $count++;
+            }
+
+            if ($afterPage) {
+                $afterPage();
             }
 
             $lastPage = (int) ($response['meta']['last_page'] ?? $page);

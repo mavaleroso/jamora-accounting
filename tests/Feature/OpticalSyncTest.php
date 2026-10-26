@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\RunOpticalSync;
 use App\Models\Account;
 use App\Models\CustomerDeposit;
 use App\Models\Entity;
@@ -9,14 +10,19 @@ use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
 use App\Models\PostingRule;
 use App\Models\SyncDocument;
+use App\Models\SyncRun;
+use App\Models\User;
 use App\Models\Vendor;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Spatie\Permission\Models\Permission;
 
 uses(RefreshDatabase::class);
 
@@ -386,9 +392,9 @@ test('a document that cannot post is recorded as failed and retried on the next 
 
 test('the sync screens show runs and exceptions, and a failed document can be retried', function () {
     foreach (['integration.optical.view', 'integration.optical.sync'] as $p) {
-        \Spatie\Permission\Models\Permission::findOrCreate($p, 'web');
+        Permission::findOrCreate($p, 'web');
     }
-    $user = \App\Models\User::factory()->create();
+    $user = User::factory()->create();
     $user->givePermissionTo(['integration.optical.view', 'integration.optical.sync']);
     $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
     $user->entities()->attach($clinic->id, ['is_default' => true]);
@@ -416,4 +422,103 @@ test('the sync screens show runs and exceptions, and a failed document can be re
     $as()->post("/integration/optical/exceptions/{$doc->id}/retry")->assertSessionHas('status');
 
     expect($doc->fresh()->status)->toBe('posted');
+});
+
+test('delivered items costed above their selling price are left out of inventory and flagged', function () {
+    // One lens decodes to 663,750 against a 17,850 price: its cost code was keyed without the "." (6,637.50).
+    $this->api['inventory/receipts'] = [['key' => 'dr-300', 'supplier' => 'ESSILOR', 'supplier_id' => null, 'delivery_receipt' => 'DR-300', 'received_at' => $this->today.' 00:00:00', 'item_count' => 2, 'uncosted_count' => 0, 'overcost_count' => 1, 'overcost_cost' => '663750.00', 'total_cost' => '664050.00', 'by_type' => ['lens' => ['count' => 2, 'cost' => '664050.00']], 'updated_at' => now()->toDateTimeString()]];
+    ($this->sync)();
+
+    $doc = SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_receipt')->sole();
+    expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(300.0)
+        ->and($doc->status)->toBe('review')
+        ->and($doc->error)->toContain('1 of 2 items cost more than their selling price');
+});
+
+test('a write-off costed above its selling price books nothing and goes to review', function () {
+    $this->api['inventory/movements'] = [
+        ['id' => 81, 'stock_type' => 'lens', 'event_type' => 'defective', 'code' => 'L-81', 'brand' => 'Essilor', 'description' => 'Varilux', 'unit_cost' => '663750.00', 'price' => '17850.00', 'supplier' => 'ESSILOR', 'quantity' => 1, 'order_id' => null, 'occurred_at' => $this->today.' 09:00:00', 'updated_at' => now()->toDateTimeString()],
+    ];
+    ($this->sync)();
+
+    $doc = SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_movement')->sole();
+    expect(ledgerBalance('JAM_OPTICUS', '5010'))->toBe(0.0)
+        ->and($doc->status)->toBe('review')
+        ->and($doc->error)->toContain('above its selling price');
+});
+
+test('stock dated in the future is held for review, not booked', function () {
+    $tomorrow = now('Asia/Manila')->addDay()->toDateString();
+    $this->api['inventory/receipts'] = [['key' => 'dr-400', 'supplier' => 'Lens Supplier', 'supplier_id' => null, 'delivery_receipt' => 'DR-400', 'received_at' => $tomorrow.' 00:00:00', 'item_count' => 1, 'uncosted_count' => 0, 'total_cost' => '300.00', 'by_type' => [], 'updated_at' => now()->toDateTimeString()]];
+    ($this->sync)();
+
+    $doc = SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_receipt')->sole();
+    expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(0.0)
+        ->and($doc->status)->toBe('review')
+        ->and($doc->error)->toContain('a date still to come');
+});
+
+test('a sold item costed above its selling price gets no cost of goods sold and is flagged', function () {
+    $items = opticalOrder()['items'];
+    $items[0]['unit_cost'] = '3000.00'; // the frame sells for 2,500
+    $order = opticalOrder(['items' => $items, 'completed_at' => now()->toIso8601String()]);
+    $this->api['payments'] = [opticalPayment($order)];
+    $this->api['orders'] = [$order];
+    ($this->sync)();
+
+    $doc = SyncDocument::withoutGlobalScope('entity')->where('source_type', 'sale')->sole();
+    expect(ledgerBalance('JAM_OPTICUS', '5000'))->toBe(150.0)
+        ->and($doc->status)->toBe('review')
+        ->and($doc->error)->toContain('is above its selling price');
+});
+
+test('the sync screen queues a run, refuses a second, and closes one no worker took', function () {
+    Queue::fake();
+    Permission::findOrCreate('integration.optical.sync', 'web');
+    $user = User::factory()->create();
+    $user->givePermissionTo('integration.optical.sync');
+    $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
+    $user->entities()->attach($clinic->id, ['is_default' => true]);
+    $as = fn () => $this->actingAs($user)->withSession(['current_entity_id' => $clinic->id]);
+
+    $as()->post('/integration/optical/run')->assertSessionHas('status');
+    $run = SyncRun::query()->sole();
+    expect($run->status)->toBe('queued');
+    Queue::assertPushed(RunOpticalSync::class, fn ($job) => $job->runId === $run->id);
+
+    $as()->post('/integration/optical/run')->assertSessionHas('error');
+
+    $this->travel(OpticalSyncService::STALE_MINUTES + 1)->minutes();
+    expect(app(OpticalSyncService::class)->active())->toBeNull()
+        ->and($run->fresh()->status)->toBe('failed')
+        ->and($run->fresh()->message)->toContain('no queue worker');
+});
+
+test('a run whose process died is closed and its lock freed for the next run', function () {
+    $dead = SyncRun::query()->create(['started_at' => now(), 'status' => 'running']);
+    Cache::lock('optical-sync', 3600)->get(); // held by the process that died
+
+    $this->travel(OpticalSyncService::STALE_MINUTES + 1)->minutes();
+    $run = ($this->sync)();
+
+    expect($run->status)->toBe('completed')
+        ->and($dead->fresh()->status)->toBe('failed');
+});
+
+test('stock booked before go-live is reversed on its own date and closed', function () {
+    $earlier = $this->today;
+    $this->api['inventory/receipts'] = [['key' => 'dr-500', 'supplier' => 'Lens Supplier', 'supplier_id' => null, 'delivery_receipt' => 'DR-500', 'received_at' => $earlier.' 00:00:00', 'item_count' => 1, 'uncosted_count' => 0, 'total_cost' => '300.00', 'by_type' => [], 'updated_at' => now()->toDateTimeString()]];
+    ($this->sync)();
+    expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(300.0);
+
+    config(['optical.start_date' => now('Asia/Manila')->addDay()->toDateString()]);
+    $this->artisan('accounting:optical-clear-before-go-live')->assertSuccessful(); // dry run
+    expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(300.0);
+
+    $this->artisan('accounting:optical-clear-before-go-live', ['--force' => true])->assertSuccessful();
+
+    $reversal = JournalEntry::withoutGlobalScope('entity')->whereNotNull('void_of_entry_id')->sole();
+    expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(0.0)
+        ->and($reversal->entry_date->toDateString())->toBe($earlier)
+        ->and(SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_receipt')->sole()->status)->toBe('skipped');
 });

@@ -72,7 +72,6 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(Login::class, function (Login $e) use ($audit) {
             $how = match (request()->route()?->getName()) {
                 'login.store' => 'Signed in with password',
-                'two-factor.login.store' => 'Signed in with two-factor authentication',
                 default => $e->remember ? 'Signed in from a remembered session' : 'Signed in',
             };
             $audit->authEvent('login', $e->user, $how);
