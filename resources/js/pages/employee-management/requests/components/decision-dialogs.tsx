@@ -17,7 +17,7 @@ function effect(item: RequestItem): string {
         case 'leave':
             return `${d.half_day ? 'Half a day' : fmtDays(d.days)} will be deducted from the balance and the dates marked as leave on the time record.`;
         case 'overtime':
-            return 'Approves overtime for this day. All overtime the time clock records past the shift is paid.';
+            return 'Approves overtime for this day. All overtime the time clock records past the shift is paid once the day’s accomplishment report is written.';
         case 'correction':
             return 'The requested times replace the punches on record and hours are recomputed.';
         case 'official_business':
@@ -26,6 +26,8 @@ function effect(item: RequestItem): string {
             return 'The early departure is authorised. The undertime is still deducted from pay.';
         case 'schedule_change':
             return 'The roster for this day is replaced and lateness is measured against the new schedule.';
+        case 'absence_notice':
+            return 'An absence notice is recorded when filed; there is nothing to approve.';
     }
 }
 
@@ -119,7 +121,9 @@ function CancelForm({ item, onDone }: { item: RequestItem; onDone: () => void })
                     ? 'The credits go back to the balance and the dates are removed from the time record (unless payroll has locked them).'
                     : item.kind === 'leave'
                       ? 'The credits on hold are released.'
-                      : 'It disappears from the approver’s inbox.'}
+                      : item.kind === 'absence_notice'
+                        ? 'Withdraw it if you are reporting for work after all.'
+                        : 'It disappears from the approver’s inbox.'}
             </p>
             {item.source === 'leave' && (
                 <div className="space-y-1.5">

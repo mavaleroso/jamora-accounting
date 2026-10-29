@@ -74,6 +74,7 @@ class AttendanceRequestService
         $this->attendanceCalculator->assertEditable($dtr, 'work_date');
 
         $restDay = false;
+        $noticeStatus = null;
 
         switch ($type) {
             case AttendanceRequest::TYPE_CORRECTION:
@@ -117,6 +118,19 @@ class AttendanceRequestService
                 $times = $times->only(['requested_time_out']);
                 break;
 
+            case AttendanceRequest::TYPE_ABSENCE_NOTICE:
+                // Reported ahead, or as soon as possible after (it is then recorded as a late notice).
+                $schedule = $this->attendanceCalculator->scheduleFor($employee, $date);
+                if ($schedule->isRestDay || ! $schedule->start) {
+                    throw ValidationException::withMessages(['work_date' => 'You are not scheduled to work on this day, so there is no absence to report.']);
+                }
+                if ($dtr && (filled($dtr->time_in) || filled($dtr->time_out))) {
+                    throw ValidationException::withMessages(['work_date' => 'You already have a check-in for this day.']);
+                }
+                $times = collect();
+                $noticeStatus = $this->noticeStatus($date, $schedule->start, Carbon::now());
+                break;
+
             case AttendanceRequest::TYPE_SCHEDULE_CHANGE:
                 $this->assertNotPast($date, $today, 'A change of schedule must be filed on or before the day itself.');
                 $restDay = (bool) ($data['requested_rest_day'] ?? false);
@@ -134,12 +148,14 @@ class AttendanceRequestService
             ->where('employee_id', $employee->id)
             ->whereDate('work_date', $dateStr)
             ->where('request_type', $type)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending', AttendanceRequest::STATUS_NOTED])
             ->exists();
 
         if ($duplicate) {
             $label = strtolower(AttendanceRequest::LABELS[$type]);
-            throw ValidationException::withMessages(['work_date' => "There is already a pending {$label} request for this day."]);
+            throw ValidationException::withMessages(['work_date' => $type === AttendanceRequest::TYPE_ABSENCE_NOTICE
+                ? 'You have already reported an absence for this day.'
+                : "There is already a pending {$label} request for this day."]);
         }
 
         // Stored only once the request is accepted, so a refused filing leaves no file behind.
@@ -161,9 +177,20 @@ class AttendanceRequestService
             'requested_rest_day' => $restDay,
             'reason' => $data['reason'],
             'attachment_path' => $attachmentPath,
-            'status' => 'pending',
+            'notice_status' => $noticeStatus,
+            'status' => $type === AttendanceRequest::TYPE_ABSENCE_NOTICE ? AttendanceRequest::STATUS_NOTED : 'pending',
             'filed_by' => $filedBy?->id,
         ]);
+    }
+
+    /**
+     * Whether an absence reported at $reportedAt came in time: at least absence_notice_hours before the shift starts.
+     */
+    public function noticeStatus(Carbon $date, string $shiftStart, Carbon $reportedAt): string
+    {
+        $deadline = Carbon::parse($date->toDateString().' '.$shiftStart)->subHours((int) config('people.timekeeping.absence_notice_hours', 3));
+
+        return $reportedAt->lte($deadline) ? AttendanceRequest::NOTICE_ON_TIME : AttendanceRequest::NOTICE_LATE;
     }
 
     /**
@@ -213,7 +240,9 @@ class AttendanceRequestService
 
     public function cancel(AttendanceRequest $request): AttendanceRequest
     {
-        if ($request->status !== 'pending') {
+        // An absence notice can be withdrawn until the day is over (e.g. the employee made it to work after all).
+        $withdrawable = $request->status === AttendanceRequest::STATUS_NOTED && $request->work_date->gte(Carbon::today());
+        if ($request->status !== 'pending' && ! $withdrawable) {
             throw ValidationException::withMessages(['status' => 'Only pending requests can be cancelled.']);
         }
 

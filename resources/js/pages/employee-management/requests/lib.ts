@@ -1,12 +1,13 @@
-import { ArrowLeftRight, Briefcase, CalendarClock, FilePenLine, Hourglass, Palmtree, type LucideIcon } from 'lucide-react';
+import { ArrowLeftRight, Briefcase, CalendarClock, CalendarX, FilePenLine, Hourglass, Palmtree, type LucideIcon } from 'lucide-react';
 import type { Paginated, Person } from '../attendance/lib';
 
 export { firstError, fmtDate, fmtHours, fmtTime, fullName, TONE, toTimeInput, weekday, type Paginated, type Person } from '../attendance/lib';
 
 export const REQUESTS_URL = '/employee-management/requests';
 
-export type Kind = 'leave' | 'overtime' | 'correction' | 'official_business' | 'undertime' | 'schedule_change';
-export type Status = 'pending' | 'approved' | 'declined' | 'cancelled';
+export type Kind = 'leave' | 'overtime' | 'correction' | 'official_business' | 'undertime' | 'schedule_change' | 'absence_notice';
+/** "noted": an absence notice, recorded when filed (nothing to decide). */
+export type Status = 'pending' | 'approved' | 'declined' | 'cancelled' | 'noted';
 export type View = 'mine' | 'inbox' | 'all' | 'balances';
 type Tone = 'emerald' | 'amber' | 'rose' | 'sky' | 'violet' | 'slate' | 'blue';
 
@@ -65,7 +66,14 @@ export type RequestItem = {
         ot_hours?: number | null;
         destination?: string | null;
         rest_day?: boolean;
-        dtr?: Record<'time_in' | 'break_out' | 'break_in' | 'time_out' | 'ot_hours' | 'ot_hours_approved' | 'scheduled_in' | 'scheduled_out', string | number | null> | null;
+        dtr?: Record<
+            'time_in' | 'break_out' | 'break_in' | 'time_out' | 'ot_hours' | 'ot_hours_approved' | 'scheduled_in' | 'scheduled_out' | 'tardiness_minutes',
+            string | number | null
+        > | null;
+        // absence notice: reported in time (Employee Handbook: hours before the shift) or late
+        notice_status?: 'on_time' | 'late' | null;
+        // overtime: no OT pay on a day the employee was late by more than this (warned to the approver)
+        late_no_ot_minutes?: number | null;
     };
 };
 
@@ -121,6 +129,8 @@ export type LeaveTypeOption = {
     gender: string | null;
     min_service_months: number;
     min_notice_days: number;
+    /** Filings spanning more than `days` consecutive days must be filed `notice` days ahead. */
+    long_notice: { days: number; notice: number } | null;
     attachment_required_after_days: number | null;
     allow_half_day: boolean;
 };
@@ -188,6 +198,15 @@ export const KINDS: Record<
         description: 'Ask to leave before your shift ends. The early hours are still unpaid.',
         when: 'In advance — before you leave',
     },
+    absence_notice: {
+        label: 'Report an absence',
+        short: 'Absence',
+        icon: CalendarX,
+        tone: 'rose',
+        source: 'attendance',
+        description: 'Tell the company you cannot report for work. Report at least 3 hours before your shift — a later notice, or none, makes it an unauthorized absence.',
+        when: 'At least 3 hours before your shift',
+    },
     schedule_change: {
         label: 'Change of schedule',
         short: 'Schedule',
@@ -199,7 +218,7 @@ export const KINDS: Record<
     },
 };
 
-export const KIND_ORDER: Kind[] = ['leave', 'overtime', 'correction', 'official_business', 'undertime', 'schedule_change'];
+export const KIND_ORDER: Kind[] = ['leave', 'absence_notice', 'overtime', 'correction', 'official_business', 'undertime', 'schedule_change'];
 
 /**
  * Kinds kept only so past requests still display. Undertime is detected from the time record and
@@ -212,6 +231,7 @@ export const STATUS: Record<Status, { label: string; tone: Tone }> = {
     approved: { label: 'Approved', tone: 'emerald' },
     declined: { label: 'Declined', tone: 'rose' },
     cancelled: { label: 'Cancelled', tone: 'slate' },
+    noted: { label: 'Noted', tone: 'sky' },
 };
 
 /** Kinds the viewer may file, given their permissions. */
@@ -219,9 +239,9 @@ export function fileableKinds(p: Perspective): Kind[] {
     return KIND_ORDER.filter((k) => !RETIRED_KINDS.includes(k) && (KINDS[k].source === 'leave' ? p.canFileLeave : p.canFileAttendance));
 }
 
-/** Kinds the viewer may approve here. Time corrections are decided on the day in Time & Attendance › Timesheets. */
+/** Kinds the viewer may approve here. Time corrections are decided on the day in Time & Attendance › Timesheets; absence notices are only recorded. */
 export function canDecide(p: Perspective, kind: Kind): boolean {
-    if (kind === 'correction') return false;
+    if (kind === 'correction' || kind === 'absence_notice') return false;
     return KINDS[kind].source === 'leave' ? p.canApproveLeave : p.canApproveAttendance;
 }
 

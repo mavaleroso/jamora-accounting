@@ -53,6 +53,7 @@ beforeEach(function () {
         $dtr = new DtrEntry([
             'entity_id' => $this->entity->id, 'employee_id' => $this->staff->id, 'work_date' => $date,
             'time_in' => '09:00:00', 'break_out' => '12:00:00', 'break_in' => '13:00:00', 'time_out' => $out, 'status' => DtrEntry::STATUS_OPEN,
+            'accomplishment' => '<p>Inventory count</p>',
         ]);
         app(AttendanceCalculator::class)->compute($dtr, $this->staff)->save();
 

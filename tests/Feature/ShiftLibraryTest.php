@@ -59,7 +59,7 @@ afterEach(fn () => Carbon::setTestNow());
 
 test('each company starts with its default shift, which the library lists and the roster offers', function () {
     expect($this->regular->only(['code', 'name', 'start_time', 'end_time', 'break_minutes', 'grace_minutes', 'is_default']))->toBe([
-        'code' => 'REG', 'name' => 'Regular Day Shift', 'start_time' => '09:00:00', 'end_time' => '18:00:00', 'break_minutes' => 60, 'grace_minutes' => 5, 'is_default' => true,
+        'code' => 'REG', 'name' => 'Regular Day Shift', 'start_time' => '09:00:00', 'end_time' => '18:00:00', 'break_minutes' => 60, 'grace_minutes' => 0, 'is_default' => true,
     ])->and(ShiftTemplate::ensureDefault($this->clinic->id)->id)->toBe($this->regular->id);
 
     ($this->as)()->get('/libraries/shifts')->assertOk()

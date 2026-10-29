@@ -9,6 +9,7 @@ use App\Models\Holiday;
 use App\Models\LeaveRequest;
 use App\Models\ShiftRoster;
 use App\Models\ShiftTemplate;
+use App\Support\RichText;
 use App\Support\SystemSettings;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
@@ -236,6 +237,7 @@ class AttendanceCalculator
                 'regular_hours' => 0,
                 'ot_hours' => 0,
                 'night_diff_hours' => 0,
+                'over_break_minutes' => 0,
                 'attendance_status' => 'incomplete',
                 'is_absent' => false,
             ]);
@@ -255,6 +257,8 @@ class AttendanceCalculator
 
         $spanMinutes = $in->diffInMinutes($out);
         [$breakMinutes, $breakStart, $breakEnd] = $this->breakWindow($dtr, $dateStr, $in, $spanMinutes, $scheduledBreak);
+        // A punched break longer than the allotted one (Employee Handbook, over-break). Only counted, never deducted here.
+        $overBreak = $breakStart && $scheduledBreak > 0 ? max(0, $breakMinutes - $scheduledBreak) : 0;
         $workedMinutes = max(0, $spanMinutes - $breakMinutes);
         $regularCap = (int) config('people.timekeeping.regular_hours_per_day', 8) * 60;
         // When regular hours end, so overtime can follow; null when the day has none to follow.
@@ -301,6 +305,7 @@ class AttendanceCalculator
             'regular_hours' => round($regularMinutes / 60, 2),
             'ot_hours' => round($otMinutes / 60, 2),
             'night_diff_hours' => round($ndMinutes / 60, 2),
+            'over_break_minutes' => $overBreak,
             'attendance_status' => $status,
             'is_absent' => false,
         ]);
@@ -311,14 +316,21 @@ class AttendanceCalculator
     }
 
     /**
-     * Payable OT is the OT actually rendered, but only on a day with an approved overtime request.
-     * Called on every recompute so no other path (manual edit, import, approval) can grant OT.
+     * Payable OT is the OT actually rendered, but only on a day with an approved overtime request and a written
+     * accomplishment (the output report the Employee Handbook asks for with the overtime slip). Called on every
+     * recompute so no other path (manual edit, import, approval) can grant OT.
      */
     public function syncApprovedOt(DtrEntry $dtr): DtrEntry
     {
-        $dtr->ot_hours_approved = $this->hasApprovedOt($dtr->employee_id, $dtr->work_date) ? (float) $dtr->ot_hours : 0;
+        $dtr->ot_hours_approved = $this->otHeldForReport($dtr) || ! $this->hasApprovedOt($dtr->employee_id, $dtr->work_date) ? 0 : (float) $dtr->ot_hours;
 
         return $dtr;
+    }
+
+    /** Whether the day's rendered OT waits for its accomplishment (output report) before it is payable. */
+    public function otHeldForReport(DtrEntry $dtr): bool
+    {
+        return (float) $dtr->ot_hours > 0 && RichText::isBlank($dtr->accomplishment);
     }
 
     /**
@@ -520,6 +532,7 @@ class AttendanceCalculator
             'tardiness_minutes' => 0,
             'undertime_minutes' => 0,
             'night_diff_hours' => 0,
+            'over_break_minutes' => 0,
             'attendance_status' => $status,
             'is_absent' => $absent,
         ]);

@@ -152,6 +152,7 @@ const FIELDS: Record<Kind, string[]> = {
     official_business: ['work_date', 'destination', 'attachment'],
     undertime: ['work_date', 'requested_time_out'],
     schedule_change: ['work_date', 'requested_rest_day', 'requested_time_in', 'requested_time_out'],
+    absence_notice: ['work_date'],
 };
 
 const PLACEHOLDER: Record<Kind, string> = {
@@ -161,6 +162,7 @@ const PLACEHOLDER: Record<Kind, string> = {
     official_business: 'e.g. Delivering frames to the Makati branch',
     undertime: 'e.g. Medical check-up at 4:00 PM',
     schedule_change: 'e.g. Swapping with Ana to cover the Saturday clinic',
+    absence_notice: 'e.g. Fever since last night, will see a doctor this morning',
 };
 
 function RequestForm({
@@ -207,15 +209,25 @@ function RequestForm({
     const balance = forSelf && type ? balances.find((b) => b.leave_type_id === type.id) : undefined;
     const span = daysBetween(data.start_date, data.end_date);
     const singleDay = span === 1;
+    // A long filing (more than long_notice.days in a row) needs the longer notice.
+    const notice = type ? Math.max(type.min_notice_days, type.long_notice && span > type.long_notice.days ? type.long_notice.notice : 0) : 0;
 
     const confirm = useConfirm();
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
-        const ok = await confirm({
-            title: `File this ${KINDS[kind].label.toLowerCase()} request?`,
-            description: `${forSelf || !person ? 'Your request' : `The request for ${fullName(person)}`} is sent for approval${kind === 'leave' && span > 0 ? ` (${span} day${span === 1 ? '' : 's'})` : ''}. You can cancel it while it is pending.`,
-            confirmLabel: 'File request',
-        });
+        const ok = await confirm(
+            kind === 'absence_notice'
+                ? {
+                      title: 'Report this absence?',
+                      description: `The absence on ${fmtDate(data.work_date)} is recorded now, with the time you report it. The day is unpaid unless leave is filed and approved for it.`,
+                      confirmLabel: 'Report absence',
+                  }
+                : {
+                      title: `File this ${KINDS[kind].label.toLowerCase()} request?`,
+                      description: `${forSelf || !person ? 'Your request' : `The request for ${fullName(person)}`} is sent for approval${kind === 'leave' && span > 0 ? ` (${span} day${span === 1 ? '' : 's'})` : ''}. You can cancel it while it is pending.`,
+                      confirmLabel: 'File request',
+                  },
+        );
         if (!ok) return;
         const keep = new Set(['kind', 'reason', ...(canPick ? ['employee_id'] : []), ...FIELDS[kind]]);
         form.transform((d) => {
@@ -253,7 +265,7 @@ function RequestForm({
                     <span className={cn('inline-flex size-8 items-center justify-center rounded-md border', TONE[meta.tone])}>
                         <meta.icon className="size-4" />
                     </span>
-                    <DialogTitle>File {meta.label.toLowerCase()}</DialogTitle>
+                    <DialogTitle>{kind === 'absence_notice' ? meta.label : `File ${meta.label.toLowerCase()}`}</DialogTitle>
                 </div>
                 <DialogDescription>{meta.description}</DialogDescription>
             </DialogHeader>
@@ -338,7 +350,7 @@ function RequestForm({
                         <Field
                             label="First day"
                             error={err.start_date}
-                            hint={type && type.min_notice_days > 0 ? `Earliest: ${fmtDate(addDays(today, type.min_notice_days))}` : undefined}
+                            hint={notice > 0 ? `Earliest: ${fmtDate(addDays(today, notice))}` : undefined}
                         >
                             <Input
                                 type="date"
@@ -400,12 +412,12 @@ function RequestForm({
 
             {kind !== 'leave' && (
                 <Field
-                    label={kind === 'schedule_change' ? 'Day to change' : 'Date'}
+                    label={kind === 'schedule_change' ? 'Day to change' : kind === 'absence_notice' ? 'Day you will be absent' : 'Date'}
                     error={err.work_date}
                     hint={
                         kind === 'correction'
                             ? 'Today or an earlier day.'
-                            : kind === 'official_business'
+                            : kind === 'official_business' || kind === 'absence_notice'
                               ? undefined
                               : 'Today or a later day — file before it happens.'
                     }
@@ -421,9 +433,17 @@ function RequestForm({
                 </Field>
             )}
 
+            {kind === 'absence_notice' && (
+                <p className={cn('rounded-md border px-3 py-2 text-xs', TONE.rose)}>
+                    Report at least 3 hours before your shift starts. A later notice, or none, is an unauthorized absence; two scheduled days in a
+                    row without notice are treated as AWOL. To be paid for the day, also file leave for it.
+                </p>
+            )}
+
             {kind === 'overtime' && (
                 <p className={cn('rounded-md border px-3 py-2 text-xs', TONE.blue)}>
-                    No need to estimate hours. Once approved, you are paid for the overtime the time clock records that day.{' '}
+                    No need to estimate hours. Once approved, you are paid for the overtime the time clock records that day, once that day’s
+                    accomplishment report is written.{' '}
                     {describeOvertime(overtimePolicy)}
                 </p>
             )}
@@ -536,7 +556,7 @@ function RequestForm({
                 </Button>
                 <Button type="submit" disabled={processing || (kind === 'leave' && !data.leave_type_id) || (canPick && !data.employee_id)}>
                     {processing && <Loader2 className="size-4 animate-spin" />}
-                    Submit for approval
+                    {kind === 'absence_notice' ? 'Report absence' : 'Submit for approval'}
                 </Button>
             </DialogFooter>
         </form>
@@ -548,6 +568,7 @@ function LeavePolicy({ type, balance }: { type: LeaveTypeOption; balance?: Balan
         type.legal_basis,
         !type.is_paid && 'Unpaid',
         type.min_notice_days > 0 && `File at least ${type.min_notice_days} days ahead`,
+        type.long_notice && `${type.long_notice.notice} days ahead for more than ${type.long_notice.days} days in a row`,
         type.attachment_required_after_days === 0
             ? 'Supporting document required'
             : type.attachment_required_after_days

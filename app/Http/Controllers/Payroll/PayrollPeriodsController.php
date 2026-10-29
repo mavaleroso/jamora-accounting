@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Payroll;
 use App\Http\Controllers\Controller;
 use App\Models\PayrollPeriod;
 use App\Services\Payroll\PayrollService;
+use App\Services\People\AttendanceCalculator;
 use App\Support\EntityContext;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
@@ -44,6 +45,8 @@ class PayrollPeriodsController extends Controller
         $secondPay = (int) ($data['second_pay_day'] ?? $payDays['second']);
         $created = 0;
         $skipped = 0;
+        $entityId = app(EntityContext::class)->id();
+        $isHoliday = fn (Carbon $date) => app(AttendanceCalculator::class)->holidayFor($entityId, $date) !== null;
 
         for ($i = 0; $i < ($data['months'] ?? 1); $i++) {
             $month = Carbon::createFromFormat('Y-m-d', $data['month'].'-01')->addMonthsNoOverflow($i);
@@ -66,7 +69,7 @@ class PayrollPeriodsController extends Controller
                     'frequency' => $data['frequency'],
                     'start_date' => $start->toDateString(),
                     'end_date' => $end->toDateString(),
-                    'pay_date' => PayrollService::payDay($end, $payDay)->toDateString(),
+                    'pay_date' => PayrollService::payDay($end, $payDay, $isHoliday)->toDateString(),
                     'status' => 'open',
                 ]);
                 $created++;

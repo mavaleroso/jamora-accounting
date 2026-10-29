@@ -132,7 +132,8 @@ export function RequestDataTable({
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem variant="destructive" onClick={() => onCancel(item)}>
-                                        <Undo2 className="size-4" /> {pending ? 'Withdraw request' : 'Cancel leave'}
+                                        <Undo2 className="size-4" />{' '}
+                                        {pending ? 'Withdraw request' : item.status === 'noted' ? 'Withdraw notice' : 'Cancel leave'}
                                     </DropdownMenuItem>
                                 </>
                             )}

@@ -397,7 +397,11 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
     });
     const { data, setData, errors, processing } = form;
     const confirm = useConfirm();
-    const dayLabel = (d: string) => (d === '0' ? 'last day of the month' : `the ${d}${['th', 'st', 'nd', 'rd'][Number(d) % 10 > 3 || [11, 12, 13].includes(Number(d)) ? 0 : Number(d) % 10]}`);
+    // A day before the cut-off's last day (15 for the 1st–15th, month end otherwise) falls in the next month.
+    const dayLabel = (d: string, cutoffEnd: number) =>
+        d === '0'
+            ? 'last day of the month'
+            : `the ${d}${['th', 'st', 'nd', 'rd'][Number(d) % 10 > 3 || [11, 12, 13].includes(Number(d)) ? 0 : Number(d) % 10]}${Number(d) < cutoffEnd ? ' of the next month' : ''}`;
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -461,17 +465,17 @@ function GenerateDialog({ open, onOpenChange, today, payDays }: { open: boolean;
                             <div className="space-y-1.5">
                                 <Label className="text-xs">1–15 cut-off paid on</Label>
                                 <Input type="number" min={0} max={31} value={data.first_pay_day} onChange={(e) => setData('first_pay_day', e.target.value)} />
-                                <p className="text-[11px] text-muted-foreground">{dayLabel(data.first_pay_day)}</p>
+                                <p className="text-[11px] text-muted-foreground">{dayLabel(data.first_pay_day, 15)}</p>
                             </div>
                         )}
                         <div className="space-y-1.5">
                             <Label className="text-xs">{data.frequency === 'semi_monthly' ? '16–end cut-off paid on' : 'Paid on'}</Label>
                             <Input type="number" min={0} max={31} value={data.second_pay_day} onChange={(e) => setData('second_pay_day', e.target.value)} />
-                            <p className="text-[11px] text-muted-foreground">{dayLabel(data.second_pay_day)} · 0 = last day</p>
+                            <p className="text-[11px] text-muted-foreground">{dayLabel(data.second_pay_day, 28)} · 0 = last day</p>
                         </div>
                     </div>
                     <p className="text-[11px] text-muted-foreground">
-                        Wages must be paid at least twice a month, no more than 16 days apart (Labor Code Art. 103). Use monthly only for employees exempt from this rule.
+                        A pay day on a holiday moves to the working day before; one on a Sunday, to the next working day. Wages must be paid at least twice a month, no more than 16 days apart (Labor Code Art. 103). Use monthly only for employees exempt from this rule.
                     </p>
                     <DialogFooter>
                         <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

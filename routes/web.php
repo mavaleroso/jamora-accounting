@@ -26,6 +26,7 @@ use App\Http\Controllers\EmployeeManagement\EmployeeRequestsController;
 use App\Http\Controllers\EmployeeManagement\LeaveManagementController;
 use App\Http\Controllers\EmployeeManagement\MyPayController;
 use App\Http\Controllers\EmployeeManagement\PeopleReportsController;
+use App\Http\Controllers\EmployeeManagement\PerformanceEvaluationsController;
 use App\Http\Controllers\EmployeeManagement\ShiftRosterController;
 use App\Http\Controllers\EntitiesController;
 use App\Http\Controllers\Integration\InventoryIntegrationController;
@@ -437,6 +438,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::controller(PeopleReportsController::class)->prefix('reports')->name('reports.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:payroll.view|dashboard.view');
             Route::get('export', 'export')->name('export')->middleware('permission:payroll.view|dashboard.view');
+        });
+
+        // Performance reviews: reviewers write and share them; employees read and acknowledge their own.
+        Route::controller(PerformanceEvaluationsController::class)->prefix('performance')->name('performance.')->group(function () {
+            Route::get('/', 'index')->name('index')->middleware('permission:evaluations.manage|portal.view');
+            Route::post('/', 'store')->name('store')->middleware('permission:evaluations.manage');
+            Route::put('{id}', 'update')->name('update')->whereNumber('id')->middleware('permission:evaluations.manage');
+            Route::post('{id}/share', 'share')->name('share')->whereNumber('id')->middleware('permission:evaluations.manage');
+            Route::delete('{id}', 'destroy')->name('destroy')->whereNumber('id')->middleware('permission:evaluations.manage');
+            Route::post('{id}/acknowledge', 'acknowledge')->name('acknowledge')->whereNumber('id')->middleware('permission:portal.view');
         });
 
         // People Access moved into Admin › Roles & Permissions.

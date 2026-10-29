@@ -40,6 +40,8 @@ class SystemSettingsController extends Controller
             'defaultShift' => collect(ShiftTemplate::defaultShift(app(EntityContext::class)->id()))->only(['name', 'end'])->all(),
             'leave' => [
                 'min_notice_days' => $this->settings->leaveNoticeDays(),
+                'long_leave_days' => $this->settings->longLeaveDays(),
+                'long_leave_notice_days' => $this->settings->longLeaveNoticeDays(),
                 'leave_types' => $this->settings->leaveNoticeTypes(),
                 // Each active leave type, with the notice set on the type itself (the longer one applies).
                 'types' => LeaveType::query()->where('is_active', true)->orderBy('sort_order')->get(['code', 'name', 'min_notice_days'])
@@ -91,10 +93,14 @@ class SystemSettingsController extends Controller
     {
         $validated = $request->validate([
             'min_notice_days' => ['required', 'integer', 'min:0', 'max:90'],
+            // Left out = unchanged.
+            'long_leave_days' => ['nullable', 'integer', 'min:1', 'max:60'],
+            'long_leave_notice_days' => ['nullable', 'integer', 'min:0', 'max:120'],
             'leave_types' => ['present', 'array'],
             'leave_types.*' => ['string', Rule::exists('leave_types', 'code')],
         ], [
             'min_notice_days.max' => 'The notice cannot be longer than 90 days.',
+            'long_leave_notice_days.max' => 'The notice for long leave cannot be longer than 120 days.',
         ]);
 
         // Kept in the leave types' own order, so saving the same choice again changes nothing.
@@ -102,6 +108,8 @@ class SystemSettingsController extends Controller
 
         $changed = $this->settings->put([
             'leave.min_notice_days' => (int) $validated['min_notice_days'],
+            'leave.long_leave_days' => (int) ($validated['long_leave_days'] ?? $this->settings->longLeaveDays()),
+            'leave.long_leave_notice_days' => (int) ($validated['long_leave_notice_days'] ?? $this->settings->longLeaveNoticeDays()),
             'leave.notice_leave_types' => $codes,
         ], $request->user()?->id);
 

@@ -28,6 +28,7 @@ import {
     Scale,
     Shield,
     SlidersHorizontal,
+    Star,
     UserCheck,
     UserRound,
     Users,
@@ -76,6 +77,7 @@ const employeeMgmtNavItems: NavItem[] = [
     { title: 'Shift & Roster', href: '/employee-management/roster', icon: CalendarCheck },
     { title: 'Time & Attendance', href: '/employee-management/attendance', icon: Clock },
     { title: 'Employee Requests', href: '/employee-management/requests', icon: ClipboardList },
+    { title: 'Performance Reviews', href: '/employee-management/performance', icon: Star },
     { title: 'Payroll', href: '/payroll/runs', icon: Banknote },
     { title: 'Benefits Admin', href: '/employee-management/benefits', icon: HeartHandshake },
     { title: 'Employee Portal', href: '/employee-management/portal', icon: UserCheck },
@@ -89,6 +91,7 @@ const SELF_SERVICE_HREFS = [
     '/employee-management/portal',
     '/employee-management/attendance',
     '/employee-management/requests',
+    '/employee-management/performance',
     '/employee-management/roster',
     '/employee-management/my-pay',
 ];
@@ -284,6 +287,9 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
                         'payroll.view',
                         'payroll.manage',
                     ]);
+                case '/employee-management/performance':
+                    // Reviewers write reviews; employees read and acknowledge their own (in the employee view, only their own).
+                    return (!viewingAsEmployee && can('evaluations.manage')) || (!!auth?.user?.employee_id && can('portal.view'));
                 case '/payroll/runs':
                     return canAny(['payroll.view', 'payroll.run']);
                 case '/employee-management/benefits':
@@ -321,6 +327,10 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
 
             if (item.href === '/employee-management/requests') {
                 return { ...item, title: 'My Requests' };
+            }
+
+            if (item.href === '/employee-management/performance') {
+                return { ...item, title: 'My Reviews' };
             }
 
             return item;

@@ -44,7 +44,9 @@ export function What({ item }: { item: RequestItem }) {
                     {d.is_paid === false && <span className="text-muted-foreground"> · unpaid</span>}
                 </span>
             );
-        case 'overtime':
+        case 'overtime': {
+            const late = Number(d.dtr?.tardiness_minutes ?? 0);
+            const lateLimit = d.late_no_ot_minutes ?? null;
             return (
                 <span>
                     {d.dtr?.time_out ? (
@@ -55,6 +57,23 @@ export function What({ item }: { item: RequestItem }) {
                         </>
                     ) : (
                         <span className="text-muted-foreground">Hours counted from the time clock once the day is worked</span>
+                    )}
+                    {item.status === 'pending' && lateLimit !== null && late > lateLimit && (
+                        <span className={cn('mt-1 block rounded-md border px-2 py-1 text-xs', TONE.amber)}>
+                            Late {Math.round(late)} min that day. Company policy: no overtime pay when more than {lateLimit} min late — consider declining.
+                        </span>
+                    )}
+                </span>
+            );
+        }
+        case 'absence_notice':
+            return (
+                <span>
+                    <span className="font-semibold">Will not report for work</span>
+                    {d.notice_status && (
+                        <Badge variant="outline" className={cn('ml-2', d.notice_status === 'on_time' ? TONE.emerald : TONE.rose)}>
+                            {d.notice_status === 'on_time' ? 'Reported in time' : 'Late notice — unauthorized'}
+                        </Badge>
                     )}
                 </span>
             );
@@ -173,7 +192,7 @@ export function RequestCard({ item, showEmployee, canDecide, canCancel, emphasiz
                         )}
                         {canCancel && item.cancellable && (
                             <Button size="sm" variant="ghost" onClick={() => onCancel(item)}>
-                                {pending ? 'Withdraw' : 'Cancel leave'}
+                                {pending ? 'Withdraw' : item.status === 'noted' ? 'Withdraw notice' : 'Cancel leave'}
                             </Button>
                         )}
                     </div>

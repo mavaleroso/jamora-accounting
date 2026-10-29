@@ -32,7 +32,7 @@ class DtrEntry extends Model
         'scheduled_in', 'scheduled_out',
         'time_in', 'break_out', 'break_in', 'time_out',
         'regular_hours', 'ot_hours', 'ot_hours_approved', 'tardiness_minutes', 'undertime_minutes',
-        'night_diff_hours', 'day_type', 'attendance_status', 'leave_request_id', 'is_absent',
+        'night_diff_hours', 'over_break_minutes', 'day_type', 'attendance_status', 'leave_request_id', 'is_absent',
         'source', 'in_latitude', 'in_longitude', 'out_latitude', 'out_longitude',
         'distance_meters', 'location_status', 'status', 'approved_by', 'approved_at', 'notes', 'accomplishment',
     ];
@@ -47,6 +47,7 @@ class DtrEntry extends Model
             'tardiness_minutes' => 'decimal:2',
             'undertime_minutes' => 'decimal:2',
             'night_diff_hours' => 'decimal:2',
+            'over_break_minutes' => 'integer',
             'distance_meters' => 'decimal:2',
             'is_absent' => 'boolean',
             'approved_at' => 'datetime',

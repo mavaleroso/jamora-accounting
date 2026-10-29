@@ -318,7 +318,7 @@ function ShiftDialog({ shift, isFirst, onClose }: { shift: Shift | null; isFirst
         start_time: shift?.start_time.slice(0, 5) ?? '09:00',
         end_time: shift?.end_time.slice(0, 5) ?? '18:00',
         break_minutes: String(shift?.break_minutes ?? 60),
-        grace_minutes: String(shift?.grace_minutes ?? 5),
+        grace_minutes: String(shift?.grace_minutes ?? 0),
         color: shift?.color ?? COLORS[0],
         is_active: shift?.is_active ?? true,
         // The first shift of a company becomes its default.

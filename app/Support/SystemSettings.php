@@ -16,6 +16,8 @@ class SystemSettings
         'overtime.ceiling' => 'people.timekeeping.ot_ceiling',
         'leave.min_notice_days' => 'people.leave.min_notice_days',
         'leave.notice_leave_types' => 'people.leave.notice_leave_types',
+        'leave.long_leave_days' => 'people.leave.long_leave_days',
+        'leave.long_leave_notice_days' => 'people.leave.long_leave_notice_days',
         'accounting.approve_source_documents' => 'accounting.approve_source_documents',
     ];
 
@@ -65,6 +67,18 @@ class SystemSettings
     public function leaveNoticeDays(): int
     {
         return max(0, (int) $this->get('leave.min_notice_days'));
+    }
+
+    /** Filings of the covered types spanning more than this many consecutive days need the longer notice. */
+    public function longLeaveDays(): int
+    {
+        return max(1, (int) $this->get('leave.long_leave_days'));
+    }
+
+    /** Days ahead a long filing (longLeaveDays) of the covered types must be filed. */
+    public function longLeaveNoticeDays(): int
+    {
+        return max(0, (int) $this->get('leave.long_leave_notice_days'));
     }
 
     /** Whether entries from source documents wait for approval before they reach the ledger. */

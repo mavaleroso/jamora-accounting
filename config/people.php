@@ -23,7 +23,8 @@ return [
         'start' => '09:00:00',
         'end' => '18:00:00',
         'break_minutes' => 60,
-        'grace_minutes' => 5,
+        // Employee Handbook (Tardiness, A.2): an employee is tardy one minute after the prescribed time.
+        'grace_minutes' => 0,
     ],
 
     // 0 = Sunday ... 6 = Saturday. Used when the employee has no rest_days set.
@@ -52,6 +53,19 @@ return [
         // Company policy: a break started more than this many minutes from the employee's preset break time is
         // flagged as off-schedule (never refused).
         'break_tolerance_minutes' => 15,
+        // Employee Handbook (Over-break, A.2.c): a break longer than the allotted break is an over-break. Flagged when
+        // a month has this many over-breaks, or this many minutes lost to them in total.
+        'over_break_instances' => 3,
+        'over_break_total_minutes' => 30,
+        // Employee Handbook (p.32): no OT pay on a day the employee was late by more than this. Enforced when the
+        // owner decides the overtime request: the approver is warned and may decline.
+        'late_no_ot_minutes' => 30,
+        // Employee Handbook (Tardiness and Absences): an absence must be reported at least this many hours before
+        // the shift starts. A later notice, or none, makes the absence unauthorized.
+        'absence_notice_hours' => 3,
+        // Employee Handbook (No Call + No Show): this many consecutive scheduled work days of unauthorized absence
+        // flag the employee as AWOL for a Notice to Explain. The system never separates anyone on its own.
+        'awol_days' => 2,
         // Art. 86 - night shift differential: 10% for work between 10:00 PM and 6:00 AM.
         'night_diff_start' => '22:00',
         'night_diff_end' => '06:00',
@@ -120,8 +134,11 @@ return [
         // second tranche effective 1 May 2026). Update per wage order / region.
         'minimum_wage_daily' => 475.00,
 
-        // Default pay day for each cut-off of a generated period (day of month; 0 = last day of the month).
-        'pay_days' => ['first' => 15, 'second' => 0],
+        // Default pay day for each cut-off of a generated period (day of month; 0 = last day of the month). A day
+        // earlier than the cut-off's last day falls in the next month. Employee Handbook (Pay Day): the 1st–15th is
+        // paid on the 20th and the 16th–end on the 5th of the next month; a pay day on a holiday moves to the
+        // working day before, one on a Sunday to the next working day.
+        'pay_days' => ['first' => 20, 'second' => 5],
 
         // BIR revised withholding tax table on compensation, effective 1 January 2023 (RR 11-2018, Annex E).
         // Each bracket: [over, base_tax, rate on excess over "over"].
@@ -165,8 +182,13 @@ return [
     | Leave filing (company policy). Defaults only: the owner changes them in Admin > System Settings.
     */
     'leave' => [
-        // Leave of the types below must be filed at least this many days before it starts.
-        'min_notice_days' => 5,
+        // Leave of the types below must be filed at least this many days before it starts. Employee Handbook (A.1):
+        // written permission at least one week before a vacation.
+        'min_notice_days' => 7,
+        // Employee Handbook (SIL): a filing of the types below spanning more than long_leave_days consecutive days
+        // must be filed at least long_leave_notice_days before it starts.
+        'long_leave_days' => 7,
+        'long_leave_notice_days' => 28,
         // Leave that can be planned. Sick, emergency, bereavement, maternity and paternity leave can't always be filed
         // ahead, so they keep only the notice set on their own leave type.
         'notice_leave_types' => ['VL', 'SIL', 'LWOP'],
@@ -180,12 +202,13 @@ return [
     'leave_types' => [
         ['code' => 'VL', 'name' => 'Vacation Leave', 'legal_basis' => 'Company policy (satisfies Art. 95 SIL)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 10, 'max_carry_over' => 5, 'is_convertible' => true, 'min_notice_days' => 3, 'sort_order' => 1],
         ['code' => 'SL', 'name' => 'Sick Leave', 'legal_basis' => 'Company policy (satisfies Art. 95 SIL)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 10, 'max_carry_over' => 5, 'attachment_required_after_days' => 2, 'sort_order' => 2],
-        ['code' => 'SIL', 'name' => 'Service Incentive Leave', 'legal_basis' => 'Labor Code Art. 95 (5 days/yr after 1 year of service)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 5, 'prorate_first_year' => false, 'is_convertible' => true, 'min_service_months' => 12, 'sort_order' => 3],
+        ['code' => 'SIL', 'name' => 'Service Incentive Leave', 'legal_basis' => 'Labor Code Art. 95 (5 days/yr after 1 year of service)', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 5, 'prorate_first_year' => false, 'is_convertible' => false, 'min_service_months' => 12, 'allow_half_day' => false, 'sort_order' => 3],
         ['code' => 'EL', 'name' => 'Emergency Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => true, 'annual_entitlement' => 3, 'sort_order' => 4],
         ['code' => 'ML', 'name' => 'Maternity Leave', 'legal_basis' => 'RA 11210 (105 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 105, 'counts_calendar_days' => true, 'gender' => 'female', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 5],
         ['code' => 'PL', 'name' => 'Paternity Leave', 'legal_basis' => 'RA 8187 (7 days)', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 7, 'gender' => 'male', 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 6],
         ['code' => 'BL', 'name' => 'Bereavement Leave', 'legal_basis' => 'Company policy', 'is_paid' => true, 'balance_tracked' => false, 'max_days_per_filing' => 3, 'allow_half_day' => false, 'sort_order' => 7],
-        ['code' => 'LWOP', 'name' => 'Leave Without Pay', 'legal_basis' => 'Company policy', 'is_paid' => false, 'balance_tracked' => false, 'sort_order' => 8],
+        ['code' => 'MLOA', 'name' => 'Medical Leave of Absence', 'legal_basis' => 'Company policy (Employee Handbook)', 'is_paid' => false, 'balance_tracked' => false, 'max_days_per_filing' => 60, 'counts_calendar_days' => true, 'attachment_required_after_days' => 0, 'allow_half_day' => false, 'sort_order' => 8],
+        ['code' => 'LWOP', 'name' => 'Leave Without Pay', 'legal_basis' => 'Company policy', 'is_paid' => false, 'balance_tracked' => false, 'sort_order' => 9],
     ],
 
     /*

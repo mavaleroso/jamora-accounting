@@ -19,6 +19,10 @@ use Illuminate\Support\Collection;
  *                       Undertime is still deducted.
  *  - schedule_change:   (retired) requested_time_in / requested_time_out = new shift, or requested_rest_day.
  *                       Approving one still publishes a roster entry for the day.
+ *  - absence_notice:    the employee reports they will not (or did not) report for work. Not approved: it is
+ *                       noted when filed, and notice_status records whether it came in time (Employee Handbook:
+ *                       at least absence_notice_hours before the shift). An absence without a timely notice is
+ *                       unauthorized. Pay is unaffected: the day is still unpaid unless leave is approved.
  */
 class AttendanceRequest extends Model
 {
@@ -34,13 +38,23 @@ class AttendanceRequest extends Model
 
     public const TYPE_SCHEDULE_CHANGE = 'schedule_change';
 
+    public const TYPE_ABSENCE_NOTICE = 'absence_notice';
+
     public const TYPES = [
         self::TYPE_CORRECTION,
         self::TYPE_OVERTIME,
         self::TYPE_OFFICIAL_BUSINESS,
         self::TYPE_UNDERTIME,
         self::TYPE_SCHEDULE_CHANGE,
+        self::TYPE_ABSENCE_NOTICE,
     ];
+
+    /** Notices are recorded, not decided: they are filed straight into this status. */
+    public const STATUS_NOTED = 'noted';
+
+    public const NOTICE_ON_TIME = 'on_time';
+
+    public const NOTICE_LATE = 'late';
 
     /**
      * Types that can still be filed. Retired types stay in TYPES so past requests keep their history:
@@ -51,6 +65,7 @@ class AttendanceRequest extends Model
         self::TYPE_CORRECTION,
         self::TYPE_OVERTIME,
         self::TYPE_OFFICIAL_BUSINESS,
+        self::TYPE_ABSENCE_NOTICE,
     ];
 
     public const LABELS = [
@@ -59,12 +74,13 @@ class AttendanceRequest extends Model
         self::TYPE_OFFICIAL_BUSINESS => 'Official business',
         self::TYPE_UNDERTIME => 'Undertime',
         self::TYPE_SCHEDULE_CHANGE => 'Change of schedule',
+        self::TYPE_ABSENCE_NOTICE => 'Absence notice',
     ];
 
     protected $fillable = [
         'entity_id', 'employee_id', 'dtr_entry_id', 'request_type', 'work_date',
         'requested_time_in', 'requested_break_out', 'requested_break_in', 'requested_time_out',
-        'requested_ot_hours', 'destination', 'requested_rest_day',
+        'requested_ot_hours', 'destination', 'requested_rest_day', 'notice_status',
         'reason', 'attachment_path', 'status', 'filed_by', 'reviewed_by', 'reviewed_at', 'review_remarks',
     ];
 

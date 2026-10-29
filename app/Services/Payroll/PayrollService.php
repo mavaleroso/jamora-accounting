@@ -168,7 +168,8 @@ class PayrollService
 
             $entry = $this->journalEntry([
                 'journal_id' => $this->journal()->id,
-                'entry_date' => $run->period->pay_date?->toDateString() ?? $run->period->end_date->toDateString(),
+                // Accrued in the cut-off it covers: the 16th–end cut-off is paid next month, but its cost is this month's.
+                'entry_date' => $run->period->end_date->toDateString(),
                 'reference' => $run->run_no,
                 'memo' => "Payroll {$run->period->code} ({$run->period->start_date->format('M j')}–{$run->period->end_date->format('M j, Y')})",
                 'source_system' => 'payroll',
@@ -535,10 +536,37 @@ class PayrollService
     }
 
     /**
-     * Turn a date into the default pay day of a cut-off ("0" = last day of the month).
+     * The pay day of a cut-off ending on $periodEnd, paid on day $day of the month ("0" = last day of the month). A day
+     * earlier than the cut-off's end falls in the next month (16th–end paid on the 5th = the 5th of the next month).
+     * With $isHoliday given, a pay day on a holiday moves to the working day before and one on a Sunday to the next
+     * working day (Employee Handbook, Pay Day and Paychecks).
+     *
+     * @param  (callable(Carbon): bool)|null  $isHoliday
      */
-    public static function payDay(Carbon $periodEnd, int $day): Carbon
+    public static function payDay(Carbon $periodEnd, int $day, ?callable $isHoliday = null): Carbon
     {
-        return $day === 0 ? $periodEnd->copy()->endOfMonth() : $periodEnd->copy()->day(min($day, $periodEnd->daysInMonth));
+        $end = $periodEnd->copy()->startOfDay();
+        $date = $day === 0 ? $end->copy()->endOfMonth()->startOfDay() : $end->copy()->day(min($day, $end->daysInMonth));
+        if ($date->lt($end)) {
+            $next = $end->copy()->startOfMonth()->addMonthNoOverflow();
+            $date = $next->day(min($day, $next->daysInMonth));
+        }
+
+        if (! $isHoliday) {
+            return $date;
+        }
+
+        $working = fn (Carbon $d) => ! $d->isSunday() && ! $isHoliday($d);
+        if ($date->isSunday()) {
+            while (! $working($date)) {
+                $date->addDay();
+            }
+        } else {
+            while (! $working($date)) {
+                $date->subDay();
+            }
+        }
+
+        return $date;
     }
 }

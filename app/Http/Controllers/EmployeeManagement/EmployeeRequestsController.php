@@ -28,7 +28,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Employee Requests — one place to file and decide every request an employee can make:
- * leave (any type in the leave catalogue), overtime, time correction and official business.
+ * leave (any type in the leave catalogue), overtime, time correction and official business, plus reporting an
+ * absence (an absence notice is recorded, not decided).
  * (Undertime is deducted automatically and schedules are set by HR, so neither is filed any more.)
  *
  * Leave lives in leave_requests (credits, ledger, DTR sync via LeaveService); the day-level
@@ -46,7 +47,7 @@ class EmployeeRequestsController extends Controller
 
     private const VIEWS = ['mine', 'inbox', 'all', 'balances'];
 
-    private const STATUSES = ['pending', 'approved', 'declined', 'cancelled'];
+    private const STATUSES = ['pending', 'approved', 'declined', 'cancelled', AttendanceRequest::STATUS_NOTED];
 
     public function __construct(
         protected LeaveService $leaveService,
@@ -187,6 +188,8 @@ class EmployeeRequestsController extends Controller
                 ]),
                 // The notice in force: the type's own or the company's (Admin › System Settings), whichever is longer.
                 'min_notice_days' => $t->noticeDays(),
+                // Filings longer than `days` consecutive days need `notice` days (company notice types only).
+                'long_notice' => $t->companyNoticeApplies() ? ['days' => $settings->longLeaveDays(), 'notice' => $settings->longLeaveNoticeDays()] : null,
             ]),
             // When approved overtime is counted (Admin › System Settings), explained on the overtime form.
             'overtimePolicy' => [
@@ -249,6 +252,10 @@ class EmployeeRequestsController extends Controller
         }
 
         $who = $employee->id === $self?->id ? '' : " for {$employee->name}";
+
+        if ($kind === AttendanceRequest::TYPE_ABSENCE_NOTICE) {
+            return redirect()->back()->with('status', "Absence reported{$who}. It is unpaid unless leave is filed and approved for the day.");
+        }
 
         return redirect()->back()->with('status', "{$label} request filed{$who}. It is now waiting for approval.");
     }
@@ -335,7 +342,9 @@ class EmployeeRequestsController extends Controller
 
         $this->attendanceRequests->cancel($attendanceRequest);
 
-        return redirect()->back()->with('status', "{$attendanceRequest->label()} request cancelled.");
+        return redirect()->back()->with('status', $attendanceRequest->request_type === AttendanceRequest::TYPE_ABSENCE_NOTICE
+            ? 'Absence notice withdrawn.'
+            : "{$attendanceRequest->label()} request cancelled.");
     }
 
     // -----------------------------------------------------------------------------------------

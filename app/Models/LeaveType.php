@@ -54,9 +54,27 @@ class LeaveType extends Model
     public function noticeDays(): int
     {
         $settings = app(SystemSettings::class);
-        $company = in_array($this->code, $settings->leaveNoticeTypes(), true) ? $settings->leaveNoticeDays() : 0;
+        $company = $this->companyNoticeApplies() ? $settings->leaveNoticeDays() : 0;
 
         return max((int) $this->min_notice_days, $company);
+    }
+
+    /**
+     * The notice in force for a filing spanning $consecutiveDays calendar days: a long filing of a type the company
+     * notice covers needs the longer notice (Admin › System Settings).
+     */
+    public function noticeDaysFor(int $consecutiveDays): int
+    {
+        $settings = app(SystemSettings::class);
+        $long = $this->companyNoticeApplies() && $consecutiveDays > $settings->longLeaveDays() ? $settings->longLeaveNoticeDays() : 0;
+
+        return max($this->noticeDays(), $long);
+    }
+
+    /** Whether the company's notice rules cover this type (leave that can be planned). */
+    public function companyNoticeApplies(): bool
+    {
+        return in_array($this->code, app(SystemSettings::class)->leaveNoticeTypes(), true);
     }
 
     /**

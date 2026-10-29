@@ -376,6 +376,7 @@ const STATUS_STAT: Record<Status, { hint: string; className: string }> = {
     approved: { hint: 'Granted', className: 'text-emerald-600 dark:text-emerald-400' },
     declined: { hint: 'Not granted', className: 'text-rose-600 dark:text-rose-400' },
     cancelled: { hint: 'Withdrawn or cancelled', className: 'text-muted-foreground' },
+    noted: { hint: 'Absences reported', className: 'text-sky-600 dark:text-sky-400' },
 };
 
 /** A status count that doubles as a filter for the history table. */

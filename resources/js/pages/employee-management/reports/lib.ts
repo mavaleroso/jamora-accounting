@@ -45,15 +45,26 @@ export type AttendanceSummary = {
     otApproved: number;
     nightDiffHours: number;
     leaveDays: number;
+    /** Absences without a timely absence notice (Employee Handbook). */
+    unauthorizedAbsences: number;
+    /** Breaks longer than the allotted break, and the minutes they ran over. */
+    overBreaks: number;
+    overBreakMinutes: number;
     rate: number | null;
 };
+
+/** Per employee: longest run of unauthorized absences, AWOL when it reaches awolDays, and the over-break flag. */
+export type AttendanceFlags = { awolStreak: number; awol: boolean; overBreakFlag: boolean };
 
 export type Attendance = AttendanceSummary & {
     through: string | null;
     incomplete: number;
     unapproved: number;
+    awolDays: number;
+    awolEmployees: number;
+    overBreakEmployees: number;
     daily: { date: string; rate: number; present: number; late: number; absent: number }[];
-    byEmployee: (AttendanceSummary & Person)[];
+    byEmployee: (AttendanceSummary & AttendanceFlags & Person)[];
 };
 
 export type Leave = {

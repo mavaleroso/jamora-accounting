@@ -1,1 +1,0 @@
-import{c as a,e as i,j as c}from"./app-DukIn-yY.js";function d(t){const e=a.c(8);let s,l;e[0]!==t?({className:s,...l}=t,e[0]=t,e[1]=s,e[2]=l):(s=e[1],l=e[2]);let o;e[3]!==s?(o=i("overflow-hidden rounded-xl border bg-card shadow-sm",s),e[3]=s,e[4]=o):o=e[4];let r;return e[5]!==l||e[6]!==o?(r=c.jsx("div",{className:o,...l}),e[5]=l,e[6]=o,e[7]=r):r=e[7],r}export{d as T};

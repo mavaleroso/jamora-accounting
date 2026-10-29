@@ -249,18 +249,24 @@ test('the nightly close records absences for every active branch', function () {
     $this->artisan('attendance:close-day', ['date' => '2026-10-14'])->assertFailed();
 });
 
-test('approved overtime pays what the clock records, and a timekeeper trims it by editing the clock-out', function () {
+test('approved overtime pays what the clock records once the day’s accomplishment is in, and a timekeeper trims it by editing the clock-out', function () {
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => AttendanceRequest::TYPE_OVERTIME, 'work_date' => '2026-10-14', 'reason' => 'Month-end inventory',
     ])->assertSessionHasNoErrors();
     ($this->as)($this->hrUser)->post('/employee-management/requests/attendance/'.AttendanceRequest::firstOrFail()->id.'/review', ['decision' => 'approved'])
         ->assertSessionHasNoErrors();
 
-    // Shift ends 18:00; clocked out at midnight = 6 hours of overtime, all of it payable once approved.
+    // Shift ends 18:00; clocked out at midnight = 6 hours of overtime, all of it payable once approved...
     $entry = ['employee_id' => $this->staffEmployee->id, 'work_date' => '2026-10-14', 'time_in' => '09:00', 'break_out' => '12:00', 'break_in' => '13:00'];
     ($this->as)($this->hrUser)->post('/employee-management/attendance/punch', [...$entry, 'time_out' => '00:00', 'notes' => 'Imported punch'])->assertSessionHasNoErrors();
     $dtr = DtrEntry::where('employee_id', $this->staffEmployee->id)->firstOrFail();
-    expect((float) $dtr->ot_hours_approved)->toBe(6.0);
+    expect((float) $dtr->ot_hours)->toBe(6.0)
+        ->and((float) $dtr->ot_hours_approved)->toBe(0.0);
+
+    // ...and the output report the handbook asks for: the employee's accomplishment for the day.
+    ($this->as)($this->staffUser)->post('/employee-management/attendance/accomplishments', ['work_date' => '2026-10-14', 'accomplishment' => '<p>Counted the frames and lenses</p>'])
+        ->assertSessionHasNoErrors();
+    expect((float) $dtr->fresh()->ot_hours_approved)->toBe(6.0);
 
     // Only 4 hours were allowed: the timekeeper moves the clock-out to 22:00.
     ($this->as)($this->hrUser)->post('/employee-management/attendance/punch', [...$entry, 'time_out' => '22:00', 'notes' => 'OT capped at 4 hours'])->assertSessionHasNoErrors();

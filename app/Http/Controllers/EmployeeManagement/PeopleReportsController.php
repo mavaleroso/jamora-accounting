@@ -66,10 +66,10 @@ class PeopleReportsController extends Controller
                 collect($analytics->workforce()['byPosition'])->map(fn ($r) => [$r['position'], $r['count'], $r['regular']]),
             ],
             'attendance' => [
-                ['Employee code', 'Employee', 'Position', 'Days worked', 'Absences', 'Late (times)', 'Late (min)', 'Undertime (min)', 'OT rendered (h)', 'OT approved (h)', 'Night diff (h)', 'Leave days', 'Attendance rate %'],
+                ['Employee code', 'Employee', 'Position', 'Days worked', 'Absences', 'Unauthorized absences', 'Longest unauthorized run (days)', 'Late (times)', 'Late (min)', 'Undertime (min)', 'Over-breaks', 'Over-break (min)', 'OT rendered (h)', 'OT approved (h)', 'Night diff (h)', 'Leave days', 'Attendance rate %'],
                 collect($analytics->attendance()['byEmployee'])->map(fn ($r) => [
-                    $r['code'], $r['name'], $r['position'], $r['daysWorked'], $r['absences'], $r['lateCount'], $r['lateMinutes'],
-                    $r['undertimeMinutes'], $r['otRendered'], $r['otApproved'], $r['nightDiffHours'], $r['leaveDays'], $r['rate'],
+                    $r['code'], $r['name'], $r['position'], $r['daysWorked'], $r['absences'], $r['unauthorizedAbsences'], $r['awolStreak'], $r['lateCount'], $r['lateMinutes'],
+                    $r['undertimeMinutes'], $r['overBreaks'], $r['overBreakMinutes'], $r['otRendered'], $r['otApproved'], $r['nightDiffHours'], $r['leaveDays'], $r['rate'],
                 ]),
             ],
             'leave' => [

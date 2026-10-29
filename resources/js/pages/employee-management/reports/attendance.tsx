@@ -6,17 +6,24 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { TONE } from '../attendance/lib';
 import { ChartCard, Empty, MiniTable, TrendLine } from './charts';
-import { dayLabel, fullDate, hours, num, pct, type Attendance, type AttendanceSummary, type Person } from './lib';
+import { dayLabel, fullDate, hours, num, pct, type Attendance, type AttendanceFlags, type AttendanceSummary, type Person } from './lib';
 
-type Row = AttendanceSummary & Person;
-type SortKey = 'name' | 'rate' | 'absences' | 'lateCount' | 'lateMinutes' | 'undertimeMinutes' | 'otApproved';
+type Row = AttendanceSummary & AttendanceFlags & Person;
+type SortKey = 'name' | 'rate' | 'absences' | 'unauthorizedAbsences' | 'lateCount' | 'lateMinutes' | 'undertimeMinutes' | 'overBreakMinutes' | 'otApproved';
 
 const COLUMNS: { key: SortKey; label: string; format: (r: Row) => React.ReactNode; className?: string }[] = [
     { key: 'rate', label: 'Attendance', format: (r) => pct(r.rate) },
     { key: 'absences', label: 'Absences', format: (r) => r.absences || '—' },
+    { key: 'unauthorizedAbsences', label: 'Unauthorized', format: (r) => r.unauthorizedAbsences || '—' },
     { key: 'lateCount', label: 'Lates', format: (r) => r.lateCount || '—' },
     { key: 'lateMinutes', label: 'Late time', format: (r) => (r.lateMinutes ? hours(r.lateMinutes) : '—'), className: 'hidden md:table-cell' },
     { key: 'undertimeMinutes', label: 'Undertime', format: (r) => (r.undertimeMinutes ? hours(r.undertimeMinutes) : '—'), className: 'hidden lg:table-cell' },
+    {
+        key: 'overBreakMinutes',
+        label: 'Over-breaks',
+        format: (r) => (r.overBreaks ? `${r.overBreaks} · ${hours(r.overBreakMinutes)}` : '—'),
+        className: 'hidden lg:table-cell',
+    },
     { key: 'otApproved', label: 'OT approved', format: (r) => (r.otApproved ? `${num(r.otApproved, 2)}h` : '—'), className: 'hidden md:table-cell' },
 ];
 
@@ -43,6 +50,31 @@ export function AttendanceSection({ data }: { data: Attendance }) {
                 </div>
             )}
 
+            {(data.awolEmployees > 0 || data.overBreakEmployees > 0) && (
+                <div className={cn('flex items-start gap-2 rounded-lg border px-3.5 py-2.5 text-sm', TONE.rose)}>
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                    <p>
+                        {data.awolEmployees > 0 && (
+                            <>
+                                <strong>
+                                    {data.awolEmployees} employee{data.awolEmployees === 1 ? '' : 's'} AWOL
+                                </strong>{' '}
+                                — {data.awolDays} or more scheduled days in a row absent without a timely notice. Issue a Notice to Explain; the system
+                                does not separate anyone on its own.{' '}
+                            </>
+                        )}
+                        {data.overBreakEmployees > 0 && (
+                            <>
+                                <strong>
+                                    {data.overBreakEmployees} employee{data.overBreakEmployees === 1 ? '' : 's'} over the break limit
+                                </strong>{' '}
+                                — 3 or more over-breaks, or 30 minutes or more lost to them, in a month.
+                            </>
+                        )}
+                    </p>
+                </div>
+            )}
+
             <div className="grid gap-4 xl:grid-cols-3">
                 <ChartCard
                     className="xl:col-span-2"
@@ -61,10 +93,15 @@ export function AttendanceSection({ data }: { data: Attendance }) {
                     <h3 className="text-sm font-semibold">Time summary</h3>
                     <dl className="mt-3 divide-y text-sm">
                         <Stat label="Days worked" value={num(data.daysWorked)} />
-                        <Stat label="Absences" value={num(data.absences)} />
+                        <Stat
+                            label="Absences"
+                            value={num(data.absences)}
+                            hint={data.unauthorizedAbsences > 0 ? `${num(data.unauthorizedAbsences)} without timely notice` : undefined}
+                        />
                         <Stat label="Days on leave" value={num(data.leaveDays)} />
                         <Stat label="Late arrivals" value={`${num(data.lateCount)} · ${hours(data.lateMinutes)}`} />
                         <Stat label="Undertime" value={hours(data.undertimeMinutes)} />
+                        <Stat label="Over-breaks" value={`${num(data.overBreaks)} · ${hours(data.overBreakMinutes)}`} />
                         <Stat label="Overtime rendered" value={`${num(data.otRendered, 2)}h`} />
                         <Stat label="Overtime approved" value={`${num(data.otApproved, 2)}h`} hint={data.otRendered > 0 ? `${Math.round((data.otApproved / data.otRendered) * 100)}% of rendered` : undefined} />
                         <Stat label="Night differential" value={`${num(data.nightDiffHours, 2)}h`} />
@@ -153,6 +190,16 @@ function EmployeeTable({ rows }: { rows: Row[] }) {
                                             <p className="truncate text-[11px] text-muted-foreground">
                                                 {[r.code, r.position].filter(Boolean).join(' · ')}
                                             </p>
+                                            {(r.awol || r.overBreakFlag) && (
+                                                <p className="mt-0.5 flex flex-wrap gap-1">
+                                                    {r.awol && (
+                                                        <span className={cn('rounded border px-1.5 text-[10px] font-semibold', TONE.rose)}>AWOL · {r.awolStreak} days</span>
+                                                    )}
+                                                    {r.overBreakFlag && (
+                                                        <span className={cn('rounded border px-1.5 text-[10px] font-semibold', TONE.amber)}>Over-break limit</span>
+                                                    )}
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 </td>

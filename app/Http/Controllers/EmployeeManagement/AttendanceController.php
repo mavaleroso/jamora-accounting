@@ -713,9 +713,11 @@ class AttendanceController extends Controller
         }
 
         $employee = Employee::query()->where('entity_id', $entityId)->findOrFail($validated['employee_id']);
-        $this->attendanceRequests->file($employee, $validated, $user);
+        $filed = $this->attendanceRequests->file($employee, $validated, $user);
 
-        return redirect()->back()->with('status', 'Request filed. You will see the decision under Requests.');
+        return redirect()->back()->with('status', $filed->request_type === AttendanceRequest::TYPE_ABSENCE_NOTICE
+            ? 'Absence reported. It is unpaid unless leave is filed and approved for the day.'
+            : 'Request filed. You will see the decision under Requests.');
     }
 
     /**
@@ -973,7 +975,9 @@ class AttendanceController extends Controller
             $ob->update(['dtr_entry_id' => $dtr->id]);
         }
 
-        $dtr->update(['accomplishment' => $accomplishment]);
+        // Approved overtime becomes payable once the day's accomplishment (output report) is in.
+        $dtr->accomplishment = $accomplishment;
+        $this->attendanceCalculator->syncApprovedOt($dtr)->save();
 
         return redirect()->back()->with('status', 'Accomplishment saved.');
     }

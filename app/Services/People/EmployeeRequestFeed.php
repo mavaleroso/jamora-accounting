@@ -5,6 +5,7 @@ namespace App\Services\People;
 use App\Models\AttendanceRequest;
 use App\Models\LeaveRequest;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -114,7 +115,8 @@ class EmployeeRequestFeed
             'decided_by' => $name($a->reviewer),
             'decided_at' => $a->reviewed_at?->toIso8601String(),
             'remarks' => $a->review_remarks,
-            'cancellable' => $a->status === 'pending',
+            'cancellable' => $a->status === 'pending'
+                || ($a->status === AttendanceRequest::STATUS_NOTED && $a->work_date?->gte(Carbon::today())),
             'details' => [
                 'time_in' => $a->requested_time_in,
                 'break_out' => $a->requested_break_out,
@@ -124,7 +126,10 @@ class EmployeeRequestFeed
                 'destination' => $a->destination,
                 'attachment_url' => $a->attachment_path ? route('employee-management.requests.attendance.attachment', $a->id) : null,
                 'rest_day' => (bool) $a->requested_rest_day,
-                'dtr' => $a->dtrEntry?->only(['time_in', 'break_out', 'break_in', 'time_out', 'ot_hours', 'ot_hours_approved', 'scheduled_in', 'scheduled_out']),
+                'dtr' => $a->dtrEntry?->only(['time_in', 'break_out', 'break_in', 'time_out', 'ot_hours', 'ot_hours_approved', 'scheduled_in', 'scheduled_out', 'tardiness_minutes']),
+                'notice_status' => $a->notice_status,
+                // Employee Handbook: no OT pay on a day the employee was late by more than this. Shown to the approver.
+                'late_no_ot_minutes' => $a->request_type === AttendanceRequest::TYPE_OVERTIME ? (int) config('people.timekeeping.late_no_ot_minutes', 30) : null,
             ],
         ];
     }

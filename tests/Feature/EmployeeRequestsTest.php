@@ -187,7 +187,8 @@ test('overtime is filed in advance without hours, and every OT hour the clock re
     ($this->as)($this->hrUser)->post("/employee-management/requests/attendance/{$ot->id}/review", ['decision' => 'approved'])->assertSessionHasNoErrors();
     expect($ot->fresh()->status)->toBe('approved');
 
-    // On the day the employee works 2.5h past the 6:00 PM shift end: all of it is paid.
+    // On the day the employee works 2.5h past the 6:00 PM shift end: all of it is paid, once the day's
+    // accomplishment (the output report) is written.
     $dtr = new DtrEntry([
         'entity_id' => $this->entity->id,
         'employee_id' => $this->staffEmployee->id,
@@ -196,9 +197,12 @@ test('overtime is filed in advance without hours, and every OT hour the clock re
         'time_out' => '20:30:00',
     ]);
     app(AttendanceCalculator::class)->compute($dtr, $this->staffEmployee)->save();
-
     expect((float) $dtr->ot_hours)->toBe(2.5)
-        ->and((float) $dtr->ot_hours_approved)->toBe(2.5);
+        ->and((float) $dtr->ot_hours_approved)->toBe(0.0);
+
+    $dtr->accomplishment = '<p>Edged and fitted the rush lens order</p>';
+    app(AttendanceCalculator::class)->compute($dtr, $this->staffEmployee)->save();
+    expect((float) $dtr->ot_hours_approved)->toBe(2.5);
 
     // Overtime on a day without an approved request is rendered but not paid.
     $unapproved = new DtrEntry([
@@ -207,6 +211,7 @@ test('overtime is filed in advance without hours, and every OT hour the clock re
         'work_date' => '2026-10-17',
         'time_in' => '09:00:00',
         'time_out' => '20:30:00',
+        'accomplishment' => '<p>Stayed late</p>',
     ]);
     app(AttendanceCalculator::class)->compute($unapproved, $this->staffEmployee)->save();
 

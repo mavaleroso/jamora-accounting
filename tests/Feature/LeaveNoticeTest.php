@@ -50,34 +50,55 @@ beforeEach(function () {
 
 afterEach(fn () => Carbon::setTestNow());
 
-test('planned leave must be filed at least 5 days ahead by default, while sick leave can start today', function () {
+test('planned leave must be filed at least a week ahead by default, while sick leave can start today', function () {
     ($this->file)($this->vl, '2026-10-16')->assertSessionHasErrors([
-        'start_date' => 'Vacation Leave must be filed at least 5 days before it starts: the earliest start date today is Oct 19, 2026.',
+        'start_date' => 'Vacation Leave must be filed at least 7 days before it starts: the earliest start date today is Oct 21, 2026.',
     ]);
     ($this->file)($this->sil, '2026-10-16')->assertSessionHasErrors('start_date');
 
-    ($this->file)($this->vl, '2026-10-19')->assertSessionHasNoErrors();
+    ($this->file)($this->vl, '2026-10-21')->assertSessionHasNoErrors();
     ($this->file)($this->sl, '2026-10-14')->assertSessionHasNoErrors();
     expect(LeaveRequest::query()->withoutGlobalScopes()->count())->toBe(2);
 
     // The filing form is told the notice in force for each leave type.
-    expect(($this->notices)())->toEqual(['VL' => 5, 'SL' => 0, 'SIL' => 5]);
+    expect(($this->notices)())->toEqual(['VL' => 7, 'SL' => 0, 'SIL' => 7]);
 });
 
 test('a longer notice set on the leave type itself still applies', function () {
-    $this->vl->update(['min_notice_days' => 7]);
+    $this->vl->update(['min_notice_days' => 10]);
 
-    ($this->file)($this->vl, '2026-10-19')->assertSessionHasErrors([
-        'start_date' => 'Vacation Leave must be filed at least 7 days before it starts: the earliest start date today is Oct 21, 2026.',
+    ($this->file)($this->vl, '2026-10-21')->assertSessionHasErrors([
+        'start_date' => 'Vacation Leave must be filed at least 10 days before it starts: the earliest start date today is Oct 24, 2026.',
     ]);
-    ($this->file)($this->vl, '2026-10-21')->assertSessionHasNoErrors();
-    expect(($this->notices)()['VL'])->toBe(7);
+    ($this->file)($this->vl, '2026-10-24')->assertSessionHasNoErrors();
+    expect(($this->notices)()['VL'])->toBe(10);
+});
+
+test('planned leave of more than 7 days in a row must be filed 4 weeks ahead', function () {
+    $file = fn (LeaveType $type, string $start, string $end) => ($this->as)($this->staff)->post('/employee-management/requests', [
+        'kind' => 'leave', 'leave_type_id' => $type->id, 'start_date' => $start, 'end_date' => $end, 'reason' => 'Family trip',
+    ]);
+
+    // Oct 21–30 is 10 days in a row: a week's notice is not enough.
+    $file($this->vl, '2026-10-21', '2026-10-30')->assertSessionHasErrors([
+        'start_date' => 'Vacation Leave must be filed at least 28 days before it starts (filings of more than 7 consecutive days): the earliest start date today is Nov 11, 2026.',
+    ]);
+    // Exactly 7 days needs only the usual week; sick leave is not covered at all.
+    $file($this->vl, '2026-10-21', '2026-10-27')->assertSessionHasNoErrors();
+    $file($this->sl, '2026-10-28', '2026-11-06')->assertSessionHasNoErrors();
+    $file($this->sil, '2026-11-11', '2026-11-20')->assertSessionHasNoErrors();
+
+    $longNotice = collect(($this->as)($this->staff)->get('/employee-management/requests')->viewData('page')['props']['leaveTypes'])->pluck('long_notice', 'code');
+    expect($longNotice['VL'])->toBe(['days' => 7, 'notice' => 28])
+        ->and($longNotice['SL'])->toBeNull();
 });
 
 test('the owner changes the notice and the leave types it covers in System Settings', function () {
     ($this->as)($this->owner)->get('/admin/system-settings')->assertOk()
         ->assertInertia(fn (Assert $page) => $page
-            ->where('leave.min_notice_days', 5)
+            ->where('leave.min_notice_days', 7)
+            ->where('leave.long_leave_days', 7)
+            ->where('leave.long_leave_notice_days', 28)
             ->where('leave.leave_types', ['VL', 'SIL', 'LWOP'])
             ->where('leave.types.0', ['code' => 'VL', 'name' => 'Vacation Leave', 'own_notice_days' => 0])
             ->where('today', '2026-10-14')

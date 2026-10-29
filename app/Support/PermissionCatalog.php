@@ -21,7 +21,7 @@ class PermissionCatalog
         'payables' => ['Payables', 'Supplier bills and payments.', ['ap']],
         'banking' => ['Banking', 'Bank accounts, transactions and reconciliation.', ['banks']],
         'integration' => ['Optical Integration', 'Sync with the optical clinic system.', ['integration']],
-        'people' => ['Employee Management', 'Shifts and roster, time and attendance, leave and employees’ requests, and the employee portal.', ['roster', 'attendance', 'leave', 'requests', 'portal']],
+        'people' => ['Employee Management', 'Shifts and roster, time and attendance, leave and employees’ requests, performance reviews, and the employee portal.', ['roster', 'attendance', 'leave', 'requests', 'evaluations', 'portal']],
         'payroll' => ['Payroll', 'Pay periods, payroll runs, adjustments, benefit programs and the release of pay.', ['payroll']],
         'compliance' => ['Compliance', 'Statutory filing calendar: BIR, SSS, PhilHealth, Pag-IBIG, DOLE and LGU.', ['compliance']],
         'libraries' => ['Master Data', 'Reference lists used across modules.', ['libraries']],
@@ -99,7 +99,8 @@ class PermissionCatalog
         'payroll.manage' => ['Manage payroll setup', 'Pay periods, adjustments and benefit programs.'],
         'payroll.run' => ['Run payroll', 'Compute, approve, post and release payroll.'],
         'payroll.shared-programs.manage' => ['Manage shared benefit programs', 'Edit or archive benefit programs shared by every branch.'],
-        'portal.view' => ['Employee portal', 'Open own payslips, leave and attendance.'],
+        'evaluations.manage' => ['Manage performance reviews', 'Write employees’ performance reviews and share them for acknowledgement.'],
+        'portal.view' => ['Employee portal', 'Open own payslips, leave, attendance and shared performance reviews.'],
 
         'compliance.view' => ['View compliance calendar', 'See filings, due dates and proof of filing.'],
         'compliance.manage' => ['Prepare & file', 'Generate the calendar, prepare filings and record submissions.'],

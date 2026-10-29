@@ -73,6 +73,9 @@ enum PermissionEnum: string
     case RequestsApprove = 'requests.approve';
     case RequestsManage = 'requests.manage';
 
+    // Performance reviews (the employee sees their own shared reviews through the portal permission)
+    case EvaluationsManage = 'evaluations.manage';
+
     // Statutory compliance calendar
     case ComplianceView = 'compliance.view';
     case ComplianceManage = 'compliance.manage';

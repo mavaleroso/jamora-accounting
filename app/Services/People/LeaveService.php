@@ -10,6 +10,7 @@ use App\Models\LeaveRequest;
 use App\Models\LeaveType;
 use App\Models\User;
 use App\Support\EntityContext;
+use App\Support\SystemSettings;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
@@ -24,7 +25,8 @@ class LeaveService
 {
     public function __construct(
         protected AttendanceCalculator $attendanceCalculator,
-        protected EntityContext $entityContext
+        protected EntityContext $entityContext,
+        protected SystemSettings $settings
     ) {}
 
     /**
@@ -340,12 +342,15 @@ class LeaveService
             ]);
         }
 
-        // 2. Minimum notice period: the leave type's own, or the company's for leave that can be planned.
-        $notice = $leaveType->noticeDays();
+        // 2. Minimum notice period: the leave type's own, or the company's for leave that can be planned
+        //    (longer when the filing spans more than the long-leave threshold).
+        $consecutive = (int) $start->diffInDays($end) + 1;
+        $notice = $leaveType->noticeDaysFor($consecutive);
         if ($notice > 0 && Carbon::today()->diffInDays($start, false) < $notice) {
             $earliest = Carbon::today()->addDays($notice)->format('M j, Y');
+            $long = $notice > $leaveType->noticeDays() ? " (filings of more than {$this->settings->longLeaveDays()} consecutive days)" : '';
             throw ValidationException::withMessages([
-                'start_date' => "{$leaveType->name} must be filed at least {$notice} ".str('day')->plural($notice)." before it starts: the earliest start date today is {$earliest}.",
+                'start_date' => "{$leaveType->name} must be filed at least {$notice} ".str('day')->plural($notice)." before it starts{$long}: the earliest start date today is {$earliest}.",
             ]);
         }
 

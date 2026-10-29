@@ -2,6 +2,7 @@
 
 namespace App\Services\People;
 
+use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
 use App\Models\Employee;
 use App\Models\LeaveBalance;
@@ -134,6 +135,21 @@ class PeopleAnalytics
 
         $worked = fn (Collection $rows) => $rows->whereIn('attendance_status', AttendanceCalculator::WORKED_STATUSES);
         $absent = fn (Collection $rows) => $rows->filter(fn (DtrEntry $d) => $d->is_absent || $d->attendance_status === 'absent');
+
+        // Employee Handbook: an absence reported in time (absence notice) is authorized; one reported late, or not at
+        // all, is unauthorized. Pay does not change, so this is only reported.
+        $notified = $dtrs->isEmpty() ? collect() : AttendanceRequest::query()
+            ->withoutEntityScope()
+            ->whereIn('employee_id', $this->employees->pluck('id'))
+            ->where('request_type', AttendanceRequest::TYPE_ABSENCE_NOTICE)
+            ->where('status', AttendanceRequest::STATUS_NOTED)
+            ->where('notice_status', AttendanceRequest::NOTICE_ON_TIME)
+            ->whereBetween('work_date', [$this->from->toDateString(), $end->toDateString()])
+            ->get(['employee_id', 'work_date'])
+            ->mapWithKeys(fn (AttendanceRequest $r) => [$r->employee_id.'|'.$r->work_date->toDateString() => true]);
+        $unauthorized = fn (DtrEntry $d) => ($d->is_absent || $d->attendance_status === 'absent')
+            && ! $notified->has($d->employee_id.'|'.Carbon::parse($d->work_date)->toDateString());
+        $overBreaks = fn (Collection $rows) => $rows->where('over_break_minutes', '>', 0);
         $rate = function (Collection $rows) use ($worked, $absent) {
             $due = $worked($rows)->count() + $absent($rows)->count();
 
@@ -149,8 +165,37 @@ class PeopleAnalytics
             'otApproved' => round((float) $rows->sum('ot_hours_approved'), 2),
             'nightDiffHours' => round((float) $rows->sum('night_diff_hours'), 2),
             'leaveDays' => $rows->where('attendance_status', 'on_leave')->count(),
+            'unauthorizedAbsences' => $rows->filter($unauthorized)->count(),
+            'overBreaks' => $overBreaks($rows)->count(),
+            'overBreakMinutes' => (int) $overBreaks($rows)->sum('over_break_minutes'),
             'rate' => $rate($rows),
         ];
+
+        // Over-break policy (A.2.c): a month with too many over-breaks, or too many minutes lost to them.
+        $overBreakFlag = function (Collection $rows) use ($overBreaks) {
+            $instances = (int) config('people.timekeeping.over_break_instances', 3);
+            $minutes = (int) config('people.timekeeping.over_break_total_minutes', 30);
+
+            return $overBreaks($rows)->groupBy(fn (DtrEntry $d) => Carbon::parse($d->work_date)->format('Y-m'))
+                ->contains(fn (Collection $month) => $month->count() >= $instances || $month->sum('over_break_minutes') >= $minutes);
+        };
+
+        // Longest run of consecutive scheduled work days with an unauthorized absence. Rest days and holidays neither
+        // count nor break the run; a day worked, on leave or absent with notice ends it.
+        $awolStreak = function (Collection $rows) use ($unauthorized) {
+            $longest = 0;
+            $run = 0;
+            foreach ($rows->sortBy(fn (DtrEntry $d) => Carbon::parse($d->work_date)->toDateString()) as $d) {
+                if (in_array($d->attendance_status, ['rest_day', 'holiday'], true)) {
+                    continue;
+                }
+                $run = $unauthorized($d) ? $run + 1 : 0;
+                $longest = max($longest, $run);
+            }
+
+            return $longest;
+        };
+        $awolDays = (int) config('people.timekeeping.awol_days', 2);
 
         $byEmployee = $dtrs->groupBy('employee_id');
         $names = $this->employees->keyBy('id');
@@ -165,7 +210,16 @@ class PeopleAnalytics
                 ->map(fn ($rows, $date) => ['date' => $date, 'rate' => $rate($rows), 'present' => $worked($rows)->count(), 'late' => $rows->where('tardiness_minutes', '>', 0)->count(), 'absent' => $absent($rows)->count()])
                 ->filter(fn ($row) => $row['rate'] !== null)
                 ->values(),
-            'byEmployee' => $byEmployee->map(fn ($rows, $id) => [...$this->person($names[$id]), ...$summary($rows)])
+            'awolDays' => $awolDays,
+            'awolEmployees' => $byEmployee->filter(fn ($rows) => $awolStreak($rows) >= $awolDays)->count(),
+            'overBreakEmployees' => $byEmployee->filter($overBreakFlag)->count(),
+            'byEmployee' => $byEmployee->map(fn ($rows, $id) => [
+                ...$this->person($names[$id]),
+                ...$summary($rows),
+                'awolStreak' => $streak = $awolStreak($rows),
+                'awol' => $streak >= $awolDays,
+                'overBreakFlag' => $overBreakFlag($rows),
+            ])
                 ->sortBy([['absences', 'desc'], ['lateMinutes', 'desc']])->values(),
         ];
     }
@@ -185,7 +239,7 @@ class PeopleAnalytics
         $approved = $requests->where('status', LeaveRequest::STATUS_APPROVED);
         $typeName = fn (LeaveRequest $r) => $r->type?->name ?? strtoupper((string) $r->leave_type);
 
-        $balances = LeaveBalance::query()->withoutEntityScope()->with('leaveType:id,code,name')
+        $balances = LeaveBalance::query()->withoutEntityScope()->with('leaveType:id,code,name,is_convertible')
             ->whereIn('employee_id', $ids)->where('year', $this->to->year)->get();
         $names = $this->employees->keyBy('id');
 
@@ -213,8 +267,10 @@ class PeopleAnalytics
                         'entitled' => round((float) $rows->sum(fn (LeaveBalance $b) => $b->entitled + $b->carried_over + $b->adjusted), 1),
                         'used' => round((float) $rows->sum('used'), 1),
                         'available' => round($available, 1),
-                        // Unused leave valued at each employee's daily rate (an accrued liability for convertible leave).
-                        'value' => $withValues ? round((float) $rows->sum(fn (LeaveBalance $b) => max(0, $b->available) * $this->dailyRate($names[$b->employee_id] ?? null)), 2) : null,
+                        // Unused convertible leave valued at each employee's daily rate (an accrued liability). Leave that
+                        // is forfeited when unused, such as SIL, is no liability.
+                        'value' => $withValues ? round((float) $rows->filter(fn (LeaveBalance $b) => (bool) $b->leaveType?->is_convertible)
+                            ->sum(fn (LeaveBalance $b) => max(0, $b->available) * $this->dailyRate($names[$b->employee_id] ?? null)), 2) : null,
                     ];
                 })->sortBy('type')->values(),
             'upcoming' => $upcoming->map(fn (LeaveRequest $r) => [

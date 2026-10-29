@@ -323,8 +323,9 @@ test('periods are generated per month and the overview lists them', function () 
     $nov = PayrollPeriod::where('code', 'PP-2026-11-2')->firstOrFail();
     expect($nov->start_date->toDateString())->toBe('2026-11-16')
         ->and($nov->end_date->toDateString())->toBe('2026-11-30')
-        ->and($nov->pay_date->toDateString())->toBe('2026-11-30')
-        ->and(PayrollPeriod::where('code', 'PP-2026-11-1')->value('pay_date')->toDateString())->toBe('2026-11-15')
+        // 16th–end is paid on the 5th of the next month, 1st–15th on the 20th (Employee Handbook).
+        ->and($nov->pay_date->toDateString())->toBe('2026-12-05')
+        ->and(PayrollPeriod::where('code', 'PP-2026-11-1')->value('pay_date')->toDateString())->toBe('2026-11-20')
         ->and(PayrollPeriod::count())->toBe(5);
 
     // Overlapping ranges are skipped, not duplicated.

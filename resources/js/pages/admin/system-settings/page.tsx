@@ -29,6 +29,9 @@ type LastChange = { at: string | null; by: string | null } | null;
 type LeaveSettings = {
     /** Days ahead leave of the covered types must be filed. */
     min_notice_days: number;
+    /** A filing of the covered types spanning more than this many consecutive days needs long_leave_notice_days. */
+    long_leave_days: number;
+    long_leave_notice_days: number;
     /** Codes of the leave types the notice covers. */
     leave_types: string[];
     /** Active leave types, each with the notice set on the type itself (the longer one applies). */
@@ -191,7 +194,12 @@ export default function SystemSettingsPage({ overtime, defaultShift, leave, acco
 
 /** How far ahead leave that can be planned must be filed, and which leave types that covers. */
 function LeaveCard({ leave, today, lastChange }: { leave: LeaveSettings; today: string; lastChange: LastChange }) {
-    const form = useForm({ min_notice_days: String(leave.min_notice_days), leave_types: leave.leave_types });
+    const form = useForm({
+        min_notice_days: String(leave.min_notice_days),
+        long_leave_days: String(leave.long_leave_days),
+        long_leave_notice_days: String(leave.long_leave_notice_days),
+        leave_types: leave.leave_types,
+    });
     const { data, setData, errors, processing, isDirty } = form;
     const err = errors as Record<string, string | undefined>;
     const days = Math.max(0, Math.floor(Number(data.min_notice_days) || 0));
@@ -201,7 +209,12 @@ function LeaveCard({ leave, today, lastChange }: { leave: LeaveSettings; today: 
 
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
-        form.transform((d) => ({ min_notice_days: Number(d.min_notice_days), leave_types: d.leave_types }));
+        form.transform((d) => ({
+            min_notice_days: Number(d.min_notice_days),
+            long_leave_days: Number(d.long_leave_days),
+            long_leave_notice_days: Number(d.long_leave_notice_days),
+            leave_types: d.leave_types,
+        }));
         form.put(`${URL_BASE}/leave`, { preserveScroll: true, onSuccess: () => form.setDefaults() });
     };
 
@@ -262,6 +275,43 @@ function LeaveCard({ leave, today, lastChange }: { leave: LeaveSettings; today: 
                                 <InputError message={err.min_notice_days} />
                             ) : (
                                 <p className="text-muted-foreground text-xs">Leave must be filed at least this many days before its first day.</p>
+                            )}
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="long_leave_notice_days">Long leave</Label>
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                                <span>More than</span>
+                                <Input
+                                    id="long_leave_days"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={60}
+                                    value={data.long_leave_days}
+                                    onChange={(e) => setData('long_leave_days', e.target.value)}
+                                    className="w-20 tabular-nums"
+                                    aria-label="Consecutive days"
+                                />
+                                <span>days in a row must be filed</span>
+                                <Input
+                                    id="long_leave_notice_days"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={120}
+                                    value={data.long_leave_notice_days}
+                                    onChange={(e) => setData('long_leave_notice_days', e.target.value)}
+                                    className="w-20 tabular-nums"
+                                />
+                                <span>days ahead</span>
+                            </div>
+                            {err.long_leave_days || err.long_leave_notice_days ? (
+                                <InputError message={err.long_leave_days ?? err.long_leave_notice_days} />
+                            ) : (
+                                <p className="text-muted-foreground text-xs">
+                                    Employee Handbook: vacations longer than 7 consecutive days are filed 4 weeks ahead. Covers the same leave types.
+                                </p>
                             )}
                         </div>
 
