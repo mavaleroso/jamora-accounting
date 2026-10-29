@@ -76,6 +76,7 @@ const linkLabel: Record<string, string> = {
     ap_receipt: 'Inventory / GRNI',
     inventory_loss: 'Write-off',
     adjustment: 'Adjustment',
+    unbooked: 'Not booked',
 };
 
 const reviewTone: Record<Movement['review_status'], string> = {

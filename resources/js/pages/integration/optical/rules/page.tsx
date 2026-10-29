@@ -33,12 +33,113 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Posting Rules', href: '/integration/optical/rules' },
 ];
 
+/** An optical service fee and the revenue account its sales post to (its own rule, or the general service rule). */
+type ServiceRevenueRow = {
+    optical_service_id: number;
+    name: string;
+    billed_by: 'jam_opticus' | 'branch' | null;
+    is_active: boolean;
+    rule: { id: number; credit_account_id: number; credit_account: AccountOption | null } | null;
+};
+
 type Props = {
     rules: PostingRule[];
     accounts: AccountOption[];
+    services: ServiceRevenueRow[];
+    revenueAccounts: AccountOption[];
 };
 
-export default function OpticalRulesPage({ rules, accounts }: Props) {
+const GENERAL = 'general';
+
+/**
+ * Revenue by service: any optical service can post to its own revenue account (e.g. eye exams apart from
+ * certifications), so new revenue lines need no code change. Unmapped services use the service sale rule.
+ */
+function ServiceRevenue({ services, revenueAccounts, generalAccount }: { services: ServiceRevenueRow[]; revenueAccounts: AccountOption[]; generalAccount: string }) {
+    const confirm = useConfirm();
+    const [saving, setSaving] = React.useState<number | null>(null);
+
+    const change = async (service: ServiceRevenueRow, value: string) => {
+        if (value === GENERAL) {
+            if (!service.rule) return;
+            const ok = await confirm({
+                title: `Post ${service.name} to the general service revenue?`,
+                description: `Its sales synced from now on credit ${generalAccount}. Entries already posted are not changed.`,
+                confirmLabel: 'Use general account',
+            });
+            if (!ok) return;
+            setSaving(service.optical_service_id);
+            router.delete(`/integration/optical/rules/services/${service.rule.id}`, { preserveScroll: true, onFinish: () => setSaving(null) });
+            return;
+        }
+
+        const account = revenueAccounts.find((a) => String(a.id) === value);
+        const ok = await confirm({
+            title: `Post ${service.name} to its own revenue account?`,
+            description: `Its sales synced from now on credit ${account ? `${account.code} — ${account.name}` : 'the chosen account'}. Entries already posted are not changed.`,
+            confirmLabel: 'Save',
+        });
+        if (!ok) return;
+        setSaving(service.optical_service_id);
+        router.post(
+            '/integration/optical/rules/services',
+            { optical_service_id: service.optical_service_id, service_name: service.name, credit_account_id: Number(value) },
+            { preserveScroll: true, onFinish: () => setSaving(null) },
+        );
+    };
+
+    return (
+        <section className="rounded-xl border">
+            <div className="border-b px-4 py-3">
+                <h2 className="text-sm font-semibold">Revenue by service</h2>
+                <p className="text-sm text-muted-foreground">
+                    Give an optical service its own revenue account. Add the account in the Chart of Accounts first; services left on the general
+                    account post to {generalAccount}.
+                </p>
+            </div>
+            {services.length === 0 ? (
+                <p className="px-4 py-6 text-sm text-muted-foreground">The optical POS could not be reached, and no service has its own account yet.</p>
+            ) : (
+                <ul className="divide-y">
+                    {services.map((service) => (
+                        <li key={service.optical_service_id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                                <p className="truncate text-sm font-medium">
+                                    {service.name}
+                                    {!service.is_active && <span className="ml-2 text-xs font-normal text-muted-foreground">(removed in the optical POS)</span>}
+                                </p>
+                                {service.billed_by && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Billed by {service.billed_by === 'jam_opticus' ? 'JAM Opticus' : 'the branch clinic'}
+                                    </p>
+                                )}
+                            </div>
+                            <Select
+                                value={service.rule ? String(service.rule.credit_account_id) : GENERAL}
+                                onValueChange={(value) => change(service, value)}
+                                disabled={saving === service.optical_service_id}
+                            >
+                                <SelectTrigger className="w-full sm:w-80" aria-label={`Revenue account for ${service.name}`}>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={GENERAL}>General service revenue ({generalAccount})</SelectItem>
+                                    {revenueAccounts.map((account) => (
+                                        <SelectItem key={account.id} value={String(account.id)}>
+                                            {account.code} — {account.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </section>
+    );
+}
+
+export default function OpticalRulesPage({ rules, accounts, services, revenueAccounts }: Props) {
     const [editOpen, setEditOpen] = React.useState(false);
     const [selectedRule, setSelectedRule] = React.useState<PostingRule | null>(null);
     const confirm = useConfirm();
@@ -141,6 +242,15 @@ export default function OpticalRulesPage({ rules, accounts }: Props) {
                 />
 
                 <DataTable title="Optical Posting Rules" description="These rules map sync events to chart-of-accounts entries." columns={columns} data={rules} emptyTitle="No posting rules yet" />
+
+                <ServiceRevenue
+                    services={services}
+                    revenueAccounts={revenueAccounts}
+                    generalAccount={(() => {
+                        const credit = rules.find((rule) => rule.event === 'sale_service')?.credit_account;
+                        return credit ? `${credit.code} — ${credit.name}` : 'the service sale rule';
+                    })()}
+                />
             </div>
 
             <Dialog open={editOpen} onOpenChange={setEditOpen}>

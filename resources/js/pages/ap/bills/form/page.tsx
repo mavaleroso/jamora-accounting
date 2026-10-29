@@ -24,7 +24,11 @@ const breadcrumbs: BreadcrumbItem[] = [
 type Vendor = { id: number; code: string; name: string };
 type AccountOpt = { id: number; code: string; name: string; classification: string };
 type Line = { description: string; account_id: number | ''; amount: string };
-type Props = { vendors: Vendor[]; accounts: AccountOpt[]; vatRate: number; nextBillNo: string };
+/** An expanded withholding tax code (Libraries › Tax Codes, type EWT), named by its ATC. */
+type EwtCode = { id: number; code: string; name: string; rate: number };
+type Props = { vendors: Vendor[]; accounts: AccountOpt[]; vatRate: number; ewtCodes: EwtCode[]; nextBillNo: string };
+
+const NO_EWT = 'none';
 
 const VAT_OPTIONS = [
     { value: 'exclusive', label: 'VAT-exclusive (add 12%)', hint: 'Amounts entered are net; input VAT is added on top.' },
@@ -38,7 +42,7 @@ function addDays(iso: string, days: number) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }: Props) {
+export default function BillFormPage({ vendors, accounts, vatRate, ewtCodes, nextBillNo }: Props) {
     const form = useForm({
         vendor_id: '' as number | '',
         bill_no: nextBillNo,
@@ -46,6 +50,7 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
         bill_date: todayIso(),
         due_date: addDays(todayIso(), 30),
         vat_treatment: 'exclusive',
+        ewt_tax_code_id: null as number | null,
         notes: '',
         lines: [{ description: '', account_id: '', amount: '' }] as Line[],
     });
@@ -53,17 +58,23 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
     const err = errors as Record<string, string>;
     const confirm = useConfirm();
 
+    const ewtCode = ewtCodes.find((c) => c.id === data.ewt_tax_code_id) ?? null;
     const totals = useMemo(() => {
         const sum = data.lines.reduce((s, l) => s + Number(l.amount || 0), 0);
         const r = (n: number) => Math.round(n * 100) / 100;
-        if (data.vat_treatment === 'inclusive') {
-            const vat = r((sum * vatRate) / (1 + vatRate));
-            return { net: r(sum - vat), vat, total: r(sum) };
-        }
-        if (data.vat_treatment === 'non_vat') return { net: r(sum), vat: 0, total: r(sum) };
-        const vat = r(sum * vatRate);
-        return { net: r(sum), vat, total: r(sum + vat) };
-    }, [data.lines, data.vat_treatment, vatRate]);
+        const base =
+            data.vat_treatment === 'inclusive'
+                ? (() => {
+                      const vat = r((sum * vatRate) / (1 + vatRate));
+                      return { net: r(sum - vat), vat, total: r(sum) };
+                  })()
+                : data.vat_treatment === 'non_vat'
+                  ? { net: r(sum), vat: 0, total: r(sum) }
+                  : { net: r(sum), vat: r(sum * vatRate), total: r(sum + r(sum * vatRate)) };
+        // EWT is withheld on the amount net of VAT; the supplier is paid the rest.
+        const ewt = ewtCode ? r(base.net * ewtCode.rate) : 0;
+        return { ...base, ewt, payable: r(base.total - ewt) };
+    }, [data.lines, data.vat_treatment, vatRate, ewtCode]);
 
     const updateLine = (i: number, patch: Partial<Line>) =>
         setData(
@@ -79,7 +90,7 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
                     e.preventDefault();
                     const ok = await confirm({
                         title: `Create bill ${data.bill_no}?`,
-                        description: `The ${formatAmount(totals.total, { currency: true })} bill is saved as a draft. Nothing is posted until you post it.`,
+                        description: `The ${formatAmount(totals.total, { currency: true })} bill${totals.ewt > 0 ? ` (${formatAmount(totals.payable, { currency: true })} payable after EWT)` : ''} is saved as a draft. Nothing is posted until you post it.`,
                         confirmLabel: 'Create bill',
                     });
                     if (!ok) return;
@@ -175,6 +186,31 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
                                         <p className="text-muted-foreground text-xs">
                                             {VAT_OPTIONS.find((o) => o.value === data.vat_treatment)?.hint}
                                         </p>
+                                    </div>
+                                    <div className="grid gap-1.5 sm:col-span-2">
+                                        <Label>Expanded withholding tax</Label>
+                                        <Select
+                                            value={data.ewt_tax_code_id ? String(data.ewt_tax_code_id) : NO_EWT}
+                                            onValueChange={(v) => setData('ewt_tax_code_id', v === NO_EWT ? null : Number(v))}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NO_EWT}>None withheld</SelectItem>
+                                                {ewtCodes.map((c) => (
+                                                    <SelectItem key={c.id} value={String(c.id)}>
+                                                        {c.code} · {c.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-muted-foreground text-xs">
+                                            {ewtCode
+                                                ? `${Math.round(ewtCode.rate * 10000) / 100}% of the amount net of VAT is withheld and owed to the BIR; it appears on the supplier's 2307.`
+                                                : 'Pick the ATC when this company withholds tax from the supplier. Codes are kept in Libraries › Tax Codes.'}
+                                        </p>
+                                        <InputError message={err.ewt_tax_code_id} />
                                     </div>
                                 </CardContent>
                             </Card>
@@ -274,10 +310,22 @@ export default function BillFormPage({ vendors, accounts, vatRate, nextBillNo }:
                                     <span>Input VAT</span>
                                     <span className="font-mono tabular-nums">{formatAmount(totals.vat)}</span>
                                 </div>
+                                {totals.ewt > 0 ? (
+                                    <>
+                                        <div className="flex justify-between">
+                                            <span>Bill total</span>
+                                            <span className="font-mono tabular-nums">{formatAmount(totals.total)}</span>
+                                        </div>
+                                        <div className="text-muted-foreground flex justify-between">
+                                            <span>Less EWT {ewtCode?.code}</span>
+                                            <span className="font-mono tabular-nums">({formatAmount(totals.ewt)})</span>
+                                        </div>
+                                    </>
+                                ) : null}
                                 <Separator className="my-1" />
                                 <div className="flex items-baseline justify-between">
                                     <span className="font-medium">Amount payable</span>
-                                    <span className="font-mono text-xl font-semibold tabular-nums">₱{formatAmount(totals.total)}</span>
+                                    <span className="font-mono text-xl font-semibold tabular-nums">₱{formatAmount(totals.payable)}</span>
                                 </div>
                             </CardContent>
                         </Card>

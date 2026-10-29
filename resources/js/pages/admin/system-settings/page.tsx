@@ -11,7 +11,7 @@ import { fmtClock, fmtDuration, overtimeWindow } from '@/lib/overtime-policy';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import { Head, useForm } from '@inertiajs/react';
-import { AlertTriangle, CalendarClock, Clock, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, BookCheck, CalendarClock, Clock, Loader2, ShieldCheck } from 'lucide-react';
 import * as React from 'react';
 
 const URL_BASE = '/admin/system-settings';
@@ -41,10 +41,18 @@ type Props = {
     leave: LeaveSettings;
     /** Today in Manila, "YYYY-MM-DD", for the leave example. */
     today: string;
-    lastChange: { overtime: LastChange; leave: LastChange };
+    accounting: AccountingSettings;
+    lastChange: { overtime: LastChange; leave: LastChange; accounting: LastChange };
 };
 
-export default function SystemSettingsPage({ overtime, defaultShift, leave, today, lastChange }: Props) {
+type AccountingSettings = {
+    /** Entries from source documents wait for approval before they reach the ledger. */
+    approve_source_documents: boolean;
+    /** Source-document entries waiting for approval, all companies. */
+    pending_count: number;
+};
+
+export default function SystemSettingsPage({ overtime, defaultShift, leave, accounting, today, lastChange }: Props) {
     const form = useForm({
         overtime_break_minutes: String(overtime.break_minutes),
         has_ceiling: overtime.ceiling !== null,
@@ -174,6 +182,8 @@ export default function SystemSettingsPage({ overtime, defaultShift, leave, toda
                 </form>
 
                 <LeaveCard leave={leave} today={today} lastChange={lastChange.leave} />
+
+                <AccountingCard accounting={accounting} lastChange={lastChange.accounting} />
             </div>
         </AppLayout>
     );
@@ -311,6 +321,69 @@ function LeaveCard({ leave, today, lastChange }: { leave: LeaveSettings; today: 
                     <p className="text-muted-foreground text-xs">
                         {changedNote(lastChange)}
                         Applies to leave filed from now on.
+                    </p>
+                    <Button type="submit" disabled={processing || !isDirty} className="shrink-0">
+                        {processing && <Loader2 className="size-4 animate-spin" />} Save changes
+                    </Button>
+                </CardFooter>
+            </Card>
+        </form>
+    );
+}
+
+function AccountingCard({ accounting, lastChange }: { accounting: AccountingSettings; lastChange: LastChange }) {
+    const form = useForm({ approve_source_documents: accounting.approve_source_documents });
+    const { data, setData, processing, isDirty } = form;
+
+    const submit = (e: React.FormEvent) => {
+        e.preventDefault();
+        form.put(`${URL_BASE}/accounting`, { preserveScroll: true, onSuccess: () => form.setDefaults() });
+    };
+
+    return (
+        <form onSubmit={submit} className="max-w-3xl">
+            <Card className="gap-0 py-0">
+                <CardHeader className="border-b py-5">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                        <BookCheck className="text-muted-foreground size-4" /> Accounting
+                    </CardTitle>
+                    <CardDescription>
+                        Whether postings from source documents (invoices, collections, deposits, bills and payments, cash and bank records, fund
+                        transfers and the optical sync) are reviewed and approved before they reach the ledger. Manual journals always are.
+                    </CardDescription>
+                </CardHeader>
+
+                <CardContent className="space-y-4 py-6">
+                    <label htmlFor="approve_source_documents" className="flex items-start justify-between gap-4 rounded-md border p-4">
+                        <span className="space-y-1">
+                            <span className="block text-sm font-medium">Source documents wait for approval</span>
+                            <span className="text-muted-foreground block text-xs">
+                                {data.approve_source_documents
+                                    ? 'Each document records its entry “for approval”. It updates account balances and reports once you approve it in Journal Entries.'
+                                    : 'Each document posts its entry to the ledger as soon as it is recorded.'}
+                            </span>
+                        </span>
+                        <Switch
+                            id="approve_source_documents"
+                            checked={data.approve_source_documents}
+                            onCheckedChange={(on) => setData('approve_source_documents', on)}
+                        />
+                    </label>
+                    {accounting.pending_count > 0 ? (
+                        <p className="text-muted-foreground text-xs">
+                            <a href="/accounting/journal-entries?status=pending" className="text-foreground font-medium underline underline-offset-4">
+                                {accounting.pending_count.toLocaleString()} {accounting.pending_count === 1 ? 'entry is' : 'entries are'} waiting for
+                                approval
+                            </a>{' '}
+                            across the companies. Switching this off does not post them.
+                        </p>
+                    ) : null}
+                </CardContent>
+
+                <CardFooter className="flex flex-col-reverse gap-3 border-t py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-muted-foreground text-xs">
+                        {changedNote(lastChange)}
+                        Applies to documents recorded from now on.
                     </p>
                     <Button type="submit" disabled={processing || !isDirty} className="shrink-0">
                         {processing && <Loader2 className="size-4 animate-spin" />} Save changes

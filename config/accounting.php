@@ -4,9 +4,17 @@ return [
     'vat_rate' => 0.12,
 
     /*
-     * Source documents (invoices, collections, deposits, bill payments, cash/bank records and the optical sync)
-     * post to the ledger as soon as they are recorded, as the proposal requires. Only manual non-cash journals
-     * go through review and approval. Set to false to leave source entries as drafts for an accountant to post.
+     * Source documents (invoices, collections, deposits, bills and bill payments, cash/bank records, fund transfers and
+     * the optical sync) record their journal entry "for approval": it reaches the ledger when someone with
+     * journals.approve (the owner) approves it, like a manual journal. The CPA chose review and approval for these
+     * postings (Oct 2026). Payroll is approved on its own screen and posts when released. The owner can switch this
+     * off in Admin › System Settings; this is only the default.
+     */
+    'approve_source_documents' => (bool) env('ACCOUNTING_APPROVE_SOURCE_DOCUMENTS', true),
+
+    /*
+     * Without approval, source entries post as soon as they are recorded. Set to false to leave them as drafts for an
+     * accountant to post instead.
      */
     'auto_post_source_documents' => (bool) env('ACCOUNTING_AUTO_POST_SOURCE_DOCUMENTS', true),
 

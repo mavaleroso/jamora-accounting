@@ -94,6 +94,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('list', 'list')->name('list')->middleware('permission:journals.view');
             Route::get('create', 'create')->name('create')->middleware('permission:journals.create');
             Route::post('/', 'store')->name('store')->middleware('permission:journals.create');
+            Route::post('approve-pending', 'approvePending')->name('approve-pending')->middleware('permission:journals.approve');
             Route::get('{journalEntry}', 'show')->name('show')->middleware('permission:journals.view');
             Route::get('{journalEntry}/edit', 'edit')->name('edit')->middleware('permission:journals.update');
             Route::put('{journalEntry}', 'update')->name('update')->middleware('permission:journals.update');
@@ -354,6 +355,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', 'index')->name('index');
             Route::put('/', 'update')->name('update');
             Route::put('leave', 'updateLeave')->name('leave.update');
+            Route::put('accounting', 'updateAccounting')->name('accounting.update');
         });
     });
 
@@ -475,6 +477,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
             Route::put('/rules/{postingRule}', 'updateRule')
                 ->name('rules.update')
+                ->whereNumber('postingRule')
+                ->middleware('permission:integration.optical.rules-manage');
+
+            Route::post('/rules/services', 'saveServiceRule')
+                ->name('rules.services.save')
+                ->middleware('permission:integration.optical.rules-manage');
+
+            Route::delete('/rules/services/{postingRule}', 'destroyServiceRule')
+                ->name('rules.services.destroy')
+                ->whereNumber('postingRule')
                 ->middleware('permission:integration.optical.rules-manage');
         });
     });

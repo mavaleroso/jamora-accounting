@@ -22,6 +22,7 @@ type Settings = {
     product_entity: string | null;
     workshop_entity: string | null;
     auto_post: boolean;
+    approval: boolean;
 };
 
 type Props = {
@@ -199,7 +200,16 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                             />
                             <Row label="Products, edging & repair" value={`${settings.product_entity} / ${settings.workshop_entity}`} />
                             <Row label="Clinical services" value="The clinic that collected the payment" />
-                            <Row label="Posting" value={settings.auto_post ? 'Posted to the ledger automatically' : 'Left as drafts for review'} />
+                            <Row
+                                label="Posting"
+                                value={
+                                    settings.approval
+                                        ? 'Waits for approval in Journal Entries'
+                                        : settings.auto_post
+                                          ? 'Posted to the ledger automatically'
+                                          : 'Left as drafts for review'
+                                }
+                            />
                             <Button variant="link" asChild className="h-auto self-start p-0">
                                 <Link href="/integration/optical/rules">Posting rules</Link>
                             </Button>

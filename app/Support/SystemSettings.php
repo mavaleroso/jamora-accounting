@@ -16,6 +16,7 @@ class SystemSettings
         'overtime.ceiling' => 'people.timekeeping.ot_ceiling',
         'leave.min_notice_days' => 'people.leave.min_notice_days',
         'leave.notice_leave_types' => 'people.leave.notice_leave_types',
+        'accounting.approve_source_documents' => 'accounting.approve_source_documents',
     ];
 
     /** @var array<string, mixed>|null */
@@ -64,6 +65,12 @@ class SystemSettings
     public function leaveNoticeDays(): int
     {
         return max(0, (int) $this->get('leave.min_notice_days'));
+    }
+
+    /** Whether entries from source documents wait for approval before they reach the ledger. */
+    public function approveSourceDocuments(): bool
+    {
+        return (bool) $this->get('accounting.approve_source_documents');
     }
 
     /**

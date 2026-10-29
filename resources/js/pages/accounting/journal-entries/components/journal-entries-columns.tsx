@@ -71,7 +71,7 @@ export type JournalEntryTableActions = {
     canView: boolean;
     canEdit: boolean;
     canPost: boolean;
-    /** Manual entries are posted by approving them (journals.approve). */
+    /** Manual entries, and source-document entries waiting for approval, are posted by approving them (journals.approve). */
     canApprove: boolean;
     canVoid: boolean;
     canDelete: boolean;
@@ -91,10 +91,13 @@ export function getJournalEntryColumns(
             id: 'actions',
             cell: ({ row }) => {
                 const entry = row.original;
-                const editable = entry.status === 'draft' || entry.status === 'pending';
+                const open = entry.status === 'draft' || entry.status === 'pending';
                 const manual = entry.source_system === 'manual';
-                const postable = editable && (manual ? canApprove : canPost);
-                const hasActions = canView || (canEdit && editable) || postable || (canVoid && entry.status === 'posted') || (canDelete && entry.status === 'draft');
+                // Entries from source documents are corrected through their document, never edited here.
+                const editable = open && manual;
+                const needsApproval = manual || entry.status === 'pending';
+                const postable = open && (needsApproval ? canApprove : canPost);
+                const hasActions = canView || (canEdit && editable) || postable || (canVoid && entry.status === 'posted') || (canDelete && editable && entry.status === 'draft');
 
                 if (!hasActions) {
                     return null;
@@ -129,7 +132,7 @@ export function getJournalEntryColumns(
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => onPost(entry)}>
                                         <CheckCircle2Icon className="mr-2 size-4" />
-                                        {manual ? 'Approve & post' : 'Post'}
+                                        {needsApproval ? 'Approve & post' : 'Post'}
                                     </DropdownMenuItem>
                                 </>
                             ) : null}
@@ -139,7 +142,7 @@ export function getJournalEntryColumns(
                                     Void
                                 </DropdownMenuItem>
                             ) : null}
-                            {canDelete && entry.status === 'draft' ? (
+                            {canDelete && editable && entry.status === 'draft' ? (
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem

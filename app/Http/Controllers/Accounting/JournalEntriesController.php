@@ -22,6 +22,11 @@ use Inertia\Response;
 
 class JournalEntriesController extends Controller
 {
+    /** Most entries one "approve all" click posts. */
+    private const APPROVE_BATCH = 500;
+
+    private const SOURCE_ENTRY_LOCKED = 'This entry comes from a source document. Correct the document (or void it) instead of editing the entry.';
+
     public function __construct(
         private readonly JournalPostingService $journalPostingService
     ) {}
@@ -134,6 +139,11 @@ class JournalEntriesController extends Controller
                 ->route('journal-entries.index')
                 ->with('error', 'Only draft or pending journal entries can be edited.');
         }
+        if ($journalEntry->source_system !== 'manual') {
+            return redirect()
+                ->route('journal-entries.index')
+                ->with('error', self::SOURCE_ENTRY_LOCKED);
+        }
 
         $journalEntry->load(['lines.account', 'lines.costCenter']);
 
@@ -147,6 +157,10 @@ class JournalEntriesController extends Controller
 
     public function update(JournalEntryUpdateRequest $request, JournalEntry $journalEntry): RedirectResponse
     {
+        if ($journalEntry->source_system !== 'manual') {
+            return redirect()->back()->with('error', self::SOURCE_ENTRY_LOCKED);
+        }
+
         try {
             $validated = $request->validated();
             $lines = $validated['lines'];
@@ -189,28 +203,31 @@ class JournalEntriesController extends Controller
     }
 
     /**
-     * Manual entries (the Accountant's or the Retainer's adjustments) reach the ledger only when
-     * someone with journals.approve — the owner, unless granted to others — approves them.
-     * System drafts (e.g. optical sync) are posted with journals.post.
+     * Manual entries (the Accountant's or the Retainer's adjustments) and entries from source documents waiting for
+     * approval reach the ledger only when someone with journals.approve — the owner, unless granted to others —
+     * approves them. System drafts (source documents left as drafts) are posted with journals.post.
      */
     public function post(Request $request, JournalEntry $journalEntry): RedirectResponse|JsonResponse
     {
         $user = $request->user();
         $manual = $journalEntry->source_system === 'manual';
+        $needsApproval = $manual || $journalEntry->status === 'pending';
 
         try {
-            if ($manual && ! $user->can('journals.approve')) {
-                throw new AccountingException('Manual entries are posted when the Executive approves them. Submit the entry for approval.');
+            if ($needsApproval && ! $user->can('journals.approve')) {
+                throw new AccountingException($manual
+                    ? 'Manual entries are posted when the Executive approves them. Submit the entry for approval.'
+                    : 'Entries from source documents are posted when the Executive approves them.');
             }
-            if (! $manual && ! $user->can('journals.post')) {
+            if (! $needsApproval && ! $user->can('journals.post')) {
                 throw new AccountingException('You are not allowed to post this entry.');
             }
 
-            $manual
+            $needsApproval
                 ? $this->journalPostingService->approveAndPost($journalEntry, $user)
                 : $this->journalPostingService->post($journalEntry, $user);
 
-            $message = $manual ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.';
+            $message = $needsApproval ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.';
 
             if ($request->expectsJson()) {
                 return response()->json(['message' => $message]);
@@ -228,6 +245,43 @@ class JournalEntriesController extends Controller
                 ->back()
                 ->with('error', $e->getMessage());
         }
+    }
+
+    /**
+     * Approve every entry waiting for approval that matches the list's filters, oldest first, up to
+     * self::APPROVE_BATCH per click. Entries that cannot post (e.g. their period is closed) are left waiting.
+     */
+    public function approvePending(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:255'],
+            'journal_id' => ['nullable', 'integer', 'exists:journals,id'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date'],
+        ]);
+
+        $query = JournalEntry::query()->where('status', 'pending');
+        $this->applyListFilters($query, $validated);
+        $waiting = (clone $query)->count();
+        $entries = $query->orderBy('entry_date')->orderBy('id')->limit(self::APPROVE_BATCH)->get();
+
+        $approved = 0;
+        $errors = [];
+        foreach ($entries as $entry) {
+            try {
+                $this->journalPostingService->approveAndPost($entry, $request->user());
+                $approved++;
+            } catch (AccountingException $e) {
+                $errors[$e->getMessage()] = ($errors[$e->getMessage()] ?? 0) + 1;
+            }
+        }
+
+        $left = $waiting - $approved;
+        $message = $approved.' '.str('entry')->plural($approved).' approved and posted.'
+            .($left > 0 ? " {$left} still waiting." : '')
+            .collect($errors)->map(fn (int $n, string $why) => " {$n} not posted: {$why}")->implode('');
+
+        return response()->json(['message' => $message, 'approved' => $approved, 'remaining' => $left], $approved === 0 && $entries->isNotEmpty() ? 422 : 200);
     }
 
     public function void(Request $request, JournalEntry $journalEntry): RedirectResponse|JsonResponse

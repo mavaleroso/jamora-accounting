@@ -53,6 +53,7 @@ class ChartOfAccounts
         ['code' => '2410', 'name' => 'PhilHealth Payable', 'type' => 'Current Liabilities'],
         ['code' => '2420', 'name' => 'Pag-IBIG Payable', 'type' => 'Current Liabilities'],
         ['code' => '2430', 'name' => 'Withholding Tax Payable', 'type' => 'Current Liabilities'],
+        ['code' => '2435', 'name' => 'Expanded Withholding Tax Payable', 'type' => 'Current Liabilities', 'description' => 'EWT withheld from supplier payments (BIR 2307 / 1601-EQ).'],
         ['code' => '2440', 'name' => 'Other Payroll Deductions Payable', 'type' => 'Current Liabilities'],
         ['code' => '2450', 'name' => 'Employee Benefits Payable', 'type' => 'Current Liabilities'],
         ['code' => '2500', 'name' => 'Salaries Payable', 'type' => 'Current Liabilities'],

@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\AccountingPeriod;
 use App\Models\AccountPeriodBalance;
 use App\Models\Journal;
+use App\Models\JournalEntry;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
@@ -35,6 +36,12 @@ class PeriodCloseService
     {
         if ($period->status === 'closed') {
             throw new AccountingException('This accounting period is already closed.');
+        }
+
+        // An entry waiting for approval could no longer post once the period is closed.
+        $waiting = JournalEntry::query()->where('accounting_period_id', $period->id)->where('status', 'pending')->count();
+        if ($waiting > 0) {
+            throw new AccountingException("{$waiting} journal ".($waiting === 1 ? 'entry in this period is' : 'entries in this period are').' still waiting for approval. Approve or correct them before closing the period.');
         }
 
         return DB::transaction(function () use ($period, $user) {

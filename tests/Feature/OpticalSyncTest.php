@@ -13,8 +13,11 @@ use App\Models\SyncDocument;
 use App\Models\SyncRun;
 use App\Models\User;
 use App\Models\Vendor;
+use App\Services\Optical\OpticalDocuments;
+use App\Services\Optical\OpticalLedger;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
+use App\Support\SystemSettings;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -521,4 +524,174 @@ test('stock booked before go-live is reversed on its own date and closed', funct
     expect(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(0.0)
         ->and($reversal->entry_date->toDateString())->toBe($earlier)
         ->and(SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_receipt')->sole()->status)->toBe('skipped');
+});
+
+/*
+ * The CPA's answers (Oct 2026): the optical POS says who bills each service, which discounts are VAT-exempt and
+ * each entity's own Sales Invoice number; stock tagged sold without an order is only reviewed.
+ */
+
+test('each entity\'s own SI number and the optical POS\'s billed-by setting decide the invoices', function () {
+    $order = opticalOrder([
+        'completed_at' => now()->toIso8601String(),
+        'sales_invoices' => [['entity_code' => 'JAM_OPTICUS', 'si_no' => 'JAM-0001'], ['entity_code' => 'A_JAMORA', 'si_no' => 'AJO-0042']],
+        'items' => [
+            ['id' => 1, 'products_type' => 'App\\Models\\Frame', 'products_id' => 11, 'stock_type' => 'frame', 'is_service' => false, 'billed_by' => null, 'accounting_entity_code' => 'JAM_OPTICUS', 'product_label' => 'Rayban frame', 'product_code' => 'RB-1', 'quantity' => 1, 'gross_amount' => '2500.00', 'discount_amount' => '0.00', 'amount' => '2500.00', 'unit_cost' => '450.00'],
+            // Not named "edging" or "repair", but the optical POS bills it by JAM Opticus.
+            ['id' => 2, 'products_type' => 'App\\Models\\ServiceFee', 'products_id' => 9, 'stock_type' => 'service_fee', 'is_service' => true, 'billed_by' => 'jam_opticus', 'accounting_entity_code' => 'JAM_OPTICUS', 'product_label' => 'Lens fitting', 'product_code' => null, 'quantity' => 1, 'gross_amount' => '1500.00', 'discount_amount' => '0.00', 'amount' => '1500.00', 'unit_cost' => '0.00'],
+            ['id' => 3, 'products_type' => 'App\\Models\\ServiceFee', 'products_id' => 5, 'stock_type' => 'service_fee', 'is_service' => true, 'billed_by' => 'branch', 'accounting_entity_code' => 'A_JAMORA', 'product_label' => 'Comprehensive Eye check-up', 'product_code' => null, 'quantity' => 1, 'gross_amount' => '500.00', 'discount_amount' => '0.00', 'amount' => '500.00', 'unit_cost' => '0.00'],
+        ],
+    ]);
+    $this->api['payments'] = [opticalPayment($order)];
+    $this->api['orders'] = [$order];
+    ($this->sync)();
+
+    $jam = Invoice::withoutGlobalScope('entity')->where('entity_id', entityId('JAM_OPTICUS'))->sole();
+    $clinic = Invoice::withoutGlobalScope('entity')->where('entity_id', entityId('A_JAMORA'))->sole();
+
+    expect($jam->bir_si_or_no)->toBe('JAM-0001')
+        ->and((float) $jam->total_amount)->toBe(4000.0)
+        ->and($clinic->bir_si_or_no)->toBe('AJO-0042')
+        ->and((float) $clinic->total_amount)->toBe(500.0)
+        // The fitting is JAM Opticus's service revenue.
+        ->and(ledgerBalance('JAM_OPTICUS', '4010'))->toBe(-1339.29);
+});
+
+test('the optical POS decides which discounts make a sale VAT-exempt', function () {
+    $item = ['id' => 3, 'products_type' => 'App\\Models\\ServiceFee', 'products_id' => 5, 'stock_type' => 'service_fee', 'is_service' => true, 'product_label' => 'Consultation', 'product_code' => null, 'quantity' => 1, 'gross_amount' => '1000.00', 'discount_amount' => '200.00', 'amount' => '800.00', 'unit_cost' => '0.00'];
+    // A discount added in the optical POS and flagged VAT-exempt, and SS switched off there.
+    $exempt = opticalOrder(['id' => 601, 'ts_no' => '26-10-00601', 'category' => 'GOV', 'category_vat_exempt' => true, 'payable_total' => '800.00', 'completed_at' => now()->toIso8601String(), 'items' => [$item]]);
+    $taxed = opticalOrder(['id' => 602, 'ts_no' => '26-10-00602', 'category' => 'SS', 'category_vat_exempt' => false, 'payable_total' => '800.00', 'completed_at' => now()->toIso8601String(), 'items' => [$item]]);
+    $this->api['orders'] = [$exempt, $taxed];
+    ($this->sync)();
+
+    $invoices = Invoice::withoutGlobalScope('entity')->get()->keyBy('source_id');
+    expect($invoices[601]->is_vat_exempt)->toBeTrue()
+        ->and((float) $invoices[601]->vat_amount)->toBe(0.0)
+        ->and($invoices[602]->is_vat_exempt)->toBeFalse()
+        ->and((float) $invoices[602]->vat_amount)->toBe(85.71)
+        ->and(ledgerBalance('A_JAMORA', '4110'))->toBe(200.0)
+        ->and(ledgerBalance('A_JAMORA', '4100'))->toBe(200.0);
+});
+
+test('orders booked before the optical POS sent its new settings are not booked again', function () {
+    $this->api['orders'] = [opticalOrder(['completed_at' => now()->toIso8601String(), 'category' => 'SS'])];
+    ($this->sync)();
+    $entries = JournalEntry::withoutGlobalScope('entity')->count();
+
+    // The same order, now with the settings, which book it exactly as before.
+    $withSettings = opticalOrder(['completed_at' => now()->toIso8601String(), 'category' => 'SS', 'category_vat_exempt' => true, 'sales_invoices' => []]);
+    $withSettings['items'] = array_map(fn (array $i) => [...$i, 'billed_by' => $i['is_service'] ? 'branch' : null, 'accounting_entity_code' => $i['is_service'] ? 'A_JAMORA' : 'JAM_OPTICUS'], $withSettings['items']);
+    $this->api['orders'] = [$withSettings];
+    $run = ($this->sync)();
+
+    expect($run->created_entries)->toBe(0)
+        ->and(JournalEntry::withoutGlobalScope('entity')->count())->toBe($entries)
+        ->and(JournalEntry::withoutGlobalScope('entity')->where('status', 'void')->count())->toBe(0);
+});
+
+test('a service can post to its own revenue account', function () {
+    $clinic = entityId('A_JAMORA');
+    $revenue = Account::withoutGlobalScope('entity')->where('entity_id', $clinic)->where('code', '4010')->firstOrFail();
+    $exams = Account::withoutGlobalScope('entity')->create([
+        'entity_id' => $clinic, 'code' => '4011', 'name' => 'Eye Exam Fees', 'account_type_id' => $revenue->account_type_id, 'is_postable' => true, 'is_active' => true,
+    ]);
+    $general = PostingRule::withoutGlobalScope('entity')->where('entity_id', $clinic)->where('event', 'sale_service')->firstOrFail();
+    PostingRule::withoutGlobalScope('entity')->create([
+        'entity_id' => $clinic, 'event' => PostingRule::serviceEvent(5), 'name' => 'Service revenue — Comprehensive Eye check-up',
+        'debit_account_id' => $general->debit_account_id, 'credit_account_id' => $exams->id, 'is_active' => true, 'sort_order' => 1,
+    ]);
+
+    $this->api['orders'] = [opticalOrder(['completed_at' => now()->toIso8601String()])];
+    ($this->sync)();
+
+    expect(ledgerBalance('A_JAMORA', '4011'))->toBe(-446.43)
+        ->and(ledgerBalance('A_JAMORA', '4010'))->toBe(0.0);
+});
+
+test('stock tagged sold without an order is listed for review, not booked, and an earlier booking is reversed on its own date', function () {
+    $earlier = now('Asia/Manila')->subDays(3)->toDateString();
+    $movement = ['id' => 81, 'stock_type' => 'frame', 'event_type' => 'sold', 'code' => 'FR-81', 'brand' => 'Rayban', 'description' => null, 'unit_cost' => '450.00', 'price' => '2500.00', 'supplier' => null, 'quantity' => 1, 'order_id' => null, 'occurred_at' => $earlier.' 09:00:00', 'updated_at' => now()->toDateTimeString()];
+
+    // What an earlier version of the sync booked for it: Dr Cost of Goods Sold, Cr Inventory.
+    $jam = Entity::where('code', 'JAM_OPTICUS')->firstOrFail();
+    $ledger = app(OpticalLedger::class);
+    $old = $ledger->in($jam, fn () => $ledger->journal('GJ', ['entry_date' => $earlier, 'reference' => 'FR-81', 'memo' => 'Sold stock', 'source_type' => 'optical_stock'], [
+        ['account_id' => $ledger->rule('cogs')->debit_account_id, 'debit' => 450, 'credit' => 0],
+        ['account_id' => $ledger->rule('cogs')->credit_account_id, 'debit' => 0, 'credit' => 450],
+    ]));
+    app(OpticalDocuments::class)->save($jam, 'stock_movement', 'frame:81:sold', 'old-hash', $movement, 'review', ['journal_entry_ids' => [$old->id], 'movement_ids' => []]);
+    expect(ledgerBalance('JAM_OPTICUS', '5000'))->toBe(450.0);
+
+    $this->api['inventory/movements'] = [$movement];
+    ($this->sync)();
+
+    $doc = SyncDocument::withoutGlobalScope('entity')->where('source_type', 'stock_movement')->sole();
+    $reversal = JournalEntry::withoutGlobalScope('entity')->whereNotNull('void_of_entry_id')->sole();
+    $record = InventoryMovement::withoutGlobalScope('entity')->where('source_ref', 'frame:81:sold')->where('review_status', 'needs_review')->sole();
+
+    expect(ledgerBalance('JAM_OPTICUS', '5000'))->toBe(0.0)
+        ->and($reversal->entry_date->toDateString())->toBe($earlier)
+        ->and($doc->status)->toBe('review')
+        ->and($doc->meta['journal_entry_ids'])->toBe([])
+        ->and($record->journal_entry_id)->toBeNull()
+        ->and($record->accounting_link_type)->toBe('unbooked')
+        ->and($doc->error)->toContain('nothing was booked');
+
+    // Running again changes nothing.
+    $entries = JournalEntry::withoutGlobalScope('entity')->count();
+    ($this->sync)();
+    expect(JournalEntry::withoutGlobalScope('entity')->count())->toBe($entries);
+});
+
+test('with approval on, synced entries wait for the owner and reach the ledger once approved', function () {
+    app(SystemSettings::class)->put(['accounting.approve_source_documents' => true]);
+    $this->api['orders'] = [opticalOrder(['completed_at' => now()->toIso8601String()])];
+    ($this->sync)();
+
+    expect(JournalEntry::withoutGlobalScope('entity')->where('status', 'pending')->count())->toBeGreaterThan(0)
+        ->and(JournalEntry::withoutGlobalScope('entity')->where('status', 'posted')->count())->toBe(0)
+        ->and(ledgerBalance('JAM_OPTICUS', '4000'))->toBe(0.0)
+        // The documents themselves are recorded right away.
+        ->and(Invoice::withoutGlobalScope('entity')->count())->toBe(2);
+
+    // Re-opening the order before approval simply removes the waiting entries.
+    $this->api['orders'] = [opticalOrder(['completed_at' => null])];
+    ($this->sync)();
+    expect(JournalEntry::withoutGlobalScope('entity')->whereIn('status', ['pending', 'posted'])->count())->toBe(0);
+});
+
+test('the posting-rules screen gives a service its own revenue account and stays within the company', function () {
+    Permission::findOrCreate('integration.optical.rules-manage', 'web');
+    $user = User::factory()->create();
+    $user->givePermissionTo('integration.optical.rules-manage');
+    $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
+    $user->entities()->attach($clinic->id, ['is_default' => true]);
+    $as = fn () => $this->actingAs($user)->withSession(['current_entity_id' => $clinic->id]);
+    $this->api['services'] = [
+        ['id' => 5, 'name' => 'Comprehensive Eye check-up', 'billed_by' => 'branch', 'is_active' => true],
+        ['id' => 7, 'name' => 'Repair', 'billed_by' => 'jam_opticus', 'is_active' => true],
+    ];
+    $revenue = Account::withoutGlobalScope('entity')->where('entity_id', $clinic->id)->where('code', '4010')->firstOrFail();
+    $exams = Account::withoutGlobalScope('entity')->create(['entity_id' => $clinic->id, 'code' => '4011', 'name' => 'Eye Exam Fees', 'account_type_id' => $revenue->account_type_id, 'is_postable' => true, 'is_active' => true]);
+
+    $as()->get('/integration/optical/rules')->assertOk()
+        ->assertInertia(fn ($p) => $p->component('integration/optical/rules/page')
+            ->has('services', 2)
+            ->where('services.0.name', 'Comprehensive Eye check-up')
+            ->where('services.0.rule', null));
+
+    $as()->post('/integration/optical/rules/services', ['optical_service_id' => 5, 'service_name' => 'Comprehensive Eye check-up', 'credit_account_id' => $exams->id])
+        ->assertSessionHas('status');
+    $rule = PostingRule::withoutGlobalScope('entity')->where('event', 'sale_service:5')->sole();
+    expect($rule->entity_id)->toBe($clinic->id)->and($rule->credit_account_id)->toBe($exams->id);
+
+    // Not a revenue account, or another company's rule: refused.
+    $as()->post('/integration/optical/rules/services', ['optical_service_id' => 7, 'service_name' => 'Repair', 'credit_account_id' => Account::withoutGlobalScope('entity')->where('entity_id', $clinic->id)->where('code', '1000')->value('id')])
+        ->assertSessionHasErrors('credit_account_id');
+    $jamRule = PostingRule::withoutGlobalScope('entity')->where('entity_id', entityId('JAM_OPTICUS'))->where('event', 'cogs')->firstOrFail();
+    $as()->put("/integration/optical/rules/{$jamRule->id}", ['debit_account_id' => $exams->id, 'credit_account_id' => $exams->id, 'is_active' => false])->assertNotFound();
+
+    $as()->delete("/integration/optical/rules/services/{$rule->id}")->assertSessionHas('status');
+    expect(PostingRule::withoutGlobalScope('entity')->where('event', 'sale_service:5')->exists())->toBeFalse();
 });

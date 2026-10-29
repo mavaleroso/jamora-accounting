@@ -12,6 +12,7 @@ use App\Models\InvoicePayment;
 use App\Models\JournalEntry;
 use App\Models\JournalEntryLine;
 use App\Support\EntityContext;
+use App\Support\WithholdingTax;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -29,6 +30,7 @@ class OperationalReportService
         'cogs' => ['title' => 'Cost of Goods Sold', 'mode' => 'range', 'permission' => 'reports.income-statement.view'],
         'collections' => ['title' => 'Collections by Payment Method', 'mode' => 'range', 'permission' => 'reports.daily-sales.view'],
         'deposits' => ['title' => 'Customer Deposits Liability', 'mode' => 'as_of', 'permission' => 'reports.ar-aging.view'],
+        'ewt-2307' => ['title' => 'Expanded Withholding Tax (BIR 2307)', 'mode' => 'range', 'permission' => 'reports.vat-summary.view'],
     ];
 
     /** Invoice statuses that count as sales. */
@@ -61,6 +63,7 @@ class OperationalReportService
             'cogs' => $this->cogs($from, $to),
             'collections' => $this->collections($from, $to),
             'deposits' => $this->deposits($asOf),
+            'ewt-2307' => $this->withholding($from, $to),
         };
 
         return [
@@ -233,6 +236,82 @@ class OperationalReportService
     }
 
     /**
+     * Expanded withholding tax on supplier bills: one row per quarter, supplier and ATC with the income payments of
+     * each month of the quarter and the tax withheld — the figures of each supplier's BIR Form 2307, and the
+     * alphalist (QAP) behind the 1601-EQ. Income payments are the bills' amounts net of VAT, on the bill date.
+     */
+    protected function withholding(string $from, string $to): array
+    {
+        $bills = Bill::query()
+            ->with('vendor:id,name,tin,address')
+            ->whereIn('status', ['posted', 'partially_paid', 'paid'])
+            ->where('ewt_amount', '>', 0)
+            ->whereDate('bill_date', '>=', $from)->whereDate('bill_date', '<=', $to)
+            ->orderBy('bill_date')
+            ->get();
+
+        $rows = $bills
+            ->groupBy(fn (Bill $b) => $b->bill_date->year.'-Q'.WithholdingTax::quarter($b->bill_date).'|'.$b->vendor_id.'|'.$b->ewt_atc)
+            ->map(function ($group) {
+                $first = $group->first();
+                $months = [1 => 0.0, 2 => 0.0, 3 => 0.0];
+                foreach ($group as $bill) {
+                    $months[(($bill->bill_date->month - 1) % 3) + 1] += (float) $bill->subtotal;
+                }
+
+                return [
+                    'quarter' => 'Q'.WithholdingTax::quarter($first->bill_date).' '.$first->bill_date->year,
+                    'supplier' => $first->vendor?->name ?? '—',
+                    'tin' => $first->vendor?->tin ?: '—',
+                    'address' => $first->vendor?->address ?: '—',
+                    'atc' => (string) $first->ewt_atc,
+                    'rate' => round((float) $first->ewt_rate * 100, 2).'%',
+                    'month_1' => round($months[1], 2),
+                    'month_2' => round($months[2], 2),
+                    'month_3' => round($months[3], 2),
+                    'income_payments' => round(array_sum($months), 2),
+                    'tax_withheld' => round((float) $group->sum('ewt_amount'), 2),
+                    'bills' => $group->count(),
+                ];
+            })
+            ->sortBy([['quarter', 'asc'], ['supplier', 'asc'], ['atc', 'asc']])
+            ->values()
+            ->all();
+
+        $totals = $this->sum($rows, ['month_1', 'month_2', 'month_3', 'income_payments', 'tax_withheld', 'bills']);
+        $missingTin = collect($rows)->where('tin', '—')->pluck('supplier')->unique()->values();
+
+        return [
+            'summary' => [
+                ['label' => 'Tax withheld', 'value' => $totals['tax_withheld'], 'format' => 'currency'],
+                ['label' => 'Income payments', 'value' => $totals['income_payments'], 'format' => 'currency'],
+                ['label' => 'Suppliers', 'value' => collect($rows)->pluck('supplier')->unique()->count(), 'format' => 'number'],
+                ['label' => 'Bills with EWT', 'value' => $totals['bills'], 'format' => 'number'],
+            ],
+            'columns' => [
+                ['key' => 'quarter', 'label' => 'Quarter', 'format' => 'text'],
+                ['key' => 'supplier', 'label' => 'Supplier (payee)', 'format' => 'text'],
+                ['key' => 'tin', 'label' => 'TIN', 'format' => 'text'],
+                ['key' => 'address', 'label' => 'Address', 'format' => 'text'],
+                ['key' => 'atc', 'label' => 'ATC', 'format' => 'text'],
+                ['key' => 'rate', 'label' => 'Rate', 'format' => 'text', 'align' => 'right'],
+                ['key' => 'month_1', 'label' => '1st month', 'format' => 'currency', 'align' => 'right'],
+                ['key' => 'month_2', 'label' => '2nd month', 'format' => 'currency', 'align' => 'right'],
+                ['key' => 'month_3', 'label' => '3rd month', 'format' => 'currency', 'align' => 'right'],
+                ['key' => 'income_payments', 'label' => 'Total income payments', 'format' => 'currency', 'align' => 'right'],
+                ['key' => 'tax_withheld', 'label' => 'Tax withheld', 'format' => 'currency', 'align' => 'right'],
+            ],
+            'rows' => $rows,
+            'totals' => ['quarter' => 'Total', 'supplier' => '', 'tin' => '', 'address' => '', 'atc' => '', 'rate' => '', ...$totals],
+            'notes' => array_values(array_filter([
+                'Each row is one BIR Form 2307 line: issue the form to the supplier for the quarter. Totals support the 1601-EQ and its QAP; this does not replace the filing.',
+                'Pick a date range of whole quarters so every month lands in the right column.',
+                $missingTin->isNotEmpty() ? 'Add the TIN of '.$missingTin->implode(', ').' in Libraries › Vendors before issuing the 2307.' : null,
+            ])),
+        ];
+    }
+
+    /**
      * Cost of goods sold and stock write-offs by stock type, from the stock postings, checked against the ledger.
      */
     protected function cogs(string $from, string $to): array
@@ -240,6 +319,8 @@ class OperationalReportService
         $movements = InventoryMovement::query()
             ->whereIn('movement_type', ['sales_issue', 'write_off'])
             ->where('review_status', '!=', 'reversed')
+            // Stock tagged sold without an order is listed for review only; nothing is booked for it.
+            ->where('accounting_link_type', '!=', 'unbooked')
             ->whereDate('occurred_on', '>=', $from)->whereDate('occurred_on', '<=', $to)
             ->select([
                 DB::raw("COALESCE(stock_type, 'other') as stock_type"),

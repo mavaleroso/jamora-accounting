@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Libraries;
 
+use App\Support\EntityContext;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -33,7 +34,7 @@ class TaxCodeUpdateRequest extends FormRequest
                 'required',
                 'string',
                 'max:50',
-                Rule::unique('tax_codes', 'code')->ignore($taxCode?->id),
+                Rule::unique('tax_codes', 'code')->where('entity_id', app(EntityContext::class)->id())->ignore($taxCode?->id),
             ],
             'name' => ['required', 'string', 'max:255'],
             'rate' => ['required', 'numeric', 'min:0', 'max:1'],

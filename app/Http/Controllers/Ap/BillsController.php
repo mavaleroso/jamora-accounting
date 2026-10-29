@@ -7,9 +7,11 @@ use App\Models\Account;
 use App\Models\BankAccount;
 use App\Models\Bill;
 use App\Models\BillPayment;
+use App\Models\TaxCode;
 use App\Models\Vendor;
 use App\Services\Ap\BillService;
 use App\Support\EntityContext;
+use App\Support\WithholdingTax;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -85,6 +87,13 @@ class BillsController extends Controller
                 ->values()
                 ->map(fn (Account $a) => ['id' => $a->id, 'code' => $a->code, 'name' => $a->name, 'classification' => $a->accountType?->classification]),
             'vatRate' => (float) config('accounting.vat_rate', 0.12),
+            // Expanded withholding tax codes (Libraries › Tax Codes, type EWT), by ATC.
+            'ewtCodes' => TaxCode::query()
+                ->where('type', WithholdingTax::TYPE)
+                ->where('is_active', true)
+                ->orderBy('code')
+                ->get(['id', 'code', 'name', 'rate'])
+                ->map(fn (TaxCode $c) => ['id' => $c->id, 'code' => $c->code, 'name' => $c->name, 'rate' => (float) $c->rate]),
             'nextBillNo' => $this->nextBillNo(),
         ]);
     }
@@ -100,6 +109,7 @@ class BillsController extends Controller
             'bill_date' => ['required', 'date'],
             'due_date' => ['required', 'date', 'after_or_equal:bill_date'],
             'vat_treatment' => ['required', Rule::in(BillService::VAT_TREATMENTS)],
+            'ewt_tax_code_id' => ['nullable', 'integer'],
             'notes' => ['nullable', 'string'],
             'lines' => ['required', 'array', 'min:1'],
             'lines.*.description' => ['required', 'string', 'max:255'],

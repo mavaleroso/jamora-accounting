@@ -33,6 +33,10 @@ type Bill = {
     subtotal: string;
     vat_amount: string;
     total_amount: string;
+    /** Expanded withholding tax: ATC, rate and amount withheld (kept on the bill for its 2307). */
+    ewt_atc: string | null;
+    ewt_rate: string;
+    ewt_amount: string;
     amount_paid: string;
     balance_due: string;
     notes: string | null;
@@ -200,6 +204,13 @@ export default function BillShowPage({ bill, bankAccounts, paymentMethods, entit
                                 <Line label="Input VAT" value={bill.vat_amount} muted />
                                 <Separator className="my-1" />
                                 <Line label="Bill total" value={bill.total_amount} strong />
+                                {Number(bill.ewt_amount) > 0 ? (
+                                    <Line
+                                        label={`EWT withheld · ${bill.ewt_atc} ${Math.round(Number(bill.ewt_rate) * 10000) / 100}%`}
+                                        value={-Number(bill.ewt_amount)}
+                                        muted
+                                    />
+                                ) : null}
                                 <Line label="Paid" value={-Number(bill.amount_paid)} muted />
                                 <Separator className="my-1" />
                                 <div className="flex items-baseline justify-between">
@@ -253,7 +264,7 @@ export default function BillShowPage({ bill, bankAccounts, paymentMethods, entit
                 open={postOpen}
                 onOpenChange={setPostOpen}
                 title="Post this bill?"
-                description={`Records ${formatPhpCurrency(Number(bill.total_amount))} as a payable to ${bill.vendor.name}. Posted bills can no longer be edited.`}
+                description={`Records ${formatPhpCurrency(Number(bill.total_amount) - Number(bill.ewt_amount))} as a payable to ${bill.vendor.name}${Number(bill.ewt_amount) > 0 ? ` and ${formatPhpCurrency(Number(bill.ewt_amount))} of withholding tax owed to the BIR` : ''}. Posted bills can no longer be edited.`}
                 confirmLabel="Post bill"
                 onConfirm={() => router.post(`/ap/bills/${bill.id}/post`, {}, { preserveScroll: true, onFinish: () => setPostOpen(false) })}
             />

@@ -49,16 +49,30 @@ class OpticalLedger
     {
         $entity = $this->current();
 
-        $this->rules[$entity->id] ??= PostingRule::query()
+        return $this->rules($entity)[$event]
+            ?? throw new RuntimeException("Posting rule [{$event}] is not set up or is inactive for {$entity->name}.");
+    }
+
+    /**
+     * Whether the current entity has an active posting rule for an optional event (e.g. a service's own revenue).
+     */
+    public function hasRule(string $event): bool
+    {
+        return isset($this->rules($this->current())[$event]);
+    }
+
+    /**
+     * @return array<string, PostingRule>
+     */
+    protected function rules(Entity $entity): array
+    {
+        return $this->rules[$entity->id] ??= PostingRule::query()
             ->withoutGlobalScope('entity')
             ->where('entity_id', $entity->id)
             ->where('is_active', true)
             ->get()
             ->keyBy('event')
             ->all();
-
-        return $this->rules[$entity->id][$event]
-            ?? throw new RuntimeException("Posting rule [{$event}] is not set up or is inactive for {$entity->name}.");
     }
 
     /**

@@ -11,6 +11,7 @@ use App\Models\Journal;
 use App\Models\TaxCode;
 use App\Support\ChartOfAccounts;
 use App\Support\EntityContext;
+use App\Support\WithholdingTax;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
 
@@ -25,6 +26,7 @@ class AccountingSetupSeeder extends Seeder
             ChartOfAccounts::ensureFor($entity);
             $this->seedJournals($entity);
             $this->seedTaxCodes($entity);
+            WithholdingTax::ensureFor($entity);
             $this->seedCostCenters($entity);
             $this->seedFiscalYearAndPeriods($entity);
         }

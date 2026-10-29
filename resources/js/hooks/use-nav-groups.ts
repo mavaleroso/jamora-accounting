@@ -103,6 +103,7 @@ const reportsNavItems: NavItem[] = [
     { title: 'AP Aging', href: '/reports/ap-aging', icon: FileSpreadsheet },
     { title: 'Daily Sales', href: '/reports/operations/daily-sales', icon: Receipt },
     { title: 'VAT Summary', href: '/reports/operations/vat-summary', icon: Calculator },
+    { title: 'Withholding Tax (2307)', href: '/reports/operations/ewt-2307', icon: Calculator },
     { title: 'Cost of Goods Sold', href: '/reports/operations/cogs', icon: Package },
     { title: 'Collections by Method', href: '/reports/operations/collections', icon: CreditCard },
     { title: 'Deposits Liability', href: '/reports/operations/deposits', icon: Wallet },
@@ -198,6 +199,7 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
             case '/reports/operations/collections':
                 return can('reports.daily-sales.view');
             case '/reports/operations/vat-summary':
+            case '/reports/operations/ewt-2307':
                 return can('reports.vat-summary.view');
             case '/reports/operations/cogs':
                 return can('reports.income-statement.view');

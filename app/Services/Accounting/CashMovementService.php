@@ -10,6 +10,7 @@ use App\Models\JournalEntry;
 use App\Models\User;
 use App\Support\ChartOfAccounts;
 use App\Support\EntityContext;
+use App\Support\SystemSettings;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -92,8 +93,9 @@ class CashMovementService
     }
 
     /**
-     * Create the journal entry for a source document and post it right away (unless source documents are set to
-     * stay drafts). A null user means the system recorded it, e.g. the optical sync.
+     * Create the journal entry for a source document. It waits for approval (System Settings), else it is posted
+     * right away, unless source documents are set to stay drafts. A null user means the system recorded it, e.g. the
+     * optical sync.
      *
      * @param  array<string, mixed>  $header
      * @param  list<array<string, mixed>>  $lines
@@ -103,7 +105,9 @@ class CashMovementService
         $user = $userId ? User::query()->find($userId) : null;
         $entry = $this->journalPostingService->create($header, $lines, $user);
 
-        if (config('accounting.auto_post_source_documents', true)) {
+        if (app(SystemSettings::class)->approveSourceDocuments()) {
+            $entry->update(['status' => 'pending']);
+        } elseif (config('accounting.auto_post_source_documents', true)) {
             $entry = $this->journalPostingService->post($entry, $user);
         }
 

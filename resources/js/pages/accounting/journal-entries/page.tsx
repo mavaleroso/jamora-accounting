@@ -1,5 +1,5 @@
 import { Head, Link, router, usePage } from '@inertiajs/react';
-import { PlusIcon, XIcon } from 'lucide-react';
+import { CheckCheckIcon, PlusIcon, XIcon } from 'lucide-react';
 import * as React from 'react';
 import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
@@ -93,6 +93,9 @@ export default function JournalEntriesPage({
     const [deleteTarget, setDeleteTarget] = React.useState<JournalEntry | null>(null);
     const [voidTarget, setVoidTarget] = React.useState<JournalEntry | null>(null);
     const [postTarget, setPostTarget] = React.useState<JournalEntry | null>(null);
+    const [approveAllOpen, setApproveAllOpen] = React.useState(false);
+    const [approvingAll, setApprovingAll] = React.useState(false);
+    const needsApproval = (entry: JournalEntry | null) => entry?.source_system === 'manual' || entry?.status === 'pending';
 
     const fetchPage = React.useCallback(
         async (params: {
@@ -197,7 +200,7 @@ export default function JournalEntriesPage({
                 {
                     preserveScroll: true,
                     onSuccess: () => {
-                        toast.success(entry.source_system === 'manual' ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.');
+                        toast.success(needsApproval(entry) ? 'Journal entry approved and posted.' : 'Journal entry posted successfully.');
                         setPostTarget(null);
                         fetchPage({ pageIndex, pageSize, search, filters });
                     },
@@ -207,6 +210,33 @@ export default function JournalEntriesPage({
         },
         [fetchPage, filters, pageIndex, pageSize, search],
     );
+
+    // Approves everything waiting that matches the current filters (search, journal, dates).
+    const handleApproveAll = React.useCallback(async () => {
+        setApprovingAll(true);
+        try {
+            const res = await fetch('/accounting/journal-entries/approve-pending', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-XSRF-TOKEN': getCsrfToken() },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    search: search || undefined,
+                    journal_id: filters.journalId ? Number(filters.journalId) : undefined,
+                    date_from: filters.dateFrom || undefined,
+                    date_to: filters.dateTo || undefined,
+                }),
+            });
+            const json = (await res.json().catch(() => ({}))) as { message?: string };
+            if (res.ok) toast.success(json.message ?? 'Entries approved and posted.');
+            else toast.error(json.message ?? 'Could not approve the entries.');
+        } catch {
+            toast.error('Could not approve the entries.');
+        } finally {
+            setApprovingAll(false);
+            setApproveAllOpen(false);
+            fetchPage({ pageIndex: 0, pageSize, search, filters });
+        }
+    }, [fetchPage, filters, pageSize, search]);
 
     const handleVoid = React.useCallback(
         (entry: JournalEntry) => {
@@ -278,16 +308,24 @@ export default function JournalEntriesPage({
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <Heading
                         title="Journal Entries"
-                        description="Create, review, and post manual journal entries."
+                        description="Create manual entries, and review and approve the entries waiting for approval before they reach the ledger."
                     />
-                    {can('journals.create') ? (
-                        <Button asChild>
-                            <Link href="/accounting/journal-entries/create">
-                                <PlusIcon className="mr-2 size-4" />
-                                New Entry
-                            </Link>
-                        </Button>
-                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                        {filters.status === 'pending' && can('journals.approve') && total > 0 ? (
+                            <Button variant="outline" onClick={() => setApproveAllOpen(true)} disabled={approvingAll}>
+                                <CheckCheckIcon className="mr-2 size-4" />
+                                Approve all {total.toLocaleString()}
+                            </Button>
+                        ) : null}
+                        {can('journals.create') ? (
+                            <Button asChild>
+                                <Link href="/accounting/journal-entries/create">
+                                    <PlusIcon className="mr-2 size-4" />
+                                    New Entry
+                                </Link>
+                            </Button>
+                        ) : null}
+                    </div>
                 </div>
 
                 <DataTable
@@ -365,11 +403,11 @@ export default function JournalEntriesPage({
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>
-                            {postTarget?.source_system === 'manual' ? 'Approve and post journal entry?' : 'Post journal entry?'}
+                            {needsApproval(postTarget) ? 'Approve and post journal entry?' : 'Post journal entry?'}
                         </AlertDialogTitle>
                         <AlertDialogDescription>
-                            {postTarget?.source_system === 'manual'
-                                ? `You are approving entry ${postTarget?.entry_no}${postTarget?.prepared_by_user ? ` prepared by ${postTarget.prepared_by_user.name}` : ''}. It will be posted and update account balances.`
+                            {needsApproval(postTarget)
+                                ? `You are approving entry ${postTarget?.entry_no}${postTarget?.prepared_by_user ? ` prepared by ${postTarget.prepared_by_user.name}` : postTarget?.source_system !== 'manual' ? ' recorded from its source document' : ''}. It will be posted and update account balances.`
                                 : `This will post entry ${postTarget?.entry_no} and update account balances.`}{' '}
                             This action cannot be undone except by voiding the entry.
                         </AlertDialogDescription>
@@ -377,7 +415,31 @@ export default function JournalEntriesPage({
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction onClick={() => postTarget && handlePost(postTarget)}>
-                            {postTarget?.source_system === 'manual' ? 'Approve & post' : 'Post entry'}
+                            {needsApproval(postTarget) ? 'Approve & post' : 'Post entry'}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={approveAllOpen} onOpenChange={(open) => !open && !approvingAll && setApproveAllOpen(false)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Approve {total.toLocaleString()} {total === 1 ? 'entry' : 'entries'}?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Every entry waiting for approval that matches the current search and filters is posted to the ledger, oldest first (up to 500
+                            per click). Narrow the list by journal or date first to approve part of it. Posted entries can only be undone by voiding them.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={approvingAll}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={approvingAll}
+                            onClick={(event) => {
+                                event.preventDefault();
+                                handleApproveAll();
+                            }}
+                        >
+                            {approvingAll ? 'Approving…' : 'Approve & post'}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>

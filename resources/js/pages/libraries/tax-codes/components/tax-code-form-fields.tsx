@@ -14,6 +14,8 @@ type TaxCodeFormFieldsProps = {
 const TAX_TYPES = [
     { value: 'input_vat', label: 'Input VAT' },
     { value: 'output_vat', label: 'Output VAT' },
+    // Withheld from supplier bills; the code is the BIR ATC (e.g. WC158), the account is the EWT payable.
+    { value: 'ewt', label: 'Expanded withholding tax (EWT)' },
 ];
 
 export function TaxCodeFormFields({

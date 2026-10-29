@@ -11,12 +11,14 @@ use App\Models\Invoice;
 use App\Models\Journal;
 use App\Models\JournalEntry;
 use App\Models\Partner;
+use App\Models\TaxCode;
 use App\Models\User;
 use App\Models\Vendor;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\LedgerService;
 use App\Services\Billing\InvoiceService;
 use App\Services\Reports\AgingReportService;
+use App\Services\Reports\OperationalReportService;
 use App\Support\ChartOfAccounts;
 use App\Support\EntityContext;
 use Database\Seeders\AccountingSetupSeeder;
@@ -208,6 +210,62 @@ test('VAT-inclusive bills debit net expense and input VAT, and payments hit the 
 
     $this->actingAs($this->user)->get('/ap/bills')->assertOk();
     $this->actingAs($this->user)->get("/ap/bills/{$bill->id}")->assertOk()->assertInertia(fn ($p) => $p->component('ap/bills/show/page'));
+});
+
+test('expanded withholding tax is withheld from the supplier and reported for the 2307', function () {
+    $this->user->givePermissionTo(Permission::findOrCreate('reports.vat-summary.view', 'web'));
+    $vendor = Vendor::create(['entity_id' => $this->entity->id, 'code' => 'V-002', 'name' => 'Lessor Inc.', 'tin' => '123-456-789-000', 'is_active' => true]);
+    $rent = Account::where('code', '6100')->firstOrFail();
+    $wc100 = TaxCode::where('code', 'WC100')->firstOrFail();
+    expect($wc100->type)->toBe('ewt')->and((float) $wc100->rate)->toBe(0.05);
+
+    // ₱11,200 VAT-inclusive rent: ₱10,000 net, ₱1,200 input VAT, 5% EWT on the net = ₱500.
+    $this->actingAs($this->user)->post('/ap/bills', [
+        'vendor_id' => $vendor->id, 'bill_no' => 'BILL-EWT', 'vendor_invoice_no' => 'LI-10', 'bill_date' => now()->toDateString(),
+        'due_date' => now()->toDateString(), 'vat_treatment' => 'inclusive', 'ewt_tax_code_id' => $wc100->id,
+        'lines' => [['description' => 'Store rent', 'account_id' => $rent->id, 'amount' => 11200]],
+    ])->assertSessionHasNoErrors();
+
+    $bill = Bill::where('bill_no', 'BILL-EWT')->firstOrFail();
+    expect((float) $bill->ewt_amount)->toBe(500.0)
+        ->and($bill->ewt_atc)->toBe('WC100')
+        ->and((float) $bill->balance_due)->toBe(10700.0);
+
+    $this->actingAs($this->user)->post("/ap/bills/{$bill->id}/post")->assertSessionHasNoErrors();
+    $entry = JournalEntry::with('lines.account')->find($bill->fresh()->journal_entry_id);
+    expect((float) lineFor($entry, '6100')->debit)->toBe(10000.0)
+        ->and((float) lineFor($entry, '1300')->debit)->toBe(1200.0)
+        ->and((float) lineFor($entry, '2000')->credit)->toBe(10700.0)
+        ->and((float) lineFor($entry, '2435')->credit)->toBe(500.0);
+
+    // Paying the net settles the bill; paying more than the net is refused.
+    $this->actingAs($this->user)->post("/ap/bills/{$bill->id}/pay", [
+        'paid_date' => now()->toDateString(), 'amount' => 11200, 'payment_method' => 'cash',
+    ])->assertSessionHasErrors('amount');
+    $this->actingAs($this->user)->post("/ap/bills/{$bill->id}/pay", [
+        'paid_date' => now()->toDateString(), 'amount' => 10700, 'payment_method' => 'cash',
+    ])->assertSessionHasNoErrors();
+    expect($bill->fresh()->status)->toBe('paid')->and((float) $bill->fresh()->balance_due)->toBe(0.0);
+
+    // An EWT code from another company's library is refused.
+    $other = Entity::create(['code' => 'ALJ', 'name' => 'AL Jamora Optical', 'is_active' => true]);
+    $foreign = TaxCode::withoutGlobalScope('entity')->create(['entity_id' => $other->id, 'code' => 'WC100', 'name' => 'Rentals', 'rate' => 0.05, 'type' => 'ewt', 'is_active' => true]);
+    $this->actingAs($this->user)->post('/ap/bills', [
+        'vendor_id' => $vendor->id, 'bill_no' => 'BILL-X', 'bill_date' => now()->toDateString(), 'due_date' => now()->toDateString(),
+        'vat_treatment' => 'inclusive', 'ewt_tax_code_id' => $foreign->id,
+        'lines' => [['description' => 'Rent', 'account_id' => $rent->id, 'amount' => 100]],
+    ])->assertSessionHasErrors('ewt_tax_code_id');
+
+    $report = app(OperationalReportService::class)->build('ewt-2307', ['date_from' => now()->startOfQuarter()->toDateString(), 'date_to' => now()->endOfQuarter()->toDateString()]);
+    $month = ((now()->month - 1) % 3) + 1;
+    expect($report['rows'])->toHaveCount(1)
+        ->and($report['rows'][0]['supplier'])->toBe('Lessor Inc.')
+        ->and($report['rows'][0]['tin'])->toBe('123-456-789-000')
+        ->and($report['rows'][0]['atc'])->toBe('WC100')
+        ->and($report['rows'][0]["month_{$month}"])->toBe(10000.0)
+        ->and($report['rows'][0]['tax_withheld'])->toBe(500.0);
+
+    $this->actingAs($this->user)->get('/reports/operations/ewt-2307')->assertOk();
 });
 
 test('reconciliation clears statement items and only completes at zero difference', function () {

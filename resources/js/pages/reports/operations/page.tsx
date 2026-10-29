@@ -39,6 +39,8 @@ const descriptions: Record<string, string> = {
     cogs: 'Cost of goods sold and stock write-offs by stock type, from the optical stock postings, checked against the ledger.',
     collections: 'Money received by payment method: optical POS payments, customer deposits and invoice collections.',
     deposits: 'Customer deposits still held at the date — received but not yet applied to a completed sale.',
+    'ewt-2307':
+        'Expanded withholding tax on supplier bills, per quarter, supplier and ATC — the figures for each supplier’s BIR Form 2307 and the 1601-EQ.',
 };
 
 function show(value: string | number | null | undefined, format: Format): string {

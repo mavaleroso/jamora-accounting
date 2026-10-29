@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Libraries;
 
+use App\Support\EntityContext;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class TaxCodeStoreRequest extends FormRequest
 {
@@ -26,7 +28,8 @@ class TaxCodeStoreRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'code' => ['required', 'string', 'max:50', 'unique:tax_codes,code'],
+            // Unique within the company: each company has its own OVAT, IVAT and EWT codes.
+            'code' => ['required', 'string', 'max:50', Rule::unique('tax_codes', 'code')->where('entity_id', app(EntityContext::class)->id())],
             'name' => ['required', 'string', 'max:255'],
             'rate' => ['required', 'numeric', 'min:0', 'max:1'],
             'type' => ['required', 'string', 'max:50'],

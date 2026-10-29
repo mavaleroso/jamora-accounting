@@ -7,8 +7,10 @@ use App\Models\Bill;
 use App\Models\BillLine;
 use App\Models\BillPayment;
 use App\Models\Journal;
+use App\Models\TaxCode;
 use App\Services\Accounting\CashMovementService;
 use App\Support\EntityContext;
+use App\Support\WithholdingTax;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -24,12 +26,14 @@ class BillService
     {
         return DB::transaction(function () use ($data, $lines, $userId) {
             $totals = $this->computeTotals($lines, $data['vat_treatment'] ?? 'exclusive');
+            $ewt = $this->withholding($data['ewt_tax_code_id'] ?? null, $totals['subtotal']);
 
             $bill = Bill::query()->create([
                 ...$data,
                 ...$totals,
+                ...$ewt,
                 'amount_paid' => 0,
-                'balance_due' => $totals['total_amount'],
+                'balance_due' => round($totals['total_amount'] - $ewt['ewt_amount'], 2),
                 'status' => 'draft',
                 'created_by' => $userId,
             ]);
@@ -73,7 +77,29 @@ class BillService
     }
 
     /**
-     * Recognise the payable: Dr expense/asset lines (net of VAT) and Input VAT, Cr Accounts Payable.
+     * The expanded withholding tax on a bill: the EWT code (a tax code of type "ewt" in this entity), its ATC and
+     * rate, and the tax on the amount net of VAT. No code, no tax.
+     *
+     * @return array{ewt_tax_code_id: int|null, ewt_atc: string|null, ewt_rate: float, ewt_amount: float}
+     */
+    public function withholding(?int $taxCodeId, float $netOfVat): array
+    {
+        $code = $taxCodeId ? TaxCode::query()->where('type', WithholdingTax::TYPE)->find($taxCodeId) : null;
+        if ($taxCodeId && ! $code) {
+            throw ValidationException::withMessages(['ewt_tax_code_id' => 'Choose an expanded withholding tax code from this company\'s Tax Codes.']);
+        }
+
+        return [
+            'ewt_tax_code_id' => $code?->id,
+            'ewt_atc' => $code?->code,
+            'ewt_rate' => (float) ($code?->rate ?? 0),
+            'ewt_amount' => $code ? WithholdingTax::amount($netOfVat, (float) $code->rate) : 0.0,
+        ];
+    }
+
+    /**
+     * Recognise the payable: Dr expense/asset lines (net of VAT) and Input VAT; Cr Accounts Payable for what the
+     * supplier is paid and Cr Expanded Withholding Tax Payable for the tax withheld.
      */
     public function post(Bill $bill, int $userId): Bill
     {
@@ -101,7 +127,16 @@ class BillService
             if ((float) $bill->vat_amount > 0) {
                 $lines[] = ['account_id' => $this->account('1300')->id, 'debit' => (float) $bill->vat_amount, 'credit' => 0, 'memo' => 'Input VAT'];
             }
-            $lines[] = ['account_id' => $ap->id, 'debit' => 0, 'credit' => (float) $bill->total_amount, 'memo' => 'AP '.$bill->bill_no];
+            $lines[] = ['account_id' => $ap->id, 'debit' => 0, 'credit' => $bill->netPayable(), 'memo' => 'AP '.$bill->bill_no];
+            if ((float) $bill->ewt_amount > 0) {
+                $bill->loadMissing('ewtTaxCode');
+                $lines[] = [
+                    'account_id' => $bill->ewtTaxCode?->account_id ?: $this->account(WithholdingTax::PAYABLE_ACCOUNT)->id,
+                    'debit' => 0,
+                    'credit' => (float) $bill->ewt_amount,
+                    'memo' => 'EWT '.$bill->ewt_atc.' withheld — '.$bill->bill_no,
+                ];
+            }
 
             $entry = $this->cash->journal([
                 'journal_id' => $journal->id,
@@ -186,7 +221,7 @@ class BillService
             }
 
             $paid = round((float) $bill->amount_paid + $amount, 2);
-            $balance = round(max(0, (float) $bill->total_amount - $paid), 2);
+            $balance = round(max(0, $bill->netPayable() - $paid), 2);
             $bill->update([
                 'amount_paid' => $paid,
                 'balance_due' => $balance,

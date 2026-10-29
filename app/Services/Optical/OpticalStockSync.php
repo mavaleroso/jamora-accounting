@@ -13,10 +13,12 @@ use Illuminate\Support\Facades\DB;
  *  delivery receipt   Dr Inventory                      Cr Goods Received Not Billed   (cleared by the supplier's bill)
  *  returned           Dr Goods Received Not Billed      Cr Inventory                   (review: match the credit memo)
  *  defective/expired  Dr Inventory Losses / Write-offs  Cr Inventory                   (review)
- *  sold, no order     Dr Cost of Goods Sold             Cr Inventory                   (review: no sale recorded)
+ *  sold, no order     nothing booked                                                   (review: no sale recorded)
  *
- * Items sold through an order get their cost of goods sold with the sale (OpticalSaleSync). Releases to a branch
- * stay within the same entity's stock and post nothing.
+ * Items sold through an order get their cost of goods sold with the sale (OpticalSaleSync). Items tagged sold without
+ * an order are only listed for review: the CPA chose to book cost of goods sold from orders alone (Oct 2026), and
+ * what an earlier version of the sync booked for them is reversed on its own date. Releases to a branch stay within
+ * the same entity's stock and post nothing.
  */
 class OpticalStockSync
 {
@@ -24,12 +26,12 @@ class OpticalStockSync
 
     public const MOVEMENT_DOC = 'stock_movement';
 
-    /** event => [posting rule, movement type, quantity sign, accounting link, note] */
+    /** event => [posting rule (null: listed for review, nothing booked), movement type, quantity sign, accounting link, note] */
     protected const EVENTS = [
         'defective' => ['inventory_writeoff', 'write_off', -1, 'inventory_loss', 'Tagged defective in the optical POS.'],
         'expired' => ['inventory_writeoff', 'write_off', -1, 'inventory_loss', 'Tagged expired in the optical POS.'],
         'returned' => ['inventory_return', 'return', -1, 'ap_receipt', 'Returned to the supplier — match the supplier credit memo.'],
-        'sold' => ['cogs', 'sales_issue', -1, 'cogs', 'Tagged sold without an optical order — no sale is recorded for it.'],
+        'sold' => [null, 'sales_issue', -1, 'unbooked', 'Tagged sold without an optical order — no sale is recorded for it, so nothing was booked. Kept for review.'],
     ];
 
     public function __construct(
@@ -160,7 +162,9 @@ class OpticalStockSync
         $price = (float) ($movement['price'] ?? 0);
         $overcost = $price > 0 && $unitCost > $price;
         $cost = $overcost ? 0.0 : round($unitCost * $quantity, 2);
-        $hash = OpticalDocuments::hash(['event' => $event, 'cost' => $cost, 'on' => $occurredOn, 'overcost' => $overcost]);
+        $books = self::EVENTS[$event][0] !== null;
+        // Events that are no longer booked hash differently, so what an earlier version booked for them is taken back.
+        $hash = OpticalDocuments::hash(['event' => $event, 'cost' => $cost, 'on' => $occurredOn, 'overcost' => $overcost, ...($books ? [] : ['books' => false])]);
 
         if ($this->documents->isUnchanged($doc, $hash)) {
             return 'skipped';
@@ -179,12 +183,15 @@ class OpticalStockSync
 
         [$ruleEvent, $type, $sign, $link, $note] = self::EVENTS[$event];
 
-        return DB::transaction(function () use ($movement, $entity, $doc, $key, $hash, $occurredOn, $quantity, $cost, $ruleEvent, $type, $sign, $link, $note, $event, $overcost, $unitCost, $price) {
-            $this->reverse($doc, 'Stock item changed in the optical POS');
+        return DB::transaction(function () use ($movement, $entity, $doc, $key, $hash, $occurredOn, $quantity, $cost, $ruleEvent, $type, $sign, $link, $note, $event, $overcost, $unitCost, $price, $books) {
+            $books
+                ? $this->reverse($doc, 'Stock item changed in the optical POS')
+                : $this->reverse($doc, 'Stock tagged sold without an order is no longer booked', onOriginalDate: true);
 
             $label = trim(implode(' — ', array_filter([$movement['brand'] ?? null, $movement['description'] ?? null, $movement['code'] ?? null])));
             $warning = match (true) {
                 $overcost => $note.' Its cost (₱'.number_format($unitCost, 2).') is above its selling price (₱'.number_format($price, 2).') in the optical POS — check the cost code for a missing "." — so nothing was booked.',
+                ! $books => $note.($cost > 0 ? ' Cost at stake: ₱'.number_format($cost, 2).'.' : ' No decodable cost.'),
                 $cost > 0 => $note,
                 default => $note.' No decodable cost; nothing was booked.',
             };
@@ -210,7 +217,7 @@ class OpticalStockSync
                 ]);
 
                 $journalIds = [];
-                if ($cost > 0) {
+                if ($cost > 0 && $ruleEvent !== null) {
                     $rule = $this->ledger->rule($ruleEvent);
                     $entry = $this->ledger->journal('GJ', [
                         'entry_date' => $occurredOn,
@@ -255,13 +262,13 @@ class OpticalStockSync
         return now('Asia/Manila')->toDateString();
     }
 
-    protected function reverse(?SyncDocument $doc, string $reason): void
+    protected function reverse(?SyncDocument $doc, string $reason, bool $onOriginalDate = false): void
     {
         if (empty($doc?->meta)) {
             return;
         }
 
-        $this->ledger->reverse($doc->meta['journal_entry_ids'] ?? [], 'Reversal: '.$reason);
+        $this->ledger->reverse($doc->meta['journal_entry_ids'] ?? [], 'Reversal: '.$reason, $onOriginalDate);
         InventoryMovement::query()->withoutGlobalScope('entity')->whereIn('id', $doc->meta['movement_ids'] ?? [])->update(['review_status' => 'reversed']);
         $doc->update(['meta' => null, 'status' => 'reversed', 'journal_entry_id' => null]);
     }

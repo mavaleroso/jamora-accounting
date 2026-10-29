@@ -10,6 +10,7 @@ use App\Models\InvoiceLine;
 use App\Models\InvoicePayment;
 use App\Models\Partner;
 use App\Models\PartnerBalance;
+use App\Models\PostingRule;
 use App\Models\SyncDocument;
 use App\Services\Billing\InvoiceService;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,8 @@ use RuntimeException;
  * customer deposits of the collecting entity (see OpticalDepositSync). Completing the order:
  *
  *  1. records an invoice in each entity that owns part of the order (JAM Opticus for products, edging and repair; the
- *     clinic for its clinical services), with VAT unless the entity is non-VAT or the sale is senior/PWD;
+ *     clinic for its clinical services, as the service fee's "billed by" says), under that entity's own Sales Invoice
+ *     number, with VAT unless the entity is non-VAT or the order's discount is VAT-exempt (senior/PWD);
  *  2. books cost of goods sold for the products at decoded unit cost;
  *  3. settles each invoice from the deposits: the collecting entity applies them to its own invoice, and for another
  *     entity's invoice it moves the deposit to Due to Related Entities while that entity books Due from.
@@ -260,7 +262,7 @@ class OpticalSaleSync
 
         $groups = [];
         foreach ($lines as $line) {
-            $event = $line['class'] === 'product' ? ($wholesale ? 'sale_product_wholesale' : 'sale_product_retail') : 'sale_service';
+            $event = $line['class'] === 'product' ? ($wholesale ? 'sale_product_wholesale' : 'sale_product_retail') : $this->serviceEvent($line['item']);
             $groups[$event]['gross'] = ($groups[$event]['gross'] ?? 0) + $line['gross'];
             $groups[$event]['net'] = ($groups[$event]['net'] ?? 0) + $line['net'];
         }
@@ -288,7 +290,7 @@ class OpticalSaleSync
             'entity_id' => $owner->id,
             'partner_id' => $partner->id,
             'invoice_no' => $number,
-            'bir_si_or_no' => ($order['si'] ?? null) ?: (($order['or'] ?? null) ?: null),
+            'bir_si_or_no' => $this->router->salesInvoiceNo($order, $owner),
             'invoice_date' => $date,
             'due_date' => $date,
             'pricing_type' => $wholesale ? 'wholesale' : 'retail',
@@ -334,7 +336,7 @@ class OpticalSaleSync
             $entryLines[] = ['account_id' => $this->ledger->rule($exempt ? 'sale_senior_pwd_discount' : 'sale_discount')->debit_account_id, 'debit' => $discount, 'credit' => 0, 'memo' => $exempt ? 'Senior citizen / PWD discount' : 'Sales discounts'];
         }
         foreach ($revenue as $event => $amount) {
-            $entryLines[] = ['account_id' => $this->ledger->rule($event)->credit_account_id, 'debit' => 0, 'credit' => $amount, 'memo' => $event === 'sale_service' ? 'Service revenue' : 'Product sales'];
+            $entryLines[] = ['account_id' => $this->ledger->rule($event)->credit_account_id, 'debit' => 0, 'credit' => $amount, 'memo' => str_starts_with($event, 'sale_service') ? 'Service revenue' : 'Product sales'];
         }
         if ($vatTotal > 0) {
             $entryLines[] = ['account_id' => $this->ledger->rule('output_vat')->credit_account_id, 'debit' => 0, 'credit' => $vatTotal, 'memo' => 'Output VAT'];
@@ -518,6 +520,19 @@ class OpticalSaleSync
     }
 
     /**
+     * A service's own revenue rule (Optical Sync › Posting Rules › revenue by service) in the owner's books, else the
+     * general service-sale rule.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    protected function serviceEvent(array $item): string
+    {
+        $event = PostingRule::serviceEvent($item['products_id'] ?? null);
+
+        return $event !== null && $this->ledger->hasRule($event) ? $event : 'sale_service';
+    }
+
+    /**
      * @param  array<string, mixed>  $line
      */
     protected function lineType(array $line): string
@@ -562,7 +577,31 @@ class OpticalSaleSync
      */
     protected function hash(array $order, Entity $collector): string
     {
-        return OpticalDocuments::hash([
+        // Settings the optical POS added later (per-entity SI numbers, who bills a service, VAT-exempt discounts) only
+        // count when they book differently from the old rules, so orders booked before them are not re-booked.
+        $extra = [];
+        $invoices = collect($order['sales_invoices'] ?? [])->map(fn (array $i) => [$i['entity_code'] ?? null, $i['si_no'] ?? null])->sort()->values()->all();
+        if ($invoices !== []) {
+            $extra['invoices'] = $invoices;
+        }
+        $owners = fn (bool $legacy) => collect($order['items'] ?? [])->map(fn (array $i) => [$i['id'] ?? null, $this->router->ownerFor($i, $collector, $legacy)->code, $this->router->lineClass($i, $legacy)])->all();
+        if (($current = $owners(false)) !== $owners(true)) {
+            $extra['owners'] = $current;
+        }
+        if (($exempt = $this->router->isVatExempt($order)) !== $this->router->isVatExempt($order, true)) {
+            $extra['exempt'] = $exempt;
+        }
+
+        return OpticalDocuments::hash([...$this->baseHash($order, $collector), ...$extra]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $order
+     * @return array<string, mixed>
+     */
+    protected function baseHash(array $order, Entity $collector): array
+    {
+        return [
             'collector' => $collector->code,
             'completed_on' => $this->router->businessDate($order['completed_at'] ?? null),
             'payable' => round((float) ($order['payable_total'] ?? 0), 2),
@@ -574,6 +613,6 @@ class OpticalSaleSync
                 $i['products_type'] ?? null, $i['products_id'] ?? null, (int) ($i['quantity'] ?? 1),
                 round((float) ($i['amount'] ?? 0), 2), round((float) ($i['gross_amount'] ?? 0), 2), round((float) ($i['unit_cost'] ?? 0), 2),
             ])->sort()->values()->all(),
-        ]);
+        ];
     }
 }
