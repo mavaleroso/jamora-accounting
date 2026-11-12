@@ -12,7 +12,7 @@ import { RefreshCwIcon } from 'lucide-react';
 import * as React from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Optical Sync', href: '/integration/optical' },
+    { title: 'Optical POS', href: '/integration/optical' },
     { title: 'Exceptions', href: '/integration/optical/exceptions' },
 ];
 
@@ -109,12 +109,12 @@ export default function OpticalExceptionsPage({ documents, totalDocuments, pageS
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Sync Exceptions" />
+            <Head title="Optical Exceptions" />
 
             <div className="flex flex-col gap-6 p-4">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <Heading
-                        title="Sync exceptions"
+                        title="Optical exceptions"
                         description="Failed documents did not post — fix the cause (open period, posting rule, missing entity) and retry. Review items posted but need an accountant's look."
                     />
                     <ToggleGroup
@@ -136,7 +136,7 @@ export default function OpticalExceptionsPage({ documents, totalDocuments, pageS
                     data={documents}
                     initialSorting={[{ id: 'updated_at', desc: true }]}
                     emptyTitle="Nothing needs attention"
-                    emptyDescription="Everything synced cleanly."
+                    emptyDescription="Everything from the POS booked cleanly."
                     serverSidePagination={{
                         totalRowCount: totalDocuments,
                         pageIndex: currentPage - 1,

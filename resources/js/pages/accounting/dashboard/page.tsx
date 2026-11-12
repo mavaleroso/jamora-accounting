@@ -237,9 +237,9 @@ export default function AccountingDashboardPage({
                         href="/accounting/journal-entries"
                     />
                     <StatCard
-                        title="Sync Exceptions"
+                        title="Optical Exceptions"
                         value={syncExceptionCount.toLocaleString()}
-                        description="Failed sync documents"
+                        description="Optical documents that failed to book"
                         icon={AlertTriangleIcon}
                         href="/integration/optical/exceptions"
                         tone="danger"
@@ -395,8 +395,8 @@ export default function AccountingDashboardPage({
                     <Card className="border-border/60 shadow-sm">
                         <CardHeader className="flex flex-row items-center justify-between">
                             <div>
-                                <CardTitle className="text-base">Last Optical Sync</CardTitle>
-                                <CardDescription>Most recent sync run</CardDescription>
+                                <CardTitle className="text-base">Optical POS — last booking</CardTitle>
+                                <CardDescription>The books follow the POS on their own; this is the latest booking</CardDescription>
                             </div>
                             <BanknoteIcon className="text-primary size-5" />
                         </CardHeader>
@@ -441,12 +441,12 @@ export default function AccountingDashboardPage({
                                     <Button variant="outline" size="sm" className="w-full" asChild>
                                         <Link href="/integration/optical">
                                             <RefreshCwIcon className="mr-2 size-4" />
-                                            Open Optical Sync
+                                            Open Optical POS
                                         </Link>
                                     </Button>
                                 </>
                             ) : (
-                                <p className="text-muted-foreground py-8 text-center text-sm">No sync runs recorded yet.</p>
+                                <p className="text-muted-foreground py-8 text-center text-sm">Nothing booked from the POS yet.</p>
                             )}
                         </CardContent>
                     </Card>

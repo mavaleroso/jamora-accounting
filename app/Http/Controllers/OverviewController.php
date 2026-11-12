@@ -158,9 +158,9 @@ class OverviewController extends Controller
         if ($can(['integration.optical.view', 'integration.optical.sync'])) {
             $failed = SyncDocument::query()->where('status', 'failed')->count();
             $lastRun = SyncRun::query()->latest('started_at')->first();
-            $metrics[] = $this->metric('Sync failures', $failed, tone: $this->alertTone($failed, 'danger'), href: '/integration/optical');
+            $metrics[] = $this->metric('Optical documents failed', $failed, tone: $this->alertTone($failed, 'danger'), href: '/integration/optical');
             $metrics[] = $this->metric(
-                'Last sync',
+                'Last booked from the POS',
                 $lastRun?->started_at?->diffForHumans() ?? 'Never',
                 'text',
                 $lastRun && $lastRun->status === 'failed' ? 'danger' : 'default',

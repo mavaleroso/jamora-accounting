@@ -16,12 +16,12 @@ use App\Models\PartnerBalance;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
 use App\Services\Accounting\CashMovementService;
+use App\Services\Optical\OpticalStock;
 use App\Support\EntityContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -268,8 +268,8 @@ class DashboardController extends Controller
     }
 
     /**
-     * Low-stock groups from the optical POS, for the entity that holds the stock. Read from the ten-minute cache the
-     * inventory screen fills, so the dashboard never waits on the optical API.
+     * Low-stock groups for the entity that holds the stock, read from the optical POS's database. A POS that can't
+     * be read leaves the card out rather than failing the dashboard.
      *
      * @return array{count: int, items: list<array<string, mixed>>}|null
      */
@@ -279,8 +279,16 @@ class DashboardController extends Controller
             return null;
         }
 
-        $summary = Cache::get('optical.stock-summary');
-        if (! is_array($summary)) {
+        $stock = app(OpticalStock::class);
+        if (! $stock->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $summary = $stock->summary();
+        } catch (\Throwable $e) {
+            report($e);
+
             return null;
         }
 

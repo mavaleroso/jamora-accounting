@@ -10,12 +10,20 @@ class SyncOpticalCommand extends Command
     protected $signature = 'accounting:sync-optical
         {--full : Ignore the saved cursors and read every stream from the start (documents already booked are skipped)}
         {--stream=* : Only these streams (users, clients, suppliers, payments, orders, receipts, movements)}
-        {--no-retry : Do not retry previously failed documents first}';
+        {--no-retry : Do not retry previously failed documents first}
+        {--auto : The check the scheduler makes every minute: books what changed, keeps no record when nothing did, retries failed documents hourly}';
 
-    protected $description = 'Sync optical-new staff and book its payments, completed orders and stock events into accounting through the optical accounting API';
+    protected $description = 'Book what is new or changed in the optical POS (staff, payments, completed orders, stock events), read from its database';
 
     public function handle(OpticalSyncService $sync): int
     {
+        if ($this->option('auto')) {
+            $run = $sync->catchUp(scheduled: true);
+            $this->line($run?->message ?? 'Nothing new in the optical POS.');
+
+            return $run?->status === 'failed' ? self::FAILURE : self::SUCCESS;
+        }
+
         try {
             $run = $sync->run(null, [
                 'full' => (bool) $this->option('full'),

@@ -3,21 +3,22 @@
 use App\Models\Employee;
 use App\Models\Entity;
 use App\Models\User;
+use App\Services\Optical\OpticalSource;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
+use Tests\Support\FakeOpticalSource;
 
 uses(RefreshDatabase::class);
 
 /*
- * optical-new users → copied logins with an employee record each, against a fake GET /users.
+ * optical-new users → copied logins with an employee record each, against a stand-in POS.
  */
 beforeEach(function () {
     foreach (['JAM_OPTICUS' => 'JAM Opticus', 'A_JAMORA' => 'A. Jamora Optical', 'AL_JAMORA' => 'AL Jamora Optical'] as $code => $name) {
@@ -26,27 +27,10 @@ beforeEach(function () {
     app(EntityContext::class)->clear();
     Storage::fake('public');
 
-    config([
-        'optical.api.base_url' => 'http://optical.test',
-        'optical.api.token' => 'secret-token',
-    ]);
-
-    $this->users = [];
-    $this->passwords = []; // optical-new user id => password
-    $this->opticalDown = false;
-    Http::fake(function (Request $request) {
-        if (str_contains($request->url(), '/storage/avatars/')) {
-            return Http::response('photo-bytes');
-        }
-        if (preg_match('#/users/(\d+)/check-password$#', $request->url(), $m)) {
-            return $this->opticalDown
-                ? Http::failedConnection()
-                : Http::response(['valid' => ($this->passwords[(int) $m[1]] ?? null) === $request['password']]);
-        }
-        $path = trim(str_replace('http://optical.test/api/v1/accounting/', '', strtok($request->url(), '?')), '/');
-
-        return Http::response(['data' => $path === 'users' ? array_values($this->users) : [], 'meta' => ['last_page' => 1]]);
-    });
+    $this->pos = new FakeOpticalSource;
+    app()->instance(OpticalSource::class, $this->pos);
+    // A photo that is not on this server is fetched from the POS's site.
+    Http::fake(fn () => Http::response('photo-bytes'));
 
     $this->sync = fn () => app(OpticalSyncService::class)->run(null, ['streams' => ['users']]);
 });
@@ -79,7 +63,7 @@ function employeeOf(User $user): Employee
 }
 
 test('every optical-new user is copied as a login, value for value, with an employee record', function () {
-    $this->users = [
+    $this->pos['users'] = [
         opticalUser(),
         opticalUser([
             'id' => 15, 'username' => 'rcarillo', 'email' => 'roselyn@jamora.ph', 'firstname' => 'Roselyn', 'middlename' => 'Ranoco', 'lastname' => 'Carillo',
@@ -134,13 +118,13 @@ test('every optical-new user is copied as a login, value for value, with an empl
 });
 
 test('a re-sync copies optical-new\'s changes and keeps what was entered on the employee record', function () {
-    $this->users = [opticalUser(['contact_number' => '0917 111 2222'])];
+    $this->pos['users'] = [opticalUser(['contact_number' => '0917 111 2222'])];
     ($this->sync)();
 
     $user = User::where('optical_user_id', 11)->sole();
     employeeOf($user)->update(['sss_number' => '34-1234567-8', 'tin' => '123-456-789-000', 'basic_pay' => 18000]);
 
-    $this->users = [opticalUser(['username' => 'ethel.andong', 'lastname' => 'Andong-Reyes', 'middlename' => 'Cruz', 'contact_number' => null])];
+    $this->pos['users'] = [opticalUser(['username' => 'ethel.andong', 'lastname' => 'Andong-Reyes', 'middlename' => 'Cruz', 'contact_number' => null])];
     $run = ($this->sync)();
 
     $user->refresh();
@@ -161,26 +145,26 @@ test('a re-sync copies optical-new\'s changes and keeps what was entered on the 
 });
 
 test('the login follows optical-new\'s status, and the employee follows the login', function () {
-    $this->users = [opticalUser()];
+    $this->pos['users'] = [opticalUser()];
     ($this->sync)();
     $user = User::where('optical_user_id', 11)->sole();
 
-    $this->users = [opticalUser(['status' => false])];
+    $this->pos['users'] = [opticalUser(['status' => false])];
     ($this->sync)();
     expect($user->fresh()->status)->toBeFalse()
         ->and(employeeOf($user)->only(['employment_status', 'is_active']))->toBe(['employment_status' => 'inactive', 'is_active' => false]);
 
-    $this->users = [opticalUser(['status' => true])];
+    $this->pos['users'] = [opticalUser(['status' => true])];
     ($this->sync)();
     expect($user->fresh()->status)->toBeTrue()
         ->and(employeeOf($user)->only(['employment_status', 'is_active']))->toBe(['employment_status' => 'active', 'is_active' => true]);
 });
 
 test('a user removed from optical-new is disabled here', function () {
-    $this->users = [opticalUser(), opticalUser(['id' => 12, 'username' => 'drmarquez', 'firstname' => 'Daisy Rose', 'lastname' => 'Marquez'])];
+    $this->pos['users'] = [opticalUser(), opticalUser(['id' => 12, 'username' => 'drmarquez', 'firstname' => 'Daisy Rose', 'lastname' => 'Marquez'])];
     ($this->sync)();
 
-    $this->users = [opticalUser()];
+    $this->pos['users'] = [opticalUser()];
     ($this->sync)();
 
     $gone = User::where('optical_user_id', 12)->sole();
@@ -193,7 +177,7 @@ test('a login made here under the same username becomes the copy and keeps its r
     $owner = User::factory()->create(['username' => 'lajamora', 'email' => 'owner@jamora.local']);
     $owner->assignRole(Role::findOrCreate('Admin', 'web'));
 
-    $this->users = [opticalUser(['id' => 23, 'username' => 'lajamora', 'firstname' => 'Joseph Lawrence', 'lastname' => 'Jamora', 'roles' => ['Admin']])];
+    $this->pos['users'] = [opticalUser(['id' => 23, 'username' => 'lajamora', 'firstname' => 'Joseph Lawrence', 'lastname' => 'Jamora', 'roles' => ['Admin']])];
     ($this->sync)();
 
     $owner->refresh();
@@ -210,7 +194,7 @@ test('a login made here under the same username becomes the copy and keeps its r
 });
 
 test('the employee directory counts "-" government IDs as missing and leaves "-" out of its filters', function () {
-    $this->users = [opticalUser()];
+    $this->pos['users'] = [opticalUser()];
     ($this->sync)();
 
     $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
@@ -227,10 +211,10 @@ test('the employee directory counts "-" government IDs as missing and leaves "-"
             ->where('positions', ['Staff']));
 });
 
-test('a copied user signs in with their optical-new password, checked by optical-new', function () {
+test('a copied user signs in with their optical-new password, checked against the POS', function () {
     config(['optical.password_check' => true]);
-    $this->users = [opticalUser()];
-    $this->passwords = [11 => 'Optical-pass-1'];
+    $this->pos['users'] = [opticalUser()];
+    $this->pos->passwords = [11 => 'Optical-pass-1'];
     ($this->sync)();
 
     $this->post('/login', ['username' => 'eandong', 'password' => 'wrong'])->assertSessionHasErrors('username');
@@ -239,16 +223,16 @@ test('a copied user signs in with their optical-new password, checked by optical
     $this->post('/login', ['username' => 'eandong', 'password' => 'Optical-pass-1']);
     $this->assertAuthenticatedAs(User::where('optical_user_id', 11)->sole());
 
-    Http::assertSent(fn (Request $r) => str_ends_with($r->url(), '/users/11/check-password') && $r['password'] === 'Optical-pass-1');
+    expect($this->pos->passwordChecks)->toContain([11, 'Optical-pass-1']);
 });
 
-test('when optical-new can\'t be reached, the password kept here counts', function () {
+test('when the POS can\'t be read, the password kept here counts', function () {
     config(['optical.password_check' => true]);
-    $this->users = [opticalUser()];
+    $this->pos['users'] = [opticalUser()];
     ($this->sync)();
     $user = User::where('optical_user_id', 11)->sole();
     $user->update(['password' => 'Local-pass-1']);
-    $this->opticalDown = true;
+    $this->pos->down = true;
 
     $this->post('/login', ['username' => 'eandong', 'password' => 'Local-pass-1']);
     $this->assertAuthenticatedAs($user);
@@ -256,8 +240,8 @@ test('when optical-new can\'t be reached, the password kept here counts', functi
 
 test('with the optical-new password check off, a copied user signs in with the password kept here', function () {
     config(['optical.password_check' => false]);
-    $this->users = [opticalUser()];
-    $this->passwords = [11 => 'Optical-pass-1'];
+    $this->pos['users'] = [opticalUser()];
+    $this->pos->passwords = [11 => 'Optical-pass-1'];
     ($this->sync)();
     $user = User::where('optical_user_id', 11)->sole();
     $user->update(['password' => 'Local-pass-1']);
@@ -267,7 +251,7 @@ test('with the optical-new password check off, a copied user signs in with the p
 
     $this->post('/login', ['username' => 'eandong', 'password' => 'Local-pass-1']);
     $this->assertAuthenticatedAs($user);
-    Http::assertNotSent(fn (Request $r) => str_contains($r->url(), 'check-password'));
+    expect($this->pos->passwordChecks)->toBe([]);
 });
 
 test('a login not copied from optical-new keeps its own password', function () {
@@ -276,11 +260,11 @@ test('a login not copied from optical-new keeps its own password', function () {
 
     $this->post('/login', ['username' => 'owner', 'password' => 'Owner-pass-1']);
     $this->assertAuthenticatedAs($owner);
-    Http::assertNotSent(fn (Request $r) => str_contains($r->url(), 'check-password'));
+    expect($this->pos->passwordChecks)->toBe([]);
 });
 
 test('the employee record takes the birth date and address, but not a placeholder birth date', function () {
-    $this->users = [
+    $this->pos['users'] = [
         opticalUser(['address' => 'Butuan City']),
         // optical-new's placeholder: a birth date no working employee can have.
         opticalUser(['id' => 12, 'username' => 'drmarquez', 'firstname' => 'Daisy Rose', 'lastname' => 'Marquez', 'birthdate' => '2024-09-25']),

@@ -11,12 +11,13 @@ use App\Models\Entity;
 use App\Models\InventoryMovement;
 use App\Models\ShiftRoster;
 use App\Models\User;
+use App\Services\Optical\OpticalSource;
 use App\Support\EntityContext;
 use Carbon\Carbon;
 use Database\Seeders\AccountingSetupSeeder;
-use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
+use Tests\Support\FakeOpticalSource;
 
 beforeEach(function () {
     // Setup Entity
@@ -152,22 +153,18 @@ test('cash and bank records register can be accessed and transactions recorded',
 
 test('the inventory screen shows synced stock postings and optical stock, and flagged items can be reviewed', function () {
     $this->actingAs($this->user);
-    config([
-        'optical.product_entity' => $this->entity->code,
-        'optical.api.base_url' => 'http://optical.test',
-        'optical.api.token' => 'secret-token',
-    ]);
-    Http::fake([
-        'optical.test/api/v1/accounting/inventory/stock-summary*' => Http::response(['data' => [
-            'on_hand_by_type' => ['frame' => 12], 'on_hand_total' => 12,
-            'on_hand_value_by_type' => ['frame' => 5400], 'on_hand_value_total' => 5400,
-            'low_stock_threshold' => 3,
-            'groups' => [
-                ['stock_type' => 'frame', 'brand' => 'Rayban', 'code' => 'RB-1', 'category' => 'Metal', 'on_hand_count' => 2, 'on_hand_value' => 900, 'min_quantity' => 1, 'is_low_stock' => true],
-                ['stock_type' => 'frame', 'brand' => 'Oakley', 'code' => 'OK-1', 'category' => 'Sport', 'on_hand_count' => 10, 'on_hand_value' => 4500, 'min_quantity' => 1, 'is_low_stock' => false],
-            ],
-        ]]),
-    ]);
+    config(['optical.product_entity' => $this->entity->code]);
+    $pos = new FakeOpticalSource;
+    $pos->stock = [
+        'on_hand_by_type' => ['frame' => 12], 'on_hand_total' => 12,
+        'on_hand_value_by_type' => ['frame' => 5400], 'on_hand_value_total' => 5400,
+        'low_stock_threshold' => 3,
+        'groups' => [
+            ['stock_type' => 'frame', 'brand' => 'Rayban', 'code' => 'RB-1', 'category' => 'Metal', 'on_hand_count' => 2, 'on_hand_value' => 900, 'min_quantity' => 1, 'is_low_stock' => true],
+            ['stock_type' => 'frame', 'brand' => 'Oakley', 'code' => 'OK-1', 'category' => 'Sport', 'on_hand_count' => 10, 'on_hand_value' => 4500, 'min_quantity' => 1, 'is_low_stock' => false],
+        ],
+    ];
+    app()->instance(OpticalSource::class, $pos);
 
     $movement = InventoryMovement::create([
         'entity_id' => $this->entity->id,

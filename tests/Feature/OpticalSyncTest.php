@@ -1,6 +1,5 @@
 <?php
 
-use App\Jobs\RunOpticalSync;
 use App\Models\Account;
 use App\Models\CustomerDeposit;
 use App\Models\Entity;
@@ -15,23 +14,22 @@ use App\Models\User;
 use App\Models\Vendor;
 use App\Services\Optical\OpticalDocuments;
 use App\Services\Optical\OpticalLedger;
+use App\Services\Optical\OpticalSource;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use App\Support\SystemSettings;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Queue;
 use Spatie\Permission\Models\Permission;
+use Tests\Support\FakeOpticalSource;
 
 uses(RefreshDatabase::class);
 
 /*
- * The sync against a fake optical-new accounting API. The fake returns every record on each call (it ignores
- * updated_since), which also proves documents are idempotent.
+ * The booking rules against a stand-in optical POS (reading the real database is covered by OpticalDatabaseTest).
+ * The stand-in hands out every record on each read (it ignores "since"), which also proves documents are idempotent.
  */
 beforeEach(function () {
     foreach (['JAM_OPTICUS' => 'JAM Opticus', 'A_JAMORA' => 'A. Jamora Optical', 'AL_JAMORA' => 'AL Jamora Optical'] as $code => $name) {
@@ -40,28 +38,10 @@ beforeEach(function () {
     $this->seed(AccountingSetupSeeder::class);
     app(EntityContext::class)->clear();
 
-    config([
-        'optical.api.base_url' => 'http://optical.test',
-        'optical.api.token' => 'secret-token',
-        'optical.start_date' => null,
-    ]);
+    config(['optical.start_date' => null]);
 
-    $this->api = ['orders' => [], 'payments' => [], 'inventory/receipts' => [], 'inventory/movements' => [], 'clients' => [], 'suppliers' => []];
-
-    Http::fake(function (Request $request) {
-        expect($request->header('Authorization')[0] ?? null)->toBe('Bearer secret-token');
-
-        $path = trim(str_replace('http://optical.test/api/v1/accounting/', '', strtok($request->url(), '?')), '/');
-        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
-        $records = array_values($this->api[$path] ?? []);
-
-        if (! empty($query['ids'])) {
-            $ids = array_map('intval', explode(',', $query['ids']));
-            $records = array_values(array_filter($records, fn ($r) => in_array((int) $r['id'], $ids, true)));
-        }
-
-        return Http::response(['data' => $records, 'meta' => ['last_page' => 1]]);
-    });
+    $this->api = new FakeOpticalSource;
+    app()->instance(OpticalSource::class, $this->api);
 
     $this->sync = fn () => app(OpticalSyncService::class)->run();
     $this->today = now('Asia/Manila')->toDateString();
@@ -407,12 +387,15 @@ test('the sync screens show runs and exceptions, and a failed document can be re
     $order = opticalOrder();
     $this->api['payments'] = [opticalPayment($order)];
 
-    $as()->post('/integration/optical/run')->assertSessionHas('status');
+    // Checking now books in the request itself, and says at once what failed.
+    $as()->post('/integration/optical/run')->assertSessionHas('error');
 
     $as()->get('/integration/optical')->assertOk()
         ->assertInertia(fn ($p) => $p->component('integration/optical/page')
             ->where('failedCount', 1)
             ->where('settings.configured', true)
+            ->where('settings.source', 'optical-test on 127.0.0.1')
+            ->where('settings.problem', null)
             ->has('runs', 1));
 
     $as()->get('/integration/optical/exceptions?status=failed')->assertOk()
@@ -475,26 +458,159 @@ test('a sold item costed above its selling price gets no cost of goods sold and 
         ->and($doc->error)->toContain('is above its selling price');
 });
 
-test('the sync screen queues a run, refuses a second, and closes one no worker took', function () {
-    Queue::fake();
+test('checking now books at once without a queue worker, and is refused while another check runs', function () {
     Permission::findOrCreate('integration.optical.sync', 'web');
     $user = User::factory()->create();
     $user->givePermissionTo('integration.optical.sync');
     $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
-    $user->entities()->attach($clinic->id, ['is_default' => true]);
-    $as = fn () => $this->actingAs($user)->withSession(['current_entity_id' => $clinic->id]);
+    $jam = Entity::where('code', 'JAM_OPTICUS')->firstOrFail();
+    $user->entities()->attach([$jam->id => ['is_default' => true], $clinic->id => ['is_default' => false]]);
+    $as = fn () => $this->actingAs($user)->withSession(['current_entity_id' => $jam->id]);
 
-    $as()->post('/integration/optical/run')->assertSessionHas('status');
+    $order = opticalOrder();
+    $this->api['payments'] = [opticalPayment($order)];
+
+    $as()->post('/integration/optical/run')->assertSessionHas('status', 'Checked the optical POS: 1 booked.');
     $run = SyncRun::query()->sole();
-    expect($run->status)->toBe('queued');
-    Queue::assertPushed(RunOpticalSync::class, fn ($job) => $job->runId === $run->id);
+    expect($run->status)->toBe('completed')
+        ->and($run->triggered_by)->toBe($user->id)
+        // Booked in the clinic's books, whichever company the person has open.
+        ->and(CustomerDeposit::withoutGlobalScope('entity')->sole()->entity_id)->toBe($clinic->id);
 
+    $as()->post('/integration/optical/run')->assertSessionHas('status', 'Checked the optical POS: nothing new, the books are up to date.');
+
+    // Another check is in progress.
+    SyncRun::query()->create(['started_at' => now(), 'status' => 'running']);
+    Cache::lock('optical-sync', 3600)->get();
     $as()->post('/integration/optical/run')->assertSessionHas('error');
 
-    $this->travel(OpticalSyncService::STALE_MINUTES + 1)->minutes();
-    expect(app(OpticalSyncService::class)->active())->toBeNull()
-        ->and($run->fresh()->status)->toBe('failed')
-        ->and($run->fresh()->message)->toContain('no queue worker');
+    // A run an earlier version left waiting for a queue worker is closed.
+    $queued = SyncRun::query()->create(['started_at' => now(), 'status' => 'queued']);
+    app(OpticalSyncService::class)->active();
+    expect($queued->fresh()->status)->toBe('failed');
+});
+
+test('the books follow the POS on their own: quietly, paced, and standing aside for the scheduler', function () {
+    config(['optical.auto_refresh_seconds' => 15, 'optical.auto_refresh_slow_seconds' => 120]);
+    $quick = fn () => app(OpticalSyncService::class)->catchUp();
+    $slow = fn () => app(OpticalSyncService::class)->catchUp(slow: true);
+    $streams = fn () => array_column($this->api->reads, 0);
+
+    // Nothing new: payments and orders are checked, and no run is left behind.
+    expect($quick())->toBeNull()
+        ->and($streams())->toBe(OpticalSyncService::QUICK_STREAMS)
+        ->and(SyncRun::query()->count())->toBe(0);
+
+    // Staff and stock are checked on their own pace.
+    $this->api->reads = [];
+    $slow();
+    expect($streams())->toBe(OpticalSyncService::SLOW_STREAMS);
+
+    // Checked a moment ago: not again.
+    $this->api->reads = [];
+    $order = opticalOrder();
+    $this->api['payments'] = [opticalPayment($order)];
+    expect($quick())->toBeNull()->and($slow())->toBeNull()->and($streams())->toBe([]);
+
+    // Later: payments and orders are checked again (staff and stock not yet), and what is new is booked and listed.
+    $this->travel(20)->seconds();
+    $run = $quick();
+    expect($run->status)->toBe('completed')
+        ->and($run->created_entries)->toBe(1)
+        ->and($run->triggered_by)->toBeNull()
+        ->and($slow())->toBeNull()
+        ->and($streams())->toBe(OpticalSyncService::QUICK_STREAMS)
+        ->and(ledgerBalance('A_JAMORA', '2300'))->toBe(-4500.0);
+
+    $this->api->reads = [];
+    $this->travel(3)->minutes();
+    $slow();
+    expect($streams())->toBe(OpticalSyncService::SLOW_STREAMS);
+
+    // A scheduler checks everything every minute; while it is alive, page visits leave the work to it.
+    $this->api->reads = [];
+    $this->travel(1)->minutes();
+    app(OpticalSyncService::class)->catchUp(scheduled: true);
+    expect($streams())->toBe(OpticalSyncService::STREAMS)
+        ->and(app(OpticalSyncService::class)->schedulerRunning())->toBeTrue();
+
+    $this->api->reads = [];
+    $this->travel(1)->minutes();
+    expect($quick())->toBeNull()->and($slow())->toBeNull()->and($streams())->toBe([]);
+
+    // The scheduler has stopped (or there never was one): page visits take over again.
+    $this->travel(5)->minutes();
+    $quick();
+    expect($streams())->not->toBe([])
+        ->and(app(OpticalSyncService::class)->schedulerRunning())->toBeFalse();
+});
+
+test('opening a page books payments and orders before the page is built, and staff and stock after it is sent', function () {
+    config(['optical.auto_refresh_seconds' => 15]);
+    Permission::findOrCreate('integration.optical.view', 'web');
+    $user = User::factory()->create();
+    $user->givePermissionTo('integration.optical.view');
+    $jam = Entity::where('code', 'JAM_OPTICUS')->firstOrFail();
+    $clinic = Entity::where('code', 'A_JAMORA')->firstOrFail();
+    $user->entities()->attach([$jam->id => ['is_default' => true], $clinic->id => ['is_default' => false]]);
+
+    $order = opticalOrder();
+    $this->api['payments'] = [opticalPayment($order)];
+    $this->api['inventory/receipts'] = [['key' => 'dr-1', 'supplier' => 'Lens Supplier', 'supplier_id' => null, 'delivery_receipt' => 'DR-1', 'received_at' => $this->today.' 00:00:00', 'item_count' => 1, 'uncosted_count' => 0, 'total_cost' => '300.00', 'by_type' => [], 'updated_at' => now()->toDateTimeString()]];
+
+    // The person has JAM Opticus open; the payment still lands in the clinic's books, and the page already lists it.
+    $this->actingAs($user)->withSession(['current_entity_id' => $jam->id])->get('/integration/optical')->assertOk()
+        ->assertInertia(fn ($p) => $p->has('runs', 1)
+            ->where('runs.0.created_entries', 1)
+            ->where('runs.0.triggered_by', null)
+            ->where('settings.scheduler_running', false));
+
+    // The delivery was booked once the page had been sent.
+    expect(CustomerDeposit::withoutGlobalScope('entity')->sole()->entity_id)->toBe($clinic->id)
+        ->and(ledgerBalance('JAM_OPTICUS', '1200'))->toBe(300.0)
+        ->and(array_column($this->api->reads, 0))->toBe([...OpticalSyncService::QUICK_STREAMS, ...OpticalSyncService::SLOW_STREAMS]);
+
+    // Switched off: pages check nothing.
+    $this->api->reads = [];
+    config(['optical.auto_refresh_seconds' => 0]);
+    $this->travel(5)->minutes();
+    $this->actingAs($user)->withSession(['current_entity_id' => $jam->id])->get('/integration/optical')->assertOk();
+    expect($this->api->reads)->toBe([]);
+});
+
+test('a POS that cannot be read never fails the page, and the problem is listed once', function () {
+    config(['optical.auto_refresh_seconds' => 15]);
+    $this->api->down = true;
+
+    // The first check reports the problem; the same problem again only moves that line's time on.
+    expect(app(OpticalSyncService::class)->catchUp()?->status)->toBe('failed');
+    foreach (range(1, 3) as $i) {
+        $this->travel(5)->minutes();
+        expect(app(OpticalSyncService::class)->catchUp())->toBeNull();
+    }
+
+    $run = SyncRun::query()->sole();
+    expect($run->status)->toBe('failed')->and($run->message)->toContain('Connection refused');
+});
+
+test('a check with a time limit stops where it is and the next one continues', function () {
+    $orders = [];
+    foreach (range(1, 3) as $n) {
+        $orders[] = opticalOrder(['id' => 500 + $n, 'ts_no' => "26-10-0050{$n}", 'completed_at' => now()->toIso8601String(), 'updated_at' => now()->addMinutes($n)->toIso8601String()]);
+    }
+    $this->api['orders'] = $orders;
+
+    // Reading is slow: the one-second limit is spent by the time the first order has been booked.
+    $this->api->delay = 1_100_000;
+    $run = app(OpticalSyncService::class)->run(null, ['streams' => ['orders'], 'budget' => 1]);
+    $this->api->delay = 0;
+
+    expect($run->processed)->toBe(1)
+        ->and($run->message)->toContain('stopped at its time limit')
+        ->and(Invoice::withoutGlobalScope('entity')->distinct()->count('source_id'))->toBe(1);
+
+    ($this->sync)();
+    expect(Invoice::withoutGlobalScope('entity')->distinct()->count('source_id'))->toBe(3);
 });
 
 test('a run whose process died is closed and its lock freed for the next run', function () {

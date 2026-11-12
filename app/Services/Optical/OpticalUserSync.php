@@ -47,7 +47,7 @@ class OpticalUserSync
     public function __construct(protected OpticalRouter $router) {}
 
     /**
-     * @param  array<string, mixed>  $record  a user from GET /users
+     * @param  array<string, mixed>  $record  a user from the POS (OpticalSource, stream "users")
      * @return 'created'|'updated'|'skipped'
      */
     public function process(array $record): string
@@ -142,21 +142,23 @@ class OpticalUserSync
             $user->setAttribute($field, $this->raw($r[$field] ?? null));
         }
 
-        $user->avatar = $this->copyPhoto($r['avatar_url'] ?? null, $user->avatar);
+        $user->avatar = $this->copyPhoto($r['avatar_url'] ?? null, $r['avatar_path'] ?? null, $user->avatar);
         $user->status = (bool) ($r['status'] ?? true);
     }
 
     /**
-     * The user's photo, copied into this app's public storage under the same file name; returns its path.
+     * The user's photo, copied into this app's public storage under the same file name; returns its path. It is
+     * taken from the POS's storage folder when that is at hand ($file), else fetched from the POS's site ($url).
      */
-    protected function copyPhoto(mixed $url, ?string $current): ?string
+    protected function copyPhoto(mixed $url, mixed $file, ?string $current): ?string
     {
         $url = $this->raw($url);
-        if ($url === null) {
+        $file = $this->raw($file);
+        if ($url === null && $file === null) {
             return null;
         }
 
-        $name = basename((string) parse_url($url, PHP_URL_PATH));
+        $name = basename($file ?? (string) parse_url($url, PHP_URL_PATH));
         if (! in_array(strtolower(pathinfo($name, PATHINFO_EXTENSION)), self::PHOTO_TYPES, true)) {
             return $current;
         }
@@ -168,6 +170,16 @@ class OpticalUserSync
         }
 
         try {
+            if ($file !== null && is_file($file)) {
+                $disk->put($path, (string) file_get_contents($file));
+
+                return $path;
+            }
+
+            if ($url === null) {
+                return $current;
+            }
+
             $response = Http::timeout(15)->get($url);
             if (! $response->successful()) {
                 return $current;

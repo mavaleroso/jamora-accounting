@@ -62,6 +62,29 @@ return [
             ]) : [],
         ],
 
+        // The optical POS's own database (optical-new), read directly. Accounting only ever reads it: the session is
+        // opened read-only, so a write here fails in MySQL instead of touching the POS's data.
+        'optical' => [
+            'driver' => 'mysql',
+            'host' => env('OPTICAL_DB_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('OPTICAL_DB_PORT', env('DB_PORT', '3306')),
+            'database' => env('OPTICAL_DB_DATABASE'),
+            'username' => env('OPTICAL_DB_USERNAME', env('DB_USERNAME', 'root')),
+            'password' => env('OPTICAL_DB_PASSWORD', env('DB_PASSWORD', '')),
+            'unix_socket' => env('OPTICAL_DB_SOCKET', ''),
+            'charset' => env('OPTICAL_DB_CHARSET', 'utf8mb4'),
+            'collation' => env('OPTICAL_DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+                PDO::MYSQL_ATTR_INIT_COMMAND => 'SET SESSION TRANSACTION READ ONLY',
+                PDO::ATTR_TIMEOUT => 5,
+            ]) : [],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

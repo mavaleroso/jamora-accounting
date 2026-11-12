@@ -45,7 +45,7 @@ const MODULES: Module[] = [
     },
     {
         icon: Link2,
-        title: 'Optical sync',
+        title: 'Live optical POS',
         description: 'Clinic sales and inventory posted straight to the ledger.',
     },
 ];
@@ -288,7 +288,7 @@ function BalancedCard() {
     return (
         <div aria-hidden className="max-w-md rounded-xl bg-white/[0.03] p-4 font-mono text-xs ring-1 ring-white/10">
             <div className="mb-3 flex items-center justify-between font-sans">
-                <span className="text-zinc-400">Optical sync · daily sales</span>
+                <span className="text-zinc-400">Optical POS · daily sales</span>
                 <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 ring-1 ring-emerald-500/20">
                     Balanced
                 </span>

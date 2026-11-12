@@ -33,7 +33,7 @@ class ClearDemoDataCommand extends Command
         'payslips', 'payroll_adjustments', 'payroll_runs', 'payroll_periods',
         'dtr_entries', 'attendance_requests', 'shift_rosters',
         'leave_ledger_entries', 'leave_balances', 'leave_requests',
-        'employee_benefits', 'employees',
+        'performance_evaluations', 'employee_benefits', 'employees',
         'compliance_items', // regenerated from the statutory calendar when the page opens
         // Optical sync history (a later sync starts from the go-live date again)
         'sync_documents', 'sync_runs', 'sync_cursors',

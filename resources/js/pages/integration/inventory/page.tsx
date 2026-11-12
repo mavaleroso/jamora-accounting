@@ -100,7 +100,7 @@ export default function InventoryPage({ movements, filters, movementTypes, isSto
             <PageBody>
                 <PageHeader
                     title="Inventory"
-                    description="Stock is managed in the optical POS. Deliveries, sales, write-offs and returns synced from it post to the books automatically; this screen shows those postings, low-stock alerts and whether stock agrees with the ledger."
+                    description="Stock is managed in the optical POS. Stock on hand and low-stock alerts are read live from its database; deliveries, sales, write-offs and returns post to the books on their own, and this screen shows those postings and whether stock agrees with the ledger."
                     actions={
                         isStockEntity && (
                             <Button
@@ -286,7 +286,7 @@ export default function InventoryPage({ movements, filters, movementTypes, isSto
                                 empty={
                                     <TableEmpty
                                         title="No stock postings yet"
-                                        description="Run the optical sync to bring in deliveries, sales and write-offs."
+                                        description="Deliveries, sales and write-offs appear here as they are recorded in the optical POS."
                                     />
                                 }
                             />

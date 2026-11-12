@@ -8,7 +8,7 @@ use App\Models\PostingRule;
 use App\Models\SyncCursor;
 use App\Models\SyncDocument;
 use App\Models\SyncRun;
-use App\Services\Optical\OpticalApiClient;
+use App\Services\Optical\OpticalSource;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use App\Support\SystemSettings;
@@ -20,7 +20,8 @@ use Inertia\Inertia;
 use Inertia\Response;
 
 /**
- * The optical POS sync: run it, see what each run did, and review the documents that failed or were flagged.
+ * The optical POS in the books: what was booked from its database and when, a button to check it right now, and the
+ * documents that failed or were flagged for review.
  */
 class OpticalSyncController extends Controller
 {
@@ -28,7 +29,7 @@ class OpticalSyncController extends Controller
         private readonly OpticalSyncService $syncService
     ) {}
 
-    public function index(OpticalApiClient $api): Response
+    public function index(OpticalSource $source): Response
     {
         $this->syncService->active(); // closes runs that stopped without finishing
 
@@ -64,8 +65,11 @@ class OpticalSyncController extends Controller
                 ->map(fn (SyncCursor $c) => $c->cursor_at?->toIso8601String()),
             'streams' => OpticalSyncService::STREAMS,
             'settings' => [
-                'configured' => $api->isConfigured(),
-                'base_url' => config('optical.api.base_url'),
+                'configured' => $source->isConfigured(),
+                'source' => $source->label(),
+                'problem' => $source->problem(),
+                'auto_refresh_seconds' => (int) config('optical.auto_refresh_seconds'),
+                'scheduler_running' => $this->syncService->schedulerRunning(),
                 'start_date' => config('optical.start_date'),
                 'product_entity' => config('optical.product_entity'),
                 'workshop_entity' => config('optical.workshop_entity'),
@@ -81,13 +85,29 @@ class OpticalSyncController extends Controller
             'full' => ['nullable', 'boolean'],
         ]);
 
+        // Reading the POS's database is quick, so the check runs here and now; re-reading everything takes longer
+        // and finishes even if the browser stops waiting.
+        set_time_limit(0);
+        ignore_user_abort(true);
+
         try {
-            $this->syncService->queue($request->user(), ['full' => (bool) ($validated['full'] ?? false)]);
+            $run = app(EntityContext::class)->runWithout(
+                fn () => $this->syncService->run($request->user(), ['full' => (bool) ($validated['full'] ?? false)])
+            );
         } catch (\RuntimeException $e) {
             return redirect()->back()->with('error', $e->getMessage());
         }
 
-        return redirect()->back()->with('status', 'Sync started. It runs in the background; this page updates as it goes.');
+        return redirect()->back()->with(
+            $run->status === 'completed' ? 'status' : 'error',
+            match (true) {
+                $run->status === 'failed' => 'The optical POS could not be read: '.$run->message,
+                $run->failed > 0 => "Checked the optical POS: {$run->created_entries} booked, {$run->failed} failed. See the exceptions.",
+                $run->status !== 'completed' => 'Checked the optical POS, with errors: '.$run->message,
+                $run->created_entries > 0 => "Checked the optical POS: {$run->created_entries} booked.",
+                default => 'Checked the optical POS: nothing new, the books are up to date.',
+            }
+        );
     }
 
     public function exceptions(Request $request): Response
@@ -149,7 +169,7 @@ class OpticalSyncController extends Controller
         );
     }
 
-    public function rules(OpticalApiClient $api): Response
+    public function rules(OpticalSource $source): Response
     {
         $all = PostingRule::query()
             ->with(['debitAccount:id,code,name', 'creditAccount:id,code,name'])
@@ -187,7 +207,7 @@ class OpticalSyncController extends Controller
         return Inertia::render('integration/optical/rules/page', [
             'rules' => $rules,
             'accounts' => $accounts,
-            'services' => $this->serviceRevenueRows($api, $serviceRules->values()),
+            'services' => $this->serviceRevenueRows($source, $serviceRules->values()),
             'revenueAccounts' => Account::query()
                 ->where('is_active', true)
                 ->where('is_postable', true)
@@ -271,19 +291,19 @@ class OpticalSyncController extends Controller
      * @param  Collection<int, PostingRule>  $serviceRules
      * @return list<array<string, mixed>>
      */
-    protected function serviceRevenueRows(OpticalApiClient $api, Collection $serviceRules): array
+    protected function serviceRevenueRows(OpticalSource $source, Collection $serviceRules): array
     {
         $byService = $serviceRules->keyBy(fn (PostingRule $rule) => (int) ($rule->condition['optical_service_id'] ?? substr($rule->event, strlen(PostingRule::SERVICE_EVENT_PREFIX))));
 
         $services = [];
         try {
-            if ($api->isConfigured()) {
-                foreach ($api->get('services')['data'] ?? [] as $service) {
+            if ($source->isConfigured()) {
+                foreach ($source->services() as $service) {
                     $services[(int) $service['id']] = ['name' => (string) $service['name'], 'billed_by' => $service['billed_by'] ?? null, 'is_active' => (bool) ($service['is_active'] ?? true)];
                 }
             }
         } catch (\Throwable) {
-            // The optical POS is unreachable: list the services that already have a rule.
+            // The optical POS's database can't be read: list the services that already have a rule.
         }
         foreach ($byService as $id => $rule) {
             $services[$id] ??= ['name' => (string) ($rule->condition['service_name'] ?? $rule->name), 'billed_by' => null, 'is_active' => true];

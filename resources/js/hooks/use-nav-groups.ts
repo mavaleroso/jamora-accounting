@@ -60,8 +60,8 @@ const billingNavItems: NavItem[] = [
 
 const inventoryNavItems: NavItem[] = [
     { title: 'Inventory Movements', href: '/integration/inventory', icon: Package },
-    { title: 'Optical Sync', href: '/integration/optical', icon: Link2 },
-    { title: 'Sync Rules', href: '/integration/optical/rules', icon: ListTree },
+    { title: 'Optical POS', href: '/integration/optical', icon: Link2 },
+    { title: 'Posting Rules', href: '/integration/optical/rules', icon: ListTree },
 ];
 
 const apNavItems: NavItem[] = [{ title: 'Bills & Payables', href: '/ap/bills', icon: CreditCard }];

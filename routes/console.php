@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Entity;
+use App\Services\DueTasks;
 use App\Services\People\AttendanceCalculator;
 use App\Services\People\ComplianceCalendar;
 use App\Support\PrivateFiles;
@@ -53,7 +54,22 @@ Artisan::command('uploads:make-private', function () {
     $this->line("Moved {$moved} file(s) to private storage.");
 })->purpose('Move leave attachments and compliance evidence uploaded before the switch off the public disk');
 
-Schedule::command('accounting:sync-optical')->hourly()->withoutOverlapping();
-// Payroll relies on these rows: without them absences go undeducted and unworked holidays unpaid.
-Schedule::command('attendance:close-day')->dailyAt('01:00')->withoutOverlapping();
-Schedule::command('compliance:generate')->monthlyOn(1, '06:00');
+Artisan::command('housekeeping:run', function (DueTasks $tasks) {
+    $done = $tasks->run(force: true, budgetSeconds: 300);
+    if ($done === null) {
+        $this->line('Already being done elsewhere.');
+
+        return 0;
+    }
+
+    $this->line($done['days_closed'] === [] ? 'Attendance: no finished day left to close.' : 'Attendance closed for '.implode(', ', $done['days_closed']).'.');
+    $this->line($done['compliance_created'] === null ? 'Compliance: checked earlier today.' : "Compliance: {$done['compliance_created']} item(s) created.");
+
+    return 0;
+})->purpose('Do the housekeeping that is due: close finished attendance days (payroll relies on them) and keep the compliance calendar current');
+
+// None of this needs a scheduler: page visits do it (KeepOpticalCurrent, RunDueTasks). Where one can run
+// ("* * * * * php artisan schedule:run"), it does the same work on time even when nobody visits.
+Schedule::command('accounting:sync-optical --auto')->everyMinute()->withoutOverlapping();
+// Payroll relies on the closed days: without them absences go undeducted and unworked holidays unpaid.
+Schedule::command('housekeeping:run')->everyTenMinutes()->withoutOverlapping();

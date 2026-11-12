@@ -6,19 +6,18 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\InventoryMovement;
 use App\Models\JournalEntryLine;
-use App\Services\Optical\OpticalApiClient;
+use App\Services\Optical\OpticalStock;
 use App\Support\EntityContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
 /**
  * Inventory as seen from accounting. Stock lives in the optical POS (the single source of truth); this screen shows
- * the stock events the optical sync booked, low-stock alerts read from the optical API, and whether the optical
- * stock value agrees with the Inventory ledger account.
+ * the stock events booked from it, stock on hand and low-stock alerts read live from the POS's database, and whether
+ * the POS's stock value agrees with the Inventory ledger account.
  */
 class InventoryIntegrationController extends Controller
 {
@@ -29,7 +28,7 @@ class InventoryIntegrationController extends Controller
         'return' => 'Returned to supplier',
     ];
 
-    public function index(Request $request, EntityContext $entityContext, OpticalApiClient $api): Response
+    public function index(Request $request, EntityContext $entityContext, OpticalStock $opticalStock): Response
     {
         $entity = $entityContext->current();
         $filters = [
@@ -76,7 +75,7 @@ class InventoryIntegrationController extends Controller
             ]);
 
         $isStockEntity = $entity?->code === config('optical.product_entity');
-        [$stock, $stockError] = $isStockEntity ? $this->stockSummary($api, $request->boolean('refresh')) : [null, null];
+        [$stock, $stockError] = $isStockEntity ? $this->stockSummary($opticalStock, $request->boolean('refresh')) : [null, null];
         $ledgerValue = $this->inventoryLedgerBalance();
 
         return Inertia::render('integration/inventory/page', [
@@ -122,22 +121,18 @@ class InventoryIntegrationController extends Controller
     }
 
     /**
-     * Stock on hand and its value from the optical API, cached for ten minutes.
+     * Stock on hand and its value, read from the optical POS's database.
      *
      * @return array{0: array<string, mixed>|null, 1: string|null}
      */
-    protected function stockSummary(OpticalApiClient $api, bool $refresh): array
+    protected function stockSummary(OpticalStock $stock, bool $refresh): array
     {
-        if (! $api->isConfigured()) {
-            return [null, 'The optical API is not configured.'];
-        }
-
-        if ($refresh) {
-            Cache::forget('optical.stock-summary');
+        if (! $stock->isConfigured()) {
+            return [null, 'The optical POS database is not configured.'];
         }
 
         try {
-            return [Cache::remember('optical.stock-summary', 600, fn () => [...$api->stockSummary(), 'read_at' => now()->toIso8601String()]), null];
+            return [$stock->summary($refresh), null];
         } catch (\Throwable $e) {
             report($e);
 

@@ -29,7 +29,7 @@ import AppLayout from '@/layouts/app-layout';
 import type { AccountOption, BreadcrumbItem, PostingRule } from '@/types';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Optical Sync', href: '/integration/optical' },
+    { title: 'Optical POS', href: '/integration/optical' },
     { title: 'Posting Rules', href: '/integration/optical/rules' },
 ];
 
@@ -64,7 +64,7 @@ function ServiceRevenue({ services, revenueAccounts, generalAccount }: { service
             if (!service.rule) return;
             const ok = await confirm({
                 title: `Post ${service.name} to the general service revenue?`,
-                description: `Its sales synced from now on credit ${generalAccount}. Entries already posted are not changed.`,
+                description: `Its sales booked from now on credit ${generalAccount}. Entries already posted are not changed.`,
                 confirmLabel: 'Use general account',
             });
             if (!ok) return;
@@ -76,7 +76,7 @@ function ServiceRevenue({ services, revenueAccounts, generalAccount }: { service
         const account = revenueAccounts.find((a) => String(a.id) === value);
         const ok = await confirm({
             title: `Post ${service.name} to its own revenue account?`,
-            description: `Its sales synced from now on credit ${account ? `${account.code} — ${account.name}` : 'the chosen account'}. Entries already posted are not changed.`,
+            description: `Its sales booked from now on credit ${account ? `${account.code} — ${account.name}` : 'the chosen account'}. Entries already posted are not changed.`,
             confirmLabel: 'Save',
         });
         if (!ok) return;
@@ -160,7 +160,7 @@ export default function OpticalRulesPage({ rules, accounts, services, revenueAcc
         if (!selectedRule) return;
         const ok = await confirm({
             title: `Save the ${selectedRule.name} rule?`,
-            description: 'Documents synced from now on post with these accounts. Entries already posted are not changed.',
+            description: 'Documents booked from now on post with these accounts. Entries already posted are not changed.',
             confirmLabel: 'Save rule',
         });
         if (!ok) return;
@@ -238,10 +238,10 @@ export default function OpticalRulesPage({ rules, accounts, services, revenueAcc
             <div className="flex flex-col gap-6 p-4">
                 <Heading
                     title="Posting Rules"
-                    description="The accounts this entity's optical sync posts to: deposits, sales, discounts, VAT, related-entity settlements, cost of goods sold and stock events."
+                    description="The accounts this entity's optical POS documents post to: deposits, sales, discounts, VAT, related-entity settlements, cost of goods sold and stock events."
                 />
 
-                <DataTable title="Optical Posting Rules" description="These rules map sync events to chart-of-accounts entries." columns={columns} data={rules} emptyTitle="No posting rules yet" />
+                <DataTable title="Optical Posting Rules" description="These rules map optical POS events to chart-of-accounts entries." columns={columns} data={rules} emptyTitle="No posting rules yet" />
 
                 <ServiceRevenue
                     services={services}

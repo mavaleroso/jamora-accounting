@@ -2,13 +2,13 @@
 
 use App\Models\Entity;
 use App\Models\User;
+use App\Services\Optical\OpticalSource;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use Database\Seeders\AccountingSetupSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
-use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Permission;
+use Tests\Support\FakeOpticalSource;
 
 uses(RefreshDatabase::class);
 
@@ -18,7 +18,7 @@ beforeEach(function () {
     }
     $this->seed(AccountingSetupSeeder::class);
     app(EntityContext::class)->clear();
-    config(['optical.api.base_url' => 'http://optical.test', 'optical.api.token' => 'secret-token', 'optical.start_date' => null]);
+    config(['optical.start_date' => null]);
 
     $today = now('Asia/Manila')->toDateString();
     $order = [
@@ -36,15 +36,10 @@ beforeEach(function () {
         ['id' => 2, 'order_id' => 501, 'amount' => '500.00', 'payment_type' => 'e_wallet', 'payment_method' => 'GCash', 'reference_number' => 'GC-9', 'paid_date' => $today, 'status' => 'paid', 'deleted_at' => null, 'updated_at' => now()->toIso8601String(), 'order' => $order],
     ];
 
-    Http::fake(function (Request $request) use ($order, $payments) {
-        $path = trim(str_replace('http://optical.test/api/v1/accounting/', '', strtok($request->url(), '?')), '/');
-
-        return Http::response(['data' => match ($path) {
-            'orders' => [$order],
-            'payments' => $payments,
-            default => [],
-        }, 'meta' => ['last_page' => 1]]);
-    });
+    $pos = new FakeOpticalSource;
+    $pos['orders'] = [$order];
+    $pos['payments'] = $payments;
+    app()->instance(OpticalSource::class, $pos);
     app(OpticalSyncService::class)->run();
 
     $permissions = ['reports.daily-sales.view', 'reports.vat-summary.view', 'reports.income-statement.view', 'reports.ar-aging.view', 'reports.export'];

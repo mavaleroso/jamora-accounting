@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Services\Optical\OpticalDatabase;
+use App\Services\Optical\OpticalSource;
 use App\Support\Audit\AuditLogger;
 use App\Support\EntityContext;
 use App\Support\SystemSettings;
@@ -30,6 +32,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(AuditLogger::class);
         $this->app->scoped(SystemSettings::class);
         $this->app->scoped(ViewMode::class);
+        // The optical POS is read straight from its database.
+        $this->app->scoped(OpticalSource::class, OpticalDatabase::class);
     }
 
     /**

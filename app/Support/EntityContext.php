@@ -65,6 +65,29 @@ class EntityContext
         }
     }
 
+    /**
+     * Run the callback with no entity selected (as a scheduled command does), then restore whichever was current.
+     * The user's session choice is not touched.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    public function runWithout(callable $callback): mixed
+    {
+        [$previous, $wasResolved] = [$this->entity, $this->resolved];
+        $this->entity = null;
+        $this->resolved = true;
+
+        try {
+            return $callback();
+        } finally {
+            $this->entity = $previous;
+            $this->resolved = $wasResolved;
+        }
+    }
+
     public function setId(?int $entityId): void
     {
         if ($entityId === null) {

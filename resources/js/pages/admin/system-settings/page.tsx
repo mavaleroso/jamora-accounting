@@ -399,7 +399,8 @@ function AccountingCard({ accounting, lastChange }: { accounting: AccountingSett
                     </CardTitle>
                     <CardDescription>
                         Whether postings from source documents (invoices, collections, deposits, bills and payments, cash and bank records, fund
-                        transfers and the optical sync) are reviewed and approved before they reach the ledger. Manual journals always are.
+                        transfers and what is booked from the optical POS) are reviewed and approved before they reach the ledger. Manual journals
+                        always are.
                     </CardDescription>
                 </CardHeader>
 

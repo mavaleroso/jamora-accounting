@@ -75,7 +75,7 @@ class PurgeLegacyOpticalSyncCommand extends Command
                 ->delete();
         });
 
-        $this->info('Legacy optical sync data removed. Run accounting:sync-optical to book through the API.');
+        $this->info('Legacy optical sync data removed. Run accounting:sync-optical to book from the optical POS database.');
 
         return self::SUCCESS;
     }

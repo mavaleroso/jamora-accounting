@@ -27,8 +27,10 @@ return Application::configure(basePath: dirname(__DIR__))
             \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
             HandleAppearance::class,
             \App\Http\Middleware\SetCurrentEntity::class,
+            \App\Http\Middleware\KeepOpticalCurrent::class,
             HandleInertiaRequests::class,
             \App\Http\Middleware\AuditTrailMiddleware::class,
+            \App\Http\Middleware\RunDueTasks::class,
             AddLinkHeadersForPreloadedAssets::class,
         ]);
 

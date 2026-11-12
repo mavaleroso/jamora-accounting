@@ -15,6 +15,14 @@
 return [
 
     /*
+    | Housekeeping a scheduler would do (closing finished attendance days, the compliance calendar) is done after
+    | page visits instead, so no scheduler is needed (shared hosting). It is checked at most this often, in seconds.
+    | Where a scheduler runs, "housekeeping:run" does the same; visits may then be switched off.
+    */
+    'due_tasks_on_visits' => (bool) env('DUE_TASKS_ON_VISITS', true),
+    'due_tasks_check_seconds' => (int) env('DUE_TASKS_CHECK_SECONDS', 600),
+
+    /*
     | Schedule used when an employee has no published roster for the day and
     | no default shift template assigned.
     */

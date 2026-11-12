@@ -13,11 +13,14 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { AlertTriangleIcon, CheckCircle2Icon, ClipboardCheckIcon, PlayIcon, RefreshCwIcon, XCircleIcon } from 'lucide-react';
 import * as React from 'react';
 
-const breadcrumbs: BreadcrumbItem[] = [{ title: 'Optical Sync', href: '/integration/optical' }];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'Optical POS', href: '/integration/optical' }];
 
 type Settings = {
     configured: boolean;
-    base_url: string | null;
+    source: string | null;
+    problem: string | null;
+    auto_refresh_seconds: number;
+    scheduler_running: boolean;
     start_date: string | null;
     product_entity: string | null;
     workshop_entity: string | null;
@@ -54,7 +57,7 @@ function formatDateTime(value: string | null | undefined): string {
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
     if (status === 'completed') return 'default';
-    if (status === 'running' || status === 'queued') return 'secondary';
+    if (status === 'running') return 'secondary';
     if (status === 'failed' || status === 'completed_with_errors') return 'destructive';
     return 'outline';
 }
@@ -77,7 +80,7 @@ const columns: ColumnDef<SyncRun>[] = [
     {
         accessorKey: 'triggered_by',
         header: ({ column }) => <DataTableColumnHeader column={column} title="Triggered By" />,
-        cell: ({ row }) => row.original.triggered_by ?? 'Scheduler',
+        cell: ({ row }) => row.original.triggered_by ?? 'Automatic',
     },
     {
         accessorKey: 'message',
@@ -90,9 +93,9 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
     const [full, setFull] = React.useState(false);
     const [syncing, setSyncing] = React.useState(false);
     const confirm = useConfirm();
-    const active = lastRun?.status === 'queued' || lastRun?.status === 'running';
+    const active = lastRun?.status === 'running';
 
-    // The sync runs on the queue: follow it until it finishes.
+    // A long check (re-reading everything) is followed until it finishes.
     React.useEffect(() => {
         if (!active) return;
         const timer = window.setInterval(() => router.reload({ only: ['runs', 'lastRun', 'failedCount', 'reviewCount', 'cursors'] }), 5000);
@@ -101,11 +104,11 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
 
     const handleSync = async () => {
         const ok = await confirm({
-            title: full ? 'Re-read everything from the optical POS?' : 'Run the optical sync?',
+            title: full ? 'Re-read everything from the optical POS?' : 'Check the optical POS now?',
             description: full
                 ? 'Every stream is read again from the start. Documents already booked and unchanged are skipped, so nothing is booked twice — but it takes longer.'
-                : 'New and changed payments, orders and stock events since the last sync are booked to each entity’s books.',
-            confirmLabel: 'Run sync',
+                : 'This already happens on its own. Checking now books any payment, order or stock event that changed in the POS since the last check, right away.',
+            confirmLabel: full ? 'Re-read everything' : 'Check now',
         });
         if (!ok) return;
         setSyncing(true);
@@ -114,13 +117,13 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Optical Sync" />
+            <Head title="Optical POS" />
 
             <div className="flex flex-col gap-6 p-4">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <Heading
-                        title="Optical Sync"
-                        description="Payments, completed orders and stock events from the optical POS, booked through its accounting API."
+                        title="Optical POS"
+                        description="Read live from the optical POS's database. Payments, completed orders and stock events are booked on their own as they appear there."
                     />
                     <div className="flex flex-wrap gap-2">
                         {reviewCount > 0 && (
@@ -145,10 +148,15 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                 <div className="grid gap-4 lg:grid-cols-2">
                     <Card>
                         <CardHeader>
-                            <CardTitle>Run sync</CardTitle>
+                            <CardTitle>Always up to date</CardTitle>
                             <CardDescription>
-                                Runs hourly on its own. Last run:{' '}
-                                {lastRun ? `${lastRun.status.replaceAll('_', ' ')} at ${formatDateTime(lastRun.started_at)}` : 'never'}
+                                {settings.scheduler_running
+                                    ? 'Nothing needs starting: the scheduler checks the POS every minute.'
+                                    : settings.auto_refresh_seconds > 0
+                                      ? 'Nothing needs starting: whenever someone opens a page, what changed in the POS is booked first.'
+                                      : 'Automatic checks are off (OPTICAL_AUTO_REFRESH_SECONDS=0): use Check now.'}{' '}
+                                Last booking:{' '}
+                                {lastRun ? `${lastRun.status.replaceAll('_', ' ')} at ${formatDateTime(lastRun.started_at)}` : 'none yet'}
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="flex flex-col gap-4">
@@ -163,13 +171,15 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                             </label>
                             <Button onClick={handleSync} disabled={syncing || active || !settings.configured} className="self-start">
                                 {syncing || active ? <RefreshCwIcon className="size-4 animate-spin" /> : <PlayIcon className="size-4" />}
-                                {active ? (lastRun?.status === 'queued' ? 'Waiting for the queue…' : 'Syncing…') : 'Sync now'}
+                                {active ? 'Checking…' : syncing ? 'Checking…' : 'Check now'}
                             </Button>
                             {!settings.configured && (
                                 <p className="text-destructive text-sm">
-                                    Set OPTICAL_API_BASE_URL and OPTICAL_API_TOKEN to connect to the optical POS.
+                                    Set OPTICAL_DB_DATABASE (with OPTICAL_DB_HOST, OPTICAL_DB_USERNAME and OPTICAL_DB_PASSWORD) to connect to the
+                                    optical POS&apos;s database.
                                 </p>
                             )}
+                            {settings.configured && settings.problem && <p className="text-destructive text-sm">{settings.problem}</p>}
                         </CardContent>
                     </Card>
 
@@ -180,18 +190,20 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                         </CardHeader>
                         <CardContent className="grid gap-2 text-sm">
                             <Row
-                                label="Optical API"
+                                label="Optical POS database"
                                 value={
                                     <span className="flex items-center gap-1.5">
-                                        {settings.configured ? (
+                                        {settings.configured && !settings.problem ? (
                                             <CheckCircle2Icon className="size-4 text-emerald-600" />
                                         ) : (
                                             <XCircleIcon className="text-destructive size-4" />
                                         )}
-                                        <span className="font-mono text-xs">{settings.base_url ?? 'not set'}</span>
+                                        <span className="font-mono text-xs">{settings.source ?? 'not set'}</span>
                                     </span>
                                 }
                             />
+                            <Row label="Access" value="Read-only — accounting never changes the POS" />
+                            <Row label="Stock, services and passwords" value="Read live, never copied" />
                             <Row
                                 label="Go-live date"
                                 value={
@@ -220,7 +232,7 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                 <Card>
                     <CardHeader>
                         <CardTitle>Streams</CardTitle>
-                        <CardDescription>Each stream continues from the newest change it has read.</CardDescription>
+                        <CardDescription>What is booked from the POS. Each continues from the newest change it has read.</CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {streams.map((s) => (
@@ -233,12 +245,12 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
                 </Card>
 
                 <DataTable
-                    title="Sync history"
-                    description="Manual runs and the hourly schedule."
+                    title="Booking history"
+                    description="Checks that booked or failed something. Checks that found nothing new are not listed."
                     columns={columns}
                     data={runs}
                     initialSorting={[{ id: 'started_at', desc: true }]}
-                    emptyTitle="No sync runs yet"
+                    emptyTitle="Nothing booked from the POS yet"
                 />
             </div>
         </AppLayout>

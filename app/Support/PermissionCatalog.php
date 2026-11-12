@@ -20,7 +20,7 @@ class PermissionCatalog
         'billing' => ['Billing & Collections', 'Invoices, receipts and customer deposits.', ['billing']],
         'payables' => ['Payables', 'Supplier bills and payments.', ['ap']],
         'banking' => ['Banking', 'Bank accounts, transactions and reconciliation.', ['banks']],
-        'integration' => ['Optical Integration', 'Sync with the optical clinic system.', ['integration']],
+        'integration' => ['Optical Integration', 'What is booked from the optical POS, read from its database.', ['integration']],
         'people' => ['Employee Management', 'Shifts and roster, time and attendance, leave and employees’ requests, performance reviews, and the employee portal.', ['roster', 'attendance', 'leave', 'requests', 'evaluations', 'portal']],
         'payroll' => ['Payroll', 'Pay periods, payroll runs, adjustments, benefit programs and the release of pay.', ['payroll']],
         'compliance' => ['Compliance', 'Statutory filing calendar: BIR, SSS, PhilHealth, Pag-IBIG, DOLE and LGU.', ['compliance']],
@@ -70,9 +70,9 @@ class PermissionCatalog
         'banks.manage' => ['Manage bank accounts', 'Create bank accounts and record transactions.'],
         'banks.reconcile' => ['Reconcile banks', 'Perform bank reconciliations.'],
 
-        'integration.optical.view' => ['View optical sync', 'See synced documents and sync runs.'],
-        'integration.optical.sync' => ['Run optical sync', 'Pull and post documents from the optical system.'],
-        'integration.optical.rules-manage' => ['Manage sync rules', 'Edit how optical documents map to accounts.'],
+        'integration.optical.view' => ['View optical POS bookings', 'See what was booked from the optical POS and when.'],
+        'integration.optical.sync' => ['Check the optical POS now', 'Book what changed in the optical POS right away, and retry documents that failed.'],
+        'integration.optical.rules-manage' => ['Manage posting rules', 'Edit how optical documents map to accounts.'],
 
         'roster.view' => ['View rosters', 'See the weekly roster (staff without roster management see only their own schedule).'],
         'roster.manage' => ['Manage rosters', 'Set and publish shifts and rest days for the week, and copy last week’s roster.'],
