@@ -14,6 +14,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import {
     ATTENDANCE_URL,
+    companyDot,
     fmtDate,
     fmtHours,
     fmtTime,
@@ -22,6 +23,7 @@ import {
     toTimeInput,
     type AttendanceRequestRow,
     type BranchLocation,
+    type Company,
     type DtrRow,
     type Person,
 } from '../lib';
@@ -589,40 +591,107 @@ function DailyCloseForm({ today, onDone }: { today: string; onDone: () => void }
  * Geofence settings (timekeeper)
  * -------------------------------------------------------------------------------------------- */
 
-export function GeofenceDialog({ open, onOpenChange, branch }: Open & { branch: BranchLocation }) {
+export function GeofenceDialog({
+    open,
+    onOpenChange,
+    branch,
+    branches = [],
+    companies = [],
+}: Open & { branch: BranchLocation; branches?: BranchLocation[]; companies?: Company[] }) {
     return (
         <Shell open={open} onOpenChange={onOpenChange}>
-            <GeofenceForm branch={branch} onDone={() => onOpenChange(false)} />
+            <GeofenceForm branch={branch} branches={branches} companies={companies} onDone={() => onOpenChange(false)} />
         </Shell>
     );
 }
 
-function GeofenceForm({ branch, onDone }: { branch: BranchLocation; onDone: () => void }) {
-    const geo = useGeofence({ ...branch, geofence_enforced: true });
+function GeofenceForm({
+    branch,
+    branches,
+    companies,
+    onDone,
+}: {
+    branch: BranchLocation;
+    branches: BranchLocation[];
+    companies: Company[];
+    onDone: () => void;
+}) {
+    const list = branches.length > 0 ? branches : [branch];
+    const [selectedId, setSelectedId] = React.useState<number | undefined>(() => branch.id ?? list[0]?.id);
+    const active = list.find((b) => b.id === selectedId) ?? branch;
+
+    const geo = useGeofence({ ...active, geofence_enforced: true });
     const form = useForm({
-        latitude: String(branch.latitude),
-        longitude: String(branch.longitude),
-        geofence_radius: String(branch.geofence_radius),
+        entity_id: active.id ?? null,
+        latitude: String(active.latitude),
+        longitude: String(active.longitude),
+        geofence_radius: String(active.geofence_radius),
         // The branch's own setting; the system-wide switch can override it.
-        geofence_enforced: branch.branch_geofence_enforced ?? branch.geofence_enforced,
+        geofence_enforced: active.branch_geofence_enforced ?? active.geofence_enforced,
     });
     const { data, setData, errors } = form;
+
+    const selectBranch = (id: number) => {
+        setSelectedId(id);
+        const next = list.find((b) => b.id === id);
+        if (next) {
+            setData({
+                entity_id: next.id ?? null,
+                latitude: String(next.latitude),
+                longitude: String(next.longitude),
+                geofence_radius: String(next.geofence_radius),
+                geofence_enforced: next.branch_geofence_enforced ?? next.geofence_enforced,
+            });
+        }
+    };
 
     return (
         <form
             className="space-y-4"
             onSubmit={(e) => {
                 e.preventDefault();
-                form.transform((d) => ({ ...d, latitude: Number(d.latitude), longitude: Number(d.longitude), geofence_radius: Number(d.geofence_radius) }));
+                form.transform((d) => ({
+                    ...d,
+                    entity_id: d.entity_id ? Number(d.entity_id) : null,
+                    latitude: Number(d.latitude),
+                    longitude: Number(d.longitude),
+                    geofence_radius: Number(d.geofence_radius),
+                }));
                 form.post(`${ATTENDANCE_URL}/geofence`, { preserveScroll: true, onSuccess: onDone });
             }}
         >
             <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
-                    <MapPin className="size-5" /> Branch location & geofence
+                    <MapPin className="size-5" /> Company location & geofence
                 </DialogTitle>
-                <DialogDescription>{branch.name} — employees can only clock in within this radius.</DialogDescription>
+                <DialogDescription>{active.name} — employees of this company can only clock in within its allowed radius.</DialogDescription>
             </DialogHeader>
+
+            {list.length > 1 && (
+                <Field label="Company">
+                    <Select value={String(active.id ?? '')} onValueChange={(v) => selectBranch(Number(v))}>
+                        <SelectTrigger aria-label="Company">
+                            <SelectValue placeholder="Select company" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {list.map((b) => {
+                                const enforced = b.branch_geofence_enforced ?? b.geofence_enforced;
+                                return (
+                                    <SelectItem key={b.id} value={String(b.id)}>
+                                        <span className="inline-flex items-center gap-2">
+                                            <span className={cn('size-2 shrink-0 rounded-full', companyDot(companies, b.id))} aria-hidden />
+                                            <span>{b.name}</span>
+                                            <span className="text-muted-foreground text-xs">
+                                                · {enforced ? `${b.geofence_radius}m radius` : 'off'}
+                                            </span>
+                                        </span>
+                                    </SelectItem>
+                                );
+                            })}
+                        </SelectContent>
+                    </Select>
+                </Field>
+            )}
 
             <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/40 p-3">
                 <div className="min-w-0 text-xs">
@@ -659,14 +728,14 @@ function GeofenceForm({ branch, onDone }: { branch: BranchLocation; onDone: () =
             </Field>
             <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
                 <div>
-                    <Label className="text-sm font-medium">Enforce geofence</Label>
+                    <Label className="text-sm font-medium">Enforce geofence for {active.name}</Label>
                     <p className="text-xs text-muted-foreground">When off, punches still record location but are never blocked.</p>
                 </div>
                 <Switch checked={data.geofence_enforced} onCheckedChange={(v) => setData('geofence_enforced', v)} />
             </div>
-            {branch.geofence_system_enabled === false && (
+            {active.geofence_system_enabled === false && (
                 <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                    Geofencing is turned off for the whole system (ATTENDANCE_GEOFENCE_ENABLED=false), so no one is blocked from clocking in. This branch setting
+                    Geofencing is turned off for the whole system (ATTENDANCE_GEOFENCE_ENABLED=false), so no one is blocked from clocking in. This company setting
                     applies once it is turned back on.
                 </p>
             )}

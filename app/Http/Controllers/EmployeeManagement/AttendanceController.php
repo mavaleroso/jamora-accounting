@@ -90,7 +90,7 @@ class AttendanceController extends Controller
 
         $today = Carbon::today();
         $companies = $user
-            ? $user->directoryEntities()->orderBy('name')->get(['entities.id', 'entities.code', 'entities.name'])
+            ? $user->directoryEntities()->orderBy('name')->get(['entities.id', 'entities.code', 'entities.name', 'entities.latitude', 'entities.longitude', 'entities.geofence_radius', 'entities.geofence_enforced'])
             : collect();
         $companyIds = $companies->pluck('id')->all();
 
@@ -242,22 +242,29 @@ class AttendanceController extends Controller
                 'cancelled' => (int) ($requestCounts['cancelled'] ?? 0),
             ],
             'employees' => $employees,
-            'companies' => $companies->values()->all(),
+            'companies' => $companies->map(fn (Entity $c) => $c->only(['id', 'code', 'name']))->values()->all(),
+            'branchLocations' => $companies->map(fn (Entity $c) => $this->branchLocation($c))->values()->all(),
             // Built only for the view that shows them; the board refreshes itself via a partial reload.
             'board' => $canViewTeam && $view === 'today' ? $this->todayBoard($companyIds) : null,
             'myDay' => $self && $view === 'clock' ? $this->myDay($self) : null,
             'accomplishments' => $self && $view === 'accomplishments'
                 ? $this->myAccomplishments($self, $dateFrom, $dateTo, $this->currentCutoff($periods, $today), $today)
                 : null,
-            'branchLocation' => $this->branchLocation($entityContext->current()),
+            // The employee's own company geofence when clocking in; otherwise the current branch.
+            'branchLocation' => $this->branchLocation(($self?->entity_id ? $companies->firstWhere('id', $self->entity_id) ?? Entity::find($self->entity_id) : null) ?? $entityContext->current()),
             'today' => $today->toDateString(),
         ]);
     }
 
     public function recordPunch(Request $request, EntityContext $entityContext): RedirectResponse
     {
+        $user = $request->user();
+        $isManager = $this->employeeResolver->isHr($user, 'attendance.manage');
         $employee = Employee::withoutEntityScope()->find($request->input('employee_id'));
-        $entityId = $entityContext->id() ?? $employee?->entity_id;
+        if (! $isManager) {
+            $employee = $this->employeeResolver->forUser($user, $entityContext->id()) ?? $employee;
+        }
+        $entityId = $employee?->entity_id ?? $entityContext->id();
         $currentEntity = $entityId ? Entity::find($entityId) : null;
         if (! $currentEntity && $entityContext->current()) {
             $currentEntity = $entityContext->current();
@@ -270,9 +277,6 @@ class AttendanceController extends Controller
         $geofenceEnforced = $currentEntity
             ? $currentEntity->geofenceEnforced()
             : (bool) config('attendance.geofence_enabled', true);
-
-        $user = $request->user();
-        $isManager = $this->employeeResolver->isHr($user, 'attendance.manage');
 
         // Web Direct Punch with Coordinates (Check-in, Break-out, Break-in, Check-out)
         if ($request->has('punch_type')) {
@@ -298,6 +302,18 @@ class AttendanceController extends Controller
                 $validated['employee_id'] = $currentUserEmployee->id;
                 // Employees always punch "now"; only timekeepers may back-date.
                 $validated['punch_time'] = null;
+            } else {
+                $targetEmployee = Employee::withoutEntityScope()->find($validated['employee_id']);
+                if ($targetEmployee && $targetEmployee->entity_id !== $currentEntity?->id) {
+                    $entityId = $targetEmployee->entity_id;
+                    $currentEntity = Entity::find($entityId) ?? $currentEntity;
+                    $branchLat = $currentEntity && $currentEntity->latitude !== null ? (float) $currentEntity->latitude : 14.5547;
+                    $branchLon = $currentEntity && $currentEntity->longitude !== null ? (float) $currentEntity->longitude : 121.0244;
+                    $geofenceRadius = (int) ($currentEntity?->geofence_radius ?? 250);
+                    $geofenceEnforced = $currentEntity
+                        ? $currentEntity->geofenceEnforced()
+                        : (bool) config('attendance.geofence_enabled', true);
+                }
             }
 
             $lat = isset($validated['latitude']) ? (float) $validated['latitude'] : null;
@@ -342,7 +358,9 @@ class AttendanceController extends Controller
                 default => $validated['punch_type'],
             };
 
-            $dtr = DtrEntry::where('employee_id', $validated['employee_id'])
+            $dtr = DtrEntry::query()
+                ->withoutEntityScope()
+                ->where('employee_id', $validated['employee_id'])
                 ->whereDate('work_date', $workDate)
                 ->first();
 
@@ -429,7 +447,7 @@ class AttendanceController extends Controller
             }
 
             // Centralized calculation with shift roster schedules
-            $employee = Employee::findOrFail($validated['employee_id']);
+            $employee = Employee::withoutEntityScope()->findOrFail($validated['employee_id']);
             $this->attendanceCalculator->compute($dtr, $employee)->save();
 
             // Breaks are never refused, but one taken off the preset time can leave the branch short: say so.
@@ -513,18 +531,30 @@ class AttendanceController extends Controller
     public function updateGeofence(Request $request, EntityContext $entityContext): RedirectResponse
     {
         $validated = $request->validate([
+            'entity_id' => ['nullable', 'integer', 'exists:entities,id'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
             'geofence_radius' => ['required', 'integer', 'min:20', 'max:5000'],
             'geofence_enforced' => ['required', 'boolean'],
         ]);
 
-        $entity = $entityContext->current();
-        if ($entity) {
-            $entity->update($validated);
+        $user = $request->user();
+        $entity = ! empty($validated['entity_id'])
+            ? $user?->directoryEntities()->find($validated['entity_id'])
+            : $entityContext->current();
+
+        if (! $entity) {
+            throw ValidationException::withMessages(['entity_id' => 'Choose a company you have access to.']);
         }
 
-        return redirect()->back()->with('status', 'Branch GPS geofence configuration updated successfully.');
+        $entity->update([
+            'latitude' => $validated['latitude'],
+            'longitude' => $validated['longitude'],
+            'geofence_radius' => $validated['geofence_radius'],
+            'geofence_enforced' => $validated['geofence_enforced'],
+        ]);
+
+        return redirect()->back()->with('status', "Geofence configuration updated for {$entity->name}.");
     }
 
     public function verifyPunch(Request $request, DtrEntry $dtr): RedirectResponse
@@ -895,6 +925,7 @@ class AttendanceController extends Controller
     {
         return [
             'id' => $entity?->id,
+            'code' => $entity?->code,
             'name' => $entity?->name ?? 'Main Clinic Branch',
             'latitude' => $entity?->latitude !== null ? (float) $entity->latitude : 14.5547,
             'longitude' => $entity?->longitude !== null ? (float) $entity->longitude : 121.0244,

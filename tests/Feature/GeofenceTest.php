@@ -65,3 +65,48 @@ test('with geofencing on but switched off for the branch, nobody is blocked', fu
 
     ($this->punch)()->assertSessionHasNoErrors();
 });
+
+test('a timekeeper can configure the geofence for every accessible company, and each company enforces its own geofence', function () {
+    config(['attendance.geofence_enabled' => true]);
+    Permission::findOrCreate('attendance.manage', 'web');
+
+    $otherEntity = Entity::create([
+        'code' => 'JAM_OPTICUS',
+        'name' => 'JAM Opticus',
+        'is_active' => true,
+        'latitude' => 8.9475,
+        'longitude' => 125.5406,
+        'geofence_radius' => 150,
+        'geofence_enforced' => true,
+    ]);
+
+    $hr = User::factory()->create();
+    $hr->givePermissionTo(['attendance.view', 'attendance.manage']);
+    $hr->entities()->attach([$this->entity->id => ['is_default' => true], $otherEntity->id => ['is_default' => false]]);
+
+    // Timekeeper sees geofence configurations for both companies
+    $this->actingAs($hr)->withSession(['current_entity_id' => $this->entity->id])
+        ->get('/employee-management/attendance')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('branchLocations', 2)
+            ->where('branchLocations', fn ($locations) => collect($locations)->pluck('id')->sort()->values()->all() === [$this->entity->id, $otherEntity->id]));
+
+    // Timekeeper updates JAM Opticus's geofence while Geo Clinic is the current branch
+    $this->actingAs($hr)->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/geofence', [
+            'entity_id' => $otherEntity->id,
+            'latitude' => 8.9500,
+            'longitude' => 125.5450,
+            'geofence_radius' => 300,
+            'geofence_enforced' => false,
+        ])
+        ->assertSessionHasNoErrors();
+
+    $otherEntity->refresh();
+    expect((float) $otherEntity->latitude)->toBe(8.95)
+        ->and((float) $otherEntity->longitude)->toBe(125.545)
+        ->and($otherEntity->geofence_radius)->toBe(300)
+        ->and($otherEntity->geofence_enforced)->toBeFalse()
+        ->and($this->entity->fresh()->geofence_enforced)->toBeTrue();
+});

@@ -210,6 +210,7 @@ export type Accomplishments = {
 
 export type BranchLocation = {
     id?: number;
+    code?: string | null;
     name: string;
     latitude: number;
     longitude: number;

@@ -60,6 +60,7 @@ type Props = {
     requestCounts: Record<'pending' | 'approved' | 'rejected' | 'cancelled', number>;
     employees: Person[];
     companies?: Company[];
+    branchLocations?: BranchLocation[];
     board: Board | null;
     myDay: MyDay | null;
     accomplishments: Accomplishments | null;
@@ -80,6 +81,7 @@ export default function AttendancePage(props: Props) {
         requestCounts,
         employees,
         companies = [],
+        branchLocations = [],
         board,
         myDay,
         accomplishments,
@@ -247,7 +249,13 @@ export default function AttendancePage(props: Props) {
             {canManage && (
                 <>
                     <DailyCloseDialog open={closeOpen} onOpenChange={setCloseOpen} today={today} />
-                    <GeofenceDialog open={geoOpen} onOpenChange={setGeoOpen} branch={branchLocation} />
+                    <GeofenceDialog
+                        open={geoOpen}
+                        onOpenChange={setGeoOpen}
+                        branch={branchLocation}
+                        branches={branchLocations}
+                        companies={companies}
+                    />
                 </>
             )}
         </AppLayout>
