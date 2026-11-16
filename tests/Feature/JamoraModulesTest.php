@@ -369,6 +369,7 @@ test('all employee management module pages render successfully', function () {
     foreach ($pages as $url) {
         $response = $this->withSession(['current_entity_id' => $this->entity->id])->get($url);
         $response->assertOk();
+        expect(strlen((string) $response->headers->get('Link')))->toBeLessThan(4096);
     }
 
     // People Access now lives in Admin › Roles & Permissions.
