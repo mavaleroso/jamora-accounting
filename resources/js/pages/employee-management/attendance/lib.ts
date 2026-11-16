@@ -1,5 +1,21 @@
+export type Company = {
+    id: number;
+    code: string;
+    name: string;
+};
+
+const COMPANY_DOTS = ['bg-sky-500', 'bg-violet-500', 'bg-amber-500', 'bg-emerald-500', 'bg-rose-500'];
+
+/** A stable colour per company, by its place in the list of companies. */
+export const companyDot = (companies: Company[], id?: number | null) => {
+    const i = companies.findIndex((c) => c.id === id);
+    return i < 0 ? 'bg-muted-foreground' : COMPANY_DOTS[i % COMPANY_DOTS.length];
+};
+
 export type Person = {
     id: number;
+    entity_id?: number | null;
+    entity?: Company | null;
     employee_code: string;
     firstname: string;
     lastname: string;

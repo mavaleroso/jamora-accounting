@@ -40,7 +40,7 @@ class AttendanceController extends Controller
 
     private const PAGE_SIZES = [10, 25, 50, 100];
 
-    private const EMPLOYEE_COLUMNS = 'employee:id,employee_code,firstname,middlename,lastname,avatar,position';
+    private const EMPLOYEE_COLUMNS = 'employee:id,entity_id,employee_code,firstname,middlename,lastname,avatar,position';
 
     public function __construct(
         protected AttendanceCalculator $attendanceCalculator,
@@ -89,6 +89,11 @@ class AttendanceController extends Controller
         }
 
         $today = Carbon::today();
+        $companies = $user
+            ? $user->directoryEntities()->orderBy('name')->get(['entities.id', 'entities.code', 'entities.name'])
+            : collect();
+        $companyIds = $companies->pluck('id')->all();
+
         $periods = PayrollPeriod::query()
             ->where('entity_id', $entityId)
             ->orderByDesc('start_date')
@@ -111,14 +116,19 @@ class AttendanceController extends Controller
         // Searching by name only makes sense when the list spans the team.
         $requestsSearch = $canViewTeam ? trim((string) $request->query('requests_search')) : '';
 
-        // Period records (timesheets)
+        $employeeRelations = [
+            'employee' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position'])->with('entity:id,code,name'),
+        ];
+
+        // Period records (timesheets): across all companies in the user's directory when viewing the team.
         $periodQuery = DtrEntry::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->when($canViewTeam, fn ($q) => $q->whereIn('entity_id', $companyIds), fn ($q) => $q->where('entity_id', $entityId))
             ->whereBetween('work_date', [$dateFrom, $dateTo])
             ->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId));
 
         $entries = (clone $periodQuery)
-            ->with([self::EMPLOYEE_COLUMNS, 'approver:id,firstname,lastname'])
+            ->with([...$employeeRelations, 'approver:id,firstname,lastname'])
             ->when($recordStatus !== '', fn ($q) => $q->where('status', $recordStatus))
             ->orderByDesc('work_date')
             ->orderBy('employee_id')
@@ -127,6 +137,7 @@ class AttendanceController extends Controller
 
         // Flag days whose unpaid OT already has a pending request, so the UI can say so.
         $pendingOt = AttendanceRequest::query()
+            ->withoutEntityScope()
             ->where('request_type', AttendanceRequest::TYPE_OVERTIME)
             ->where('status', 'pending')
             ->whereIn('employee_id', $entries->getCollection()->pluck('employee_id')->unique())
@@ -142,7 +153,8 @@ class AttendanceController extends Controller
 
         $period = (clone $periodQuery)->get();
         $pendingCorrections = AttendanceRequest::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->when($canViewTeam, fn ($q) => $q->whereIn('entity_id', $companyIds), fn ($q) => $q->where('entity_id', $entityId))
             ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
             ->where('status', 'pending')
             ->whereBetween('work_date', [$dateFrom, $dateTo])
@@ -159,12 +171,18 @@ class AttendanceController extends Controller
 
         // Overtime requests. Time corrections are decided on the day itself, in Timesheets.
         $requestsBase = AttendanceRequest::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->when($canViewTeam, fn ($q) => $q->whereIn('entity_id', $companyIds), fn ($q) => $q->where('entity_id', $entityId))
             ->where('request_type', AttendanceRequest::TYPE_OVERTIME)
             ->when(! $canViewTeam && $self, fn ($q) => $q->where('employee_id', $self->id));
 
         $attendanceRequests = (clone $requestsBase)
-            ->with([self::EMPLOYEE_COLUMNS, 'dtrEntry', 'reviewer:id,firstname,lastname', 'filer:id,firstname,lastname'])
+            ->with([
+                ...$employeeRelations,
+                'dtrEntry' => fn ($q) => $q->withoutGlobalScope('entity'),
+                'reviewer:id,firstname,lastname',
+                'filer:id,firstname,lastname',
+            ])
             ->when($requestStatus !== 'all', fn ($q) => $q->where('status', $requestStatus))
             ->when($requestsSearch !== '', fn ($q) => $this->whereEmployeeMatches($q, $requestsSearch))
             ->orderByRaw("case when status = 'pending' then 0 else 1 end")
@@ -180,11 +198,13 @@ class AttendanceController extends Controller
 
         $employees = $canViewTeam
             ? Employee::query()
-                ->where('entity_id', $entityId)
+                ->withoutEntityScope()
+                ->whereIn('entity_id', $companyIds)
                 ->where('is_active', true)
+                ->with('entity:id,code,name')
                 ->orderBy('lastname')
-                ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position'])
-            : collect($self ? [$self] : []);
+                ->get(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position'])
+            : collect($self ? [$self->loadMissing('entity:id,code,name')] : []);
 
         return Inertia::render('employee-management/attendance/page', [
             'perspective' => [
@@ -222,8 +242,9 @@ class AttendanceController extends Controller
                 'cancelled' => (int) ($requestCounts['cancelled'] ?? 0),
             ],
             'employees' => $employees,
+            'companies' => $companies->values()->all(),
             // Built only for the view that shows them; the board refreshes itself via a partial reload.
-            'board' => $canViewTeam && $view === 'today' ? $this->todayBoard($entityId) : null,
+            'board' => $canViewTeam && $view === 'today' ? $this->todayBoard($companyIds) : null,
             'myDay' => $self && $view === 'clock' ? $this->myDay($self) : null,
             'accomplishments' => $self && $view === 'accomplishments'
                 ? $this->myAccomplishments($self, $dateFrom, $dateTo, $this->currentCutoff($periods, $today), $today)
@@ -442,7 +463,14 @@ class AttendanceController extends Controller
         ]);
 
         $workDate = Carbon::parse($validated['work_date'])->toDateString();
-        $dtr = DtrEntry::where('employee_id', $validated['employee_id'])
+        $employee = Employee::query()
+            ->withoutEntityScope()
+            ->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id'))
+            ->findOrFail($validated['employee_id']);
+
+        $dtr = DtrEntry::query()
+            ->withoutEntityScope()
+            ->where('employee_id', $employee->id)
             ->whereDate('work_date', $workDate)
             ->first();
 
@@ -450,8 +478,8 @@ class AttendanceController extends Controller
 
         if (! $dtr) {
             $dtr = new DtrEntry([
-                'entity_id' => $entityId,
-                'employee_id' => $validated['employee_id'],
+                'entity_id' => $employee->entity_id,
+                'employee_id' => $employee->id,
                 'work_date' => $workDate,
             ]);
         }
@@ -460,7 +488,7 @@ class AttendanceController extends Controller
         $editor = trim(($user?->firstname ?? '').' '.($user?->lastname ?? '')) ?: 'HR';
 
         $dtr->fill([
-            'entity_id' => $entityId,
+            'entity_id' => $employee->entity_id,
             'time_in' => $time($validated['time_in'] ?? null),
             'break_out' => $time($validated['break_out'] ?? null),
             'break_in' => $time($validated['break_in'] ?? null),
@@ -477,7 +505,6 @@ class AttendanceController extends Controller
             $dtr->approved_at = null;
         }
 
-        $employee = Employee::findOrFail($validated['employee_id']);
         $this->attendanceCalculator->compute($dtr, $employee)->save();
 
         return redirect()->back()->with('status', 'Time record saved for '.$employee->name.'.');
@@ -605,10 +632,14 @@ class AttendanceController extends Controller
             'employee_ids.*' => ['integer'],
         ]);
 
+        $companyIds = $request->user()?->directoryEntities()->pluck('entities.id')->all() ?? [];
+
         // A period (optionally limited to some employees) approves every open day in it, across all pages.
         $entries = isset($validated['ids'])
-            ? DtrEntry::query()->whereIn('id', $validated['ids'])->get()
+            ? DtrEntry::query()->withoutEntityScope()->whereIn('entity_id', $companyIds)->whereIn('id', $validated['ids'])->get()
             : DtrEntry::query()
+                ->withoutEntityScope()
+                ->whereIn('entity_id', $companyIds)
                 ->where('status', DtrEntry::STATUS_OPEN)
                 ->whereBetween('work_date', [$validated['date_from'], $validated['date_to']])
                 ->when($validated['employee_id'] ?? null, fn ($q, $id) => $q->where('employee_id', $id))
@@ -618,6 +649,7 @@ class AttendanceController extends Controller
         $skipped = 0;
 
         $withCorrection = AttendanceRequest::query()
+            ->withoutEntityScope()
             ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
             ->where('status', 'pending')
             ->whereIn('employee_id', $entries->pluck('employee_id')->unique())
@@ -664,7 +696,11 @@ class AttendanceController extends Controller
             'employee_ids.*' => ['integer'],
         ]);
 
+        $companyIds = $request->user()?->directoryEntities()->pluck('entities.id')->all() ?? [];
+
         $reopened = DtrEntry::query()
+            ->withoutEntityScope()
+            ->whereIn('entity_id', $companyIds)
             ->where('status', DtrEntry::STATUS_APPROVED)
             ->whereBetween('work_date', [$validated['date_from'], $validated['date_to']])
             ->whereIn('employee_id', $validated['employee_ids'])
@@ -712,7 +748,14 @@ class AttendanceController extends Controller
             $validated['employee_id'] = $currentUserEmployee->id;
         }
 
-        $employee = Employee::query()->where('entity_id', $entityId)->findOrFail($validated['employee_id']);
+        $employee = Employee::query()
+            ->withoutEntityScope()
+            ->when(
+                $isManager,
+                fn ($q) => $q->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id')),
+                fn ($q) => $q->where('entity_id', $entityId),
+            )
+            ->findOrFail($validated['employee_id']);
         $filed = $this->attendanceRequests->file($employee, $validated, $user);
 
         return redirect()->back()->with('status', $filed->request_type === AttendanceRequest::TYPE_ABSENCE_NOTICE
@@ -768,10 +811,15 @@ class AttendanceController extends Controller
             'date.before' => 'Close a day only after it has ended.',
         ]);
 
-        $entityId = $entityContext->id();
         $date = $validated['date'] ?? Carbon::yesterday()->toDateString();
+        $companyIds = $request->user()?->directoryEntities()->pluck('entities.id')->all() ?: array_filter([$entityContext->id()]);
 
-        $summary = $this->attendanceCalculator->closeDay($entityId, $date);
+        $summary = ['absent' => 0, 'on_leave' => 0, 'official_business' => 0, 'holiday' => 0, 'skipped' => 0];
+        foreach ($companyIds as $id) {
+            foreach ($this->attendanceCalculator->closeDay((int) $id, $date) as $k => $v) {
+                $summary[$k] = ($summary[$k] ?? 0) + $v;
+            }
+        }
         $label = Carbon::parse($date)->format('M j, Y');
 
         return redirect()->back()->with('status', "Day closed for {$label}: {$summary['absent']} absent, {$summary['on_leave']} on leave, {$summary['official_business']} on official business, {$summary['holiday']} holiday, {$summary['skipped']} already recorded.");
@@ -780,9 +828,10 @@ class AttendanceController extends Controller
     /**
      * Live status of every active employee today, for the team board.
      *
+     * @param  int|list<int>|null  $entityId
      * @return array{rows: array<int, array<string, mixed>>, counts: array<string, int>, holiday: ?string}
      */
-    private function todayBoard(?int $entityId): array
+    private function todayBoard(int|array|null $entityId): array
     {
         return app(TeamBoard::class)->build($entityId);
     }
@@ -1003,7 +1052,9 @@ class AttendanceController extends Controller
      */
     private function staffSummary(EloquentCollection $period): array
     {
-        $period->load(self::EMPLOYEE_COLUMNS);
+        $period->load([
+            'employee' => fn ($q) => $q->withoutGlobalScope('entity')->select(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position'])->with('entity:id,code,name'),
+        ]);
 
         return $period
             ->groupBy('employee_id')
@@ -1035,6 +1086,7 @@ class AttendanceController extends Controller
     private function pendingCorrection(DtrEntry $dtr): ?AttendanceRequest
     {
         return AttendanceRequest::query()
+            ->withoutEntityScope()
             ->where('employee_id', $dtr->employee_id)
             ->whereDate('work_date', $dtr->work_date)
             ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
@@ -1055,6 +1107,7 @@ class AttendanceController extends Controller
         }
 
         $corrections = AttendanceRequest::query()
+            ->withoutEntityScope()
             ->where('request_type', AttendanceRequest::TYPE_CORRECTION)
             ->where('status', 'pending')
             ->whereIn('employee_id', $entries->pluck('employee_id')->unique())
@@ -1080,7 +1133,7 @@ class AttendanceController extends Controller
     private function whereEmployeeMatches($query, string $term): void
     {
         $like = '%'.addcslashes($term, '%_\\').'%';
-        $query->whereHas('employee', fn ($q) => $q->where(fn ($w) => $w
+        $query->whereHas('employee', fn ($q) => $q->withoutGlobalScope('entity')->where(fn ($w) => $w
             ->where('firstname', 'like', $like)
             ->orWhere('lastname', 'like', $like)
             ->orWhere('employee_code', 'like', $like)

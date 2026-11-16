@@ -50,6 +50,7 @@ import {
 import * as React from 'react';
 import {
     ATTENDANCE_URL,
+    companyDot,
     DAY_TYPE,
     firstError,
     fmtDate,
@@ -59,6 +60,7 @@ import {
     htmlToText,
     periodOptions,
     type Approval,
+    type Company,
     type DtrRow,
     type Filters,
     type Paginated,
@@ -75,6 +77,7 @@ type Props = {
     periods: PayPeriodOption[];
     filters: Filters;
     employees: Person[];
+    companies: Company[];
     perspective: Perspective;
     today: string;
     onFilter: (changes: Partial<Filters>) => void;
@@ -138,6 +141,7 @@ export function Timesheets({
     periods,
     filters,
     employees,
+    companies,
     perspective,
     today,
     onFilter,
@@ -355,11 +359,14 @@ export function Timesheets({
                     <Field label="Team member">
                         <Combobox
                             // id 0 stands for "All staff" so the filter can be cleared from the list.
-                            options={[{ id: 0, name: 'All staff' }, ...employees.map((e) => ({ id: e.id, name: fullName(e) }))]}
+                            options={[
+                                { id: 0, name: 'All staff' },
+                                ...employees.map((e) => ({ id: e.id, name: e.entity?.name ? `${fullName(e)} · ${e.entity.name}` : fullName(e) })),
+                            ]}
                             value={filters.employee_id ?? 0}
                             onValueChange={(v) => onFilter({ employee_id: v ? Number(v) : null })}
                             placeholder="Search team members"
-                            className="w-[230px]"
+                            className="w-[260px]"
                         />
                     </Field>
                 )}
@@ -385,6 +392,7 @@ export function Timesheets({
             {view === 'approvals' ? (
                 <Approvals
                     rows={summary}
+                    companies={companies}
                     readyDays={approval.readyToApprove}
                     canManage={canManage}
                     canViewTeam={canViewTeam}
@@ -416,6 +424,7 @@ export function Timesheets({
             ) : (
                 <TimeEntries
                     entries={entries}
+                    companies={companies}
                     perspective={perspective}
                     today={today}
                     busy={busy}
@@ -612,6 +621,7 @@ function EmptyState({ title, hint, onClear }: { title: string; hint?: string; on
 
 function Approvals({
     rows,
+    companies,
     readyDays,
     canManage,
     canViewTeam,
@@ -623,6 +633,7 @@ function Approvals({
     onOpen,
 }: {
     rows: SummaryRow[];
+    companies: Company[];
     readyDays: number;
     canManage: boolean;
     canViewTeam: boolean;
@@ -635,27 +646,32 @@ function Approvals({
 }) {
     const needing = rows.filter((r) => r.pending > 0);
     const [show, setShow] = React.useState<'needs' | 'all'>(needing.length > 0 ? 'needs' : 'all');
-    const [sort, setSort] = React.useState<{ key: 'name' | 'total' | 'regular' | 'overtime' | 'leave'; dir: SortDir }>({ key: 'name', dir: 'asc' });
+    const [sort, setSort] = React.useState<{ key: 'name' | 'company' | 'total' | 'regular' | 'overtime' | 'leave'; dir: SortDir }>({
+        key: 'name',
+        dir: 'asc',
+    });
 
     const visible = show === 'needs' ? needing : rows;
     const sorted = React.useMemo(() => {
         const value = (r: SummaryRow) =>
             sort.key === 'name'
                 ? fullName(r.employee).toLowerCase()
-                : sort.key === 'total'
-                  ? r.total_hours
-                  : sort.key === 'regular'
-                    ? r.regular_hours
-                    : sort.key === 'overtime'
-                      ? r.ot_hours
-                      : r.leave_days;
+                : sort.key === 'company'
+                  ? (r.employee.entity?.name ?? '').toLowerCase()
+                  : sort.key === 'total'
+                    ? r.total_hours
+                    : sort.key === 'regular'
+                      ? r.regular_hours
+                      : sort.key === 'overtime'
+                        ? r.ot_hours
+                        : r.leave_days;
         return [...visible].sort((a, b) => {
             const [x, y] = [value(a), value(b)];
             return (x < y ? -1 : x > y ? 1 : 0) * (sort.dir === 'asc' ? 1 : -1);
         });
     }, [visible, sort]);
     const toggleSort = (key: typeof sort.key) =>
-        setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }));
+        setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' || key === 'company' ? 'asc' : 'desc' }));
 
     const total = rows.reduce(
         (t, r) => ({ all: t.all + r.total_hours, regular: t.regular + r.regular_hours, ot: t.ot + r.ot_hours, leave: t.leave + r.leave_days }),
@@ -736,6 +752,12 @@ function Approvals({
                                 className="min-w-[220px]"
                             />
                             <SortHead
+                                label="Company"
+                                active={sort.key === 'company'}
+                                dir={sort.dir}
+                                onSort={() => toggleSort('company')}
+                            />
+                            <SortHead
                                 label="Total"
                                 active={sort.key === 'total'}
                                 dir={sort.dir}
@@ -770,7 +792,7 @@ function Approvals({
                     <TableBody>
                         {sorted.length === 0 ? (
                             <TableRow className="hover:bg-transparent">
-                                <TableCell colSpan={canManage ? 8 : 7}>
+                                <TableCell colSpan={canManage ? 9 : 8}>
                                     {rows.length === 0 ? (
                                         <EmptyState
                                             title="No time records in this period."
@@ -819,6 +841,19 @@ function Approvals({
                                                     </span>
                                                 </span>
                                             </button>
+                                        </TableCell>
+                                        <TableCell className="text-sm whitespace-nowrap">
+                                            {r.employee.entity ? (
+                                                <span className="inline-flex items-center gap-2">
+                                                    <span
+                                                        className={cn('size-2 shrink-0 rounded-full', companyDot(companies, r.employee.entity_id ?? r.employee.entity.id))}
+                                                        aria-hidden
+                                                    />
+                                                    {r.employee.entity.name}
+                                                </span>
+                                            ) : (
+                                                <span className="text-muted-foreground">—</span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-right text-sm font-semibold tabular-nums">{hours(r.total_hours)}</TableCell>
                                         <TableCell className="text-right text-sm tabular-nums">
@@ -890,6 +925,7 @@ function Approvals({
                             <TableRow className="hover:bg-transparent">
                                 {canManage && <TableCell />}
                                 <TableCell className="font-semibold">{show === 'needs' ? 'Shown hours' : 'All hours'}</TableCell>
+                                <TableCell />
                                 <TableCell className="text-right font-semibold tabular-nums">{hours(shown.all)}</TableCell>
                                 <TableCell className="text-right font-semibold tabular-nums">{hours(shown.regular)}</TableCell>
                                 <TableCell className="text-right font-semibold tabular-nums">{shown.ot ? hours(shown.ot) : '--'}</TableCell>
@@ -925,6 +961,7 @@ type RowActions = {
 
 function TimeEntries({
     entries,
+    companies,
     perspective,
     today,
     busy,
@@ -936,6 +973,7 @@ function TimeEntries({
     ...actions
 }: {
     entries: Paginated<DtrRow>;
+    companies: Company[];
     perspective: Perspective;
     today: string;
     busy: boolean;
@@ -947,7 +985,7 @@ function TimeEntries({
 } & RowActions) {
     const { canManage, canViewTeam } = perspective;
     const [collapsed, setCollapsed] = React.useState<string[]>([]);
-    const [sort, setSort] = React.useState<{ key: 'name' | 'time' | 'hours'; dir: SortDir }>({ key: 'time', dir: 'desc' });
+    const [sort, setSort] = React.useState<{ key: 'name' | 'company' | 'time' | 'hours'; dir: SortDir }>({ key: 'time', dir: 'desc' });
     const toggleSort = (key: typeof sort.key) =>
         setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
 
@@ -956,7 +994,13 @@ function TimeEntries({
         const byDay = new Map<string, DtrRow[]>();
         entries.data.forEach((e) => byDay.set(e.work_date, [...(byDay.get(e.work_date) ?? []), e]));
         const value = (e: DtrRow) =>
-            sort.key === 'name' ? fullName(e.employee).toLowerCase() : sort.key === 'hours' ? dayHours(e) : (e.time_in ?? '');
+            sort.key === 'name'
+                ? fullName(e.employee).toLowerCase()
+                : sort.key === 'company'
+                  ? (e.employee?.entity?.name ?? '').toLowerCase()
+                  : sort.key === 'hours'
+                    ? dayHours(e)
+                    : (e.time_in ?? '');
         return [...byDay.entries()].map(([date, rows]) => ({
             date,
             rows: [...rows].sort((a, b) => {
@@ -966,7 +1010,7 @@ function TimeEntries({
         }));
     }, [entries.data, sort]);
 
-    const columns = 6 + (canManage ? 1 : 0) + (canViewTeam ? 1 : 0);
+    const columns = 6 + (canManage ? 1 : 0) + (canViewTeam ? 2 : 0);
     const toggleIds = (ids: number[], on: boolean) => onSelect(on ? [...new Set([...selected, ...ids])] : selected.filter((id) => !ids.includes(id)));
 
     return (
@@ -977,13 +1021,21 @@ function TimeEntries({
                         <TableRow className="hover:bg-transparent">
                             {canManage && <TableHead className="w-10 pl-4" />}
                             {canViewTeam && (
-                                <SortHead
-                                    label="Name"
-                                    active={sort.key === 'name'}
-                                    dir={sort.dir}
-                                    onSort={() => toggleSort('name')}
-                                    className="min-w-[200px]"
-                                />
+                                <>
+                                    <SortHead
+                                        label="Name"
+                                        active={sort.key === 'name'}
+                                        dir={sort.dir}
+                                        onSort={() => toggleSort('name')}
+                                        className="min-w-[200px]"
+                                    />
+                                    <SortHead
+                                        label="Company"
+                                        active={sort.key === 'company'}
+                                        dir={sort.dir}
+                                        onSort={() => toggleSort('company')}
+                                    />
+                                </>
                             )}
                             <SortHead label="Time" active={sort.key === 'time'} dir={sort.dir} onSort={() => toggleSort('time')} />
                             <SortHead label="Hours" active={sort.key === 'hours'} dir={sort.dir} onSort={() => toggleSort('hours')} />
@@ -1060,6 +1112,7 @@ function TimeEntries({
                                                 <EntryRow
                                                     key={e.id}
                                                     entry={e}
+                                                    companies={companies}
                                                     perspective={perspective}
                                                     today={today}
                                                     busy={busy}
@@ -1082,6 +1135,7 @@ function TimeEntries({
 
 function EntryRow({
     entry: e,
+    companies,
     perspective,
     today,
     busy,
@@ -1093,7 +1147,7 @@ function EntryRow({
     onVerify,
     onEdit,
     onRequest,
-}: { entry: DtrRow; perspective: Perspective; today: string; busy: boolean; selected: boolean; onToggle: (on: boolean) => void } & RowActions) {
+}: { entry: DtrRow; companies: Company[]; perspective: Perspective; today: string; busy: boolean; selected: boolean; onToggle: (on: boolean) => void } & RowActions) {
     const { canManage, canViewTeam } = perspective;
     const fix = e.pending_correction;
     const locked = e.status === 'locked';
@@ -1117,15 +1171,30 @@ function EntryRow({
                 </TableCell>
             )}
             {canViewTeam && (
-                <TableCell>
-                    <div className="flex items-center gap-2">
-                        <PersonAvatar src={e.employee?.avatar_url} seed={e.employee?.employee_code ?? String(e.employee_id)} className="size-7" />
-                        <div className="min-w-0">
-                            <div className="truncate text-sm">{fullName(e.employee)}</div>
-                            <div className="text-muted-foreground truncate text-[11px]">{e.employee?.position}</div>
+                <>
+                    <TableCell>
+                        <div className="flex items-center gap-2">
+                            <PersonAvatar src={e.employee?.avatar_url} seed={e.employee?.employee_code ?? String(e.employee_id)} className="size-7" />
+                            <div className="min-w-0">
+                                <div className="truncate text-sm">{fullName(e.employee)}</div>
+                                <div className="text-muted-foreground truncate text-[11px]">{e.employee?.position}</div>
+                            </div>
                         </div>
-                    </div>
-                </TableCell>
+                    </TableCell>
+                    <TableCell className="text-sm whitespace-nowrap">
+                        {e.employee?.entity ? (
+                            <span className="inline-flex items-center gap-2">
+                                <span
+                                    className={cn('size-2 shrink-0 rounded-full', companyDot(companies, e.employee.entity_id ?? e.employee.entity.id))}
+                                    aria-hidden
+                                />
+                                {e.employee.entity.name}
+                            </span>
+                        ) : (
+                            <span className="text-muted-foreground">—</span>
+                        )}
+                    </TableCell>
+                </>
             )}
             <TableCell className="text-sm whitespace-nowrap tabular-nums">
                 <span className={cn(fix && 'line-through opacity-60')}>

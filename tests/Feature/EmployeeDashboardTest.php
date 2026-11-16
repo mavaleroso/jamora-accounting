@@ -82,7 +82,25 @@ test('self-service staff cannot open the HR dashboard', function () {
     ($this->as)($this->staff)->get('/employee-management')->assertForbidden();
 });
 
-test('the attendance team board still works after moving to TeamBoard', function () {
+test('the attendance team board still works after moving to TeamBoard and lists all staff across companies with their company', function () {
+    $otherEntity = Entity::create(['code' => 'JAM_OPTICUS', 'name' => 'JAM Opticus', 'is_active' => true]);
+    $this->hr->entities()->attach($otherEntity->id, ['is_default' => false]);
+    $otherEmp = Employee::create([
+        'entity_id' => $otherEntity->id,
+        'employee_code' => 'JAM-1',
+        'firstname' => 'Rico',
+        'lastname' => 'Optic',
+        'is_active' => true,
+        'employment_status' => 'active',
+        'employment_type' => 'regular',
+        'hire_date' => '2024-03-04',
+        'rest_days' => [0],
+    ]);
+
     ($this->as)($this->hr)->get('/employee-management/attendance?view=today')->assertOk()
-        ->assertInertia(fn (Assert $page) => $page->where('board.counts.on_leave', 1));
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('board.counts.on_leave', 1)
+            ->has('board.rows', 5)
+            ->has('companies', 2)
+            ->where('employees', fn ($employees) => collect($employees)->contains(fn ($e) => $e['id'] === $otherEmp->id && ($e['entity']['name'] ?? null) === 'JAM Opticus')));
 });

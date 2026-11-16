@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Models\AttendanceRequest;
+use App\Models\DtrEntry;
 use App\Services\Optical\OpticalDatabase;
 use App\Services\Optical\OpticalSource;
 use App\Support\Audit\AuditLogger;
@@ -13,6 +15,7 @@ use Illuminate\Auth\Events\Logout;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Spatie\Permission\Events\PermissionAttached;
 use Spatie\Permission\Events\PermissionDetached;
@@ -42,6 +45,28 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->registerAuditTrail();
+
+        // Time & Attendance acts across all companies the timekeeper can access, so route bindings for DtrEntry and
+        // AttendanceRequest resolve without the current-branch scope while remaining restricted to the user's companies.
+        Route::bind('dtr', function (string $value) {
+            $user = request()->user();
+            $query = DtrEntry::query()->withoutEntityScope();
+            if ($user) {
+                $query->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id'));
+            }
+
+            return $query->findOrFail($value);
+        });
+
+        Route::bind('attendanceRequest', function (string $value) {
+            $user = request()->user();
+            $query = AttendanceRequest::query()->withoutEntityScope();
+            if ($user) {
+                $query->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id'));
+            }
+
+            return $query->findOrFail($value);
+        });
     }
 
     /**

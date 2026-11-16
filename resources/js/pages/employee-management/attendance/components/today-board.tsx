@@ -8,7 +8,7 @@ import { router } from '@inertiajs/react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { AlertTriangle, MapPinOff, MoreHorizontal, PartyPopper, Pencil, RefreshCw } from 'lucide-react';
 import * as React from 'react';
-import { BOARD_STATUS, DOT, fmtMinutes, fmtTime, fullName, TONE, type Board, type BoardRow, type BoardStatus } from '../lib';
+import { BOARD_STATUS, companyDot, DOT, fmtMinutes, fmtTime, fullName, TONE, type Board, type BoardRow, type BoardStatus, type Company } from '../lib';
 
 const CHIP_ORDER: BoardStatus[] = [
     'late',
@@ -28,6 +28,7 @@ const BREAK_EXPECTED: BoardStatus[] = ['late', 'expected', 'working', 'on_break'
 
 const COLUMN_LABELS: Record<string, string> = {
     employee: 'Employee',
+    company: 'Company',
     schedule: 'Schedule',
     status: 'Status',
     time_in: 'In',
@@ -35,7 +36,12 @@ const COLUMN_LABELS: Record<string, string> = {
     time_out: 'Out',
 };
 
-function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canManage' | 'onEdit' | 'onViewTimesheet'>): ColumnDef<BoardRow>[] {
+function todayColumns({
+    canManage,
+    companies,
+    onEdit,
+    onViewTimesheet,
+}: Pick<Props, 'canManage' | 'companies' | 'onEdit' | 'onViewTimesheet'>): ColumnDef<BoardRow>[] {
     return [
         {
             id: 'actions',
@@ -66,7 +72,7 @@ function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canMa
             filterFn: (row, _id, value: string) => {
                 const e = row.original.employee;
                 const q = value.toLowerCase();
-                return [fullName(e), e.employee_code, e.position].some((v) => v?.toLowerCase().includes(q));
+                return [fullName(e), e.employee_code, e.position, e.entity?.name, e.entity?.code].some((v) => v?.toLowerCase().includes(q));
             },
             cell: ({ row: { original: r } }) => (
                 <div className="flex min-w-[200px] items-center gap-3">
@@ -78,6 +84,20 @@ function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canMa
                 </div>
             ),
             enableHiding: false,
+        },
+        {
+            id: 'company',
+            accessorFn: (r) => r.employee.entity?.name ?? '',
+            header: ({ column }) => <DataTableColumnHeader column={column} title="Company" />,
+            cell: ({ row: { original: r } }) =>
+                r.employee.entity ? (
+                    <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
+                        <span className={cn('size-2 shrink-0 rounded-full', companyDot(companies, r.employee.entity_id ?? r.employee.entity.id))} aria-hidden />
+                        {r.employee.entity.name}
+                    </span>
+                ) : (
+                    <span className="text-muted-foreground">—</span>
+                ),
         },
         {
             id: 'schedule',
@@ -170,12 +190,13 @@ function todayColumns({ canManage, onEdit, onViewTimesheet }: Pick<Props, 'canMa
 
 type Props = {
     board: Board;
+    companies: Company[];
     canManage: boolean;
     onEdit: (row: BoardRow) => void;
     onViewTimesheet: (employeeId: number) => void;
 };
 
-export function TodayBoard({ board, canManage, onEdit, onViewTimesheet }: Props) {
+export function TodayBoard({ board, companies, canManage, onEdit, onViewTimesheet }: Props) {
     const [filter, setFilter] = React.useState<BoardStatus | 'all'>('all');
     const [refreshing, setRefreshing] = React.useState(false);
     const [, tick] = React.useState(0);
@@ -201,7 +222,7 @@ export function TodayBoard({ board, canManage, onEdit, onViewTimesheet }: Props)
     const updatedAgo = Math.max(0, Math.round((Date.now() - new Date(board.generated_at).getTime()) / 60000));
 
     const rows = React.useMemo(() => (filter === 'all' ? board.rows : board.rows.filter((r) => r.status === filter)), [board.rows, filter]);
-    const columns = React.useMemo(() => todayColumns({ canManage, onEdit, onViewTimesheet }), [canManage, onEdit, onViewTimesheet]);
+    const columns = React.useMemo(() => todayColumns({ canManage, companies, onEdit, onViewTimesheet }), [canManage, companies, onEdit, onViewTimesheet]);
 
     return (
         <div className="space-y-4">

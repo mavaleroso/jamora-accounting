@@ -121,6 +121,7 @@ class AttendanceRequest extends Model
         }
 
         $records = DtrEntry::query()
+            ->withoutEntityScope()
             ->whereIn('employee_id', $unlinked->pluck('employee_id')->unique())
             ->whereBetween('work_date', [$unlinked->min('work_date')->toDateString(), $unlinked->max('work_date')->toDateString()])
             ->get()

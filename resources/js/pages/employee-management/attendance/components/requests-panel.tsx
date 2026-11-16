@@ -11,6 +11,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { ArrowRight, Check, FilePenLine, MoreHorizontal, Plus, Timer, X } from 'lucide-react';
 import {
     ATTENDANCE_URL,
+    companyDot,
     firstError,
     fmtDate,
     fmtHours,
@@ -20,6 +21,7 @@ import {
     TONE,
     weekday,
     type AttendanceRequestRow,
+    type Company,
     type FilterChange,
     type Filters,
     type Paginated,
@@ -30,6 +32,7 @@ import { Segmented } from './timesheets';
 type Props = {
     requests: Paginated<AttendanceRequestRow>;
     counts: Record<'pending' | 'approved' | 'rejected' | 'cancelled', number>;
+    companies: Company[];
     filters: Filters;
     perspective: Perspective;
     onFilter: (changes: FilterChange) => void;
@@ -135,13 +138,14 @@ function RequestedChange({ r }: { r: AttendanceRequestRow }) {
 const COLUMN_LABELS: Record<string, string> = {
     date: 'Date',
     employee: 'Employee',
+    company: 'Company',
     type: 'Type',
     requested: 'Requested',
     reason: 'Reason',
     status: 'Status',
 };
 
-export function RequestsPanel({ requests, counts, filters, perspective, onFilter, onReview, onNew }: Props) {
+export function RequestsPanel({ requests, counts, companies, filters, perspective, onFilter, onReview, onNew }: Props) {
     const { canViewTeam, hasSelf, canReviewRequests = false, canHandleRequests = false } = perspective;
     const total = counts.pending + counts.approved + counts.rejected + counts.cancelled;
 
@@ -205,6 +209,22 @@ export function RequestsPanel({ requests, counts, filters, perspective, onFilter
                               </div>
                           </div>
                       ),
+                  } satisfies ColumnDef<AttendanceRequestRow>,
+                  {
+                      id: 'company',
+                      header: 'Company',
+                      cell: ({ row: { original: r } }) =>
+                          r.employee?.entity ? (
+                              <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
+                                  <span
+                                      className={cn('size-2 shrink-0 rounded-full', companyDot(companies, r.employee.entity_id ?? r.employee.entity.id))}
+                                      aria-hidden
+                                  />
+                                  {r.employee.entity.name}
+                              </span>
+                          ) : (
+                              <span className="text-muted-foreground">—</span>
+                          ),
                   } satisfies ColumnDef<AttendanceRequestRow>,
               ]
             : []),

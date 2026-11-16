@@ -185,7 +185,10 @@ function ManualEntryForm({ target, employees, today, onDone }: { target: ManualE
                             <SelectContent>
                                 {employees.map((e) => (
                                     <SelectItem key={e.id} value={String(e.id)}>
-                                        {fullName(e)} <span className="text-muted-foreground">· {e.employee_code}</span>
+                                        {fullName(e)}{' '}
+                                        <span className="text-muted-foreground">
+                                            · {e.entity?.name ? `${e.entity.name} (${e.employee_code})` : e.employee_code}
+                                        </span>
                                     </SelectItem>
                                 ))}
                             </SelectContent>
@@ -336,6 +339,7 @@ function RequestForm({
                                 {employees.map((e) => (
                                     <SelectItem key={e.id} value={String(e.id)}>
                                         {fullName(e)}
+                                        {e.entity?.name && <span className="text-muted-foreground"> · {e.entity.name}</span>}
                                     </SelectItem>
                                 ))}
                             </SelectContent>

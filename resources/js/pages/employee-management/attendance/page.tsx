@@ -29,6 +29,7 @@ import {
     type AttendanceRequestRow,
     type Board,
     type BranchLocation,
+    type Company,
     type DtrRow,
     type FilterChange,
     type Filters,
@@ -58,6 +59,7 @@ type Props = {
     attendanceRequests: Paginated<AttendanceRequestRow>;
     requestCounts: Record<'pending' | 'approved' | 'rejected' | 'cancelled', number>;
     employees: Person[];
+    companies?: Company[];
     board: Board | null;
     myDay: MyDay | null;
     accomplishments: Accomplishments | null;
@@ -77,6 +79,7 @@ export default function AttendancePage(props: Props) {
         attendanceRequests,
         requestCounts,
         employees,
+        companies = [],
         board,
         myDay,
         accomplishments,
@@ -187,6 +190,7 @@ export default function AttendancePage(props: Props) {
                 {view === 'today' && board && (
                     <TodayBoard
                         board={board}
+                        companies={companies}
                         canManage={canManage}
                         onEdit={(row) => setManualTarget({ employeeId: row.employee.id, date: today, entry: row.dtr ? { ...row.dtr, employee_id: row.employee.id, work_date: today, employee: row.employee } : null })}
                         onViewTimesheet={(id) => navigate({ view: 'timesheets', employee_id: id })}
@@ -201,6 +205,7 @@ export default function AttendancePage(props: Props) {
                         periods={periods}
                         filters={filters}
                         employees={employees}
+                        companies={companies}
                         perspective={perspective}
                         today={today}
                         onFilter={navigate}
@@ -218,6 +223,7 @@ export default function AttendancePage(props: Props) {
                     <RequestsPanel
                         requests={attendanceRequests}
                         counts={requestCounts}
+                        companies={companies}
                         filters={filters}
                         perspective={perspective}
                         onFilter={navigate}
