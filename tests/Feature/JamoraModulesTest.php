@@ -474,3 +474,42 @@ test('coordinates-based attendance check-in, break-out, break-in, and check-out 
     expect((float) $dtr->regular_hours)->toBe(8.0);
     expect((float) $dtr->ot_hours)->toBeGreaterThan(0.0);
 });
+
+test('employee self-service punch records Philippine time (Asia/Manila)', function () {
+    expect(config('app.timezone'))->toBe('Asia/Manila');
+
+    $employeeUser = User::factory()->create();
+    $employeeUser->givePermissionTo(['attendance.view', 'attendance.punch']);
+    $employeeUser->entities()->attach($this->entity->id, ['is_default' => true]);
+
+    $this->entity->update(['geofence_enforced' => false]);
+
+    $employee = Employee::create([
+        'entity_id' => $this->entity->id,
+        'user_id' => $employeeUser->id,
+        'employee_code' => 'EMP-PH-TZ',
+        'firstname' => 'Sheila Mae',
+        'lastname' => 'Cabungcal',
+        'position' => 'Staff',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 25000.00,
+    ]);
+
+    // Simulate 9:22 AM Philippine Time (01:22 UTC)
+    Carbon::setTestNow(Carbon::parse('2026-11-16 09:22:00', 'Asia/Manila'));
+
+    $this->actingAs($employeeUser)
+        ->withSession(['current_entity_id' => $this->entity->id])
+        ->post('/employee-management/attendance/punch', [
+            'employee_id' => $employee->id,
+            'punch_type' => 'check_in',
+        ])
+        ->assertSessionHas('status', 'Checked in at 9:22 AM. Have a good shift!');
+
+    $dtr = DtrEntry::where('employee_id', $employee->id)->whereDate('work_date', '2026-11-16')->first();
+    expect($dtr)->not->toBeNull()
+        ->and($dtr->time_in)->toBe('09:22:00');
+
+    Carbon::setTestNow();
+});

@@ -21,7 +21,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class AuditTrailsController extends Controller
 {
-    /** Times are stored in UTC and shown / filtered in Philippine time. */
+    /** Times are shown and filtered in Philippine time. */
     private const TZ = 'Asia/Manila';
 
     public function index(Request $request): Response
@@ -33,7 +33,7 @@ class AuditTrailsController extends Controller
             ->paginate($perPage)
             ->withQueryString();
 
-        $today = Carbon::today(self::TZ)->utc(); // start of today, Manila time
+        $today = Carbon::today(self::TZ)->setTimezone(config('app.timezone')); // start of today, Manila time
         $week = AuditTrail::query()->where('created_at', '>=', $today->copy()->subDays(6))->selectRaw('event, count(*) as n')->groupBy('event')->pluck('n', 'event');
 
         return Inertia::render('admin/audit-trails/page', [
@@ -151,8 +151,8 @@ class AuditTrailsController extends Controller
             ->when($f['subject_id'], fn ($q, $v) => $q->where('subject_id', $v))
             ->when($f['entity_id'], fn ($q, $v) => $q->where('entity_id', $v))
             ->when($f['batch_id'], fn ($q, $v) => $q->where('batch_id', $v))
-            ->when($f['from'], fn ($q, $v) => $q->where('created_at', '>=', Carbon::parse($v, self::TZ)->startOfDay()->utc()))
-            ->when($f['to'], fn ($q, $v) => $q->where('created_at', '<=', Carbon::parse($v, self::TZ)->endOfDay()->utc()))
+            ->when($f['from'], fn ($q, $v) => $q->where('created_at', '>=', Carbon::parse($v, self::TZ)->startOfDay()->setTimezone(config('app.timezone'))))
+            ->when($f['to'], fn ($q, $v) => $q->where('created_at', '<=', Carbon::parse($v, self::TZ)->endOfDay()->setTimezone(config('app.timezone'))))
             ->when($f['search'] !== '', function ($q) use ($f) {
                 $term = '%'.Str::lower($f['search']).'%';
                 $q->where(fn ($w) => $w

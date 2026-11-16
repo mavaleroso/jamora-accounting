@@ -281,7 +281,7 @@ class OverviewController extends Controller
             $can(['admin.users.manage']) ? $this->metric('Users', User::query()->count(), href: '/admin/users') : null,
             $can(['admin.roles-permissions.manage']) ? $this->metric('Roles', Role::query()->count(), href: '/admin/roles') : null,
             $can(['admin.audit-trails.view'])
-                ? $this->metric('Activity today', AuditTrail::query()->where('created_at', '>=', $today->copy()->utc())->count(), href: '/admin/audit-trails')
+                ? $this->metric('Activity today', AuditTrail::query()->where('created_at', '>=', $today->copy()->setTimezone(config('app.timezone')))->count(), href: '/admin/audit-trails')
                 : null,
         ];
     }

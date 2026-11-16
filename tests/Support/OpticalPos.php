@@ -204,7 +204,8 @@ class OpticalPos
      */
     public static function insert(string $table, array $row): int
     {
-        $stamps = in_array($table, ['roles', 'model_has_roles'], true) ? [] : ['created_at' => now()->toDateTimeString(), 'updated_at' => now()->toDateTimeString()];
+        $now = now(config('optical.timezone', 'UTC'))->toDateTimeString();
+        $stamps = in_array($table, ['roles', 'model_has_roles'], true) ? [] : ['created_at' => $now, 'updated_at' => $now];
 
         return (int) DB::connection(OpticalDatabase::CONNECTION)->table($table)->insertGetId([...$stamps, ...$row]);
     }
@@ -216,6 +217,7 @@ class OpticalPos
      */
     public static function update(string $table, int $id, array $values): void
     {
-        DB::connection(OpticalDatabase::CONNECTION)->table($table)->where('id', $id)->update(['updated_at' => now()->toDateTimeString(), ...$values]);
+        $now = now(config('optical.timezone', 'UTC'))->toDateTimeString();
+        DB::connection(OpticalDatabase::CONNECTION)->table($table)->where('id', $id)->update(['updated_at' => $now, ...$values]);
     }
 }
