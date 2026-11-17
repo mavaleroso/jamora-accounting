@@ -181,13 +181,17 @@ class AttendanceCalculator
 
         $hasIn = filled($dtr->time_in);
         $hasOut = filled($dtr->time_out);
+        $hasBreak = filled($dtr->break_out) || filled($dtr->break_in);
 
         // Approved leave with no work rendered
-        if ($dtr->leave_request_id && ! $hasIn && ! $hasOut) {
+        if ($dtr->leave_request_id && ! $hasIn && ! $hasOut && ! $hasBreak) {
             return $this->zeroOut($dtr, 'on_leave', false);
         }
 
         if (! $hasIn && ! $hasOut) {
+            if ($hasBreak) {
+                return $this->zeroOut($dtr, 'incomplete', false);
+            }
             if (! $isWorkingDay) {
                 return $this->zeroOut($dtr, $holiday ? 'holiday' : 'rest_day', false);
             }
@@ -386,7 +390,14 @@ class AttendanceCalculator
             return null;
         }
 
-        $started = Carbon::parse($yesterday.' '.$this->normalizeTime($dtr->time_in));
+        $timeIn = $this->normalizeTime($dtr->time_in);
+        $isOvernight = ($dtr->scheduled_in && $dtr->scheduled_out && $dtr->scheduled_out <= $dtr->scheduled_in)
+            || ($timeIn !== null && $timeIn >= '20:00:00');
+        if (! $isOvernight || $at->format('H:i:s') >= '08:00:00') {
+            return null;
+        }
+
+        $started = Carbon::parse($yesterday.' '.$timeIn);
         $maxHours = (int) config('people.timekeeping.max_shift_hours', 18);
 
         return $started->diffInMinutes($at) <= $maxHours * 60 ? $dtr : null;
@@ -467,7 +478,7 @@ class AttendanceCalculator
                 continue;
             }
 
-            if ($dtr && (filled($dtr->time_in) || filled($dtr->time_out))) {
+            if ($dtr && (filled($dtr->time_in) || filled($dtr->time_out) || filled($dtr->break_out) || filled($dtr->break_in))) {
                 $result['skipped']++;
 
                 continue;

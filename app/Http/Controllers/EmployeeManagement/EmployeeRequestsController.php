@@ -5,6 +5,7 @@ namespace App\Http\Controllers\EmployeeManagement;
 use App\Http\Controllers\Controller;
 use App\Models\AttendanceRequest;
 use App\Models\Employee;
+use App\Models\Entity;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
@@ -84,26 +85,38 @@ class EmployeeRequestsController extends Controller
         // Time corrections are decided on the day itself in Time & Attendance › Timesheets, not here.
         $approvable = array_values(array_diff($this->approvableKinds($perspective), [AttendanceRequest::TYPE_CORRECTION]));
 
+        $companies = $user
+            ? $user->directoryEntities()->orderBy('name')->get(['entities.id', 'entities.code', 'entities.name'])
+            : collect();
+        $companyIds = $companies->pluck('id')->all() ?: array_filter([(int) $entityId]);
+        $teamEntityIds = $perspective['canViewTeam'] ? $companyIds : array_filter([(int) $entityId]);
+
         // --- Feed for the current view ------------------------------------------------------
         $feed = null;
         $statusCounts = null;
         if ($view !== 'balances') {
-            $scope = $this->requestFeed->query($entityId);
+            $scope = $this->requestFeed->query($view === 'mine' ? $entityId : $teamEntityIds);
             match ($view) {
                 'mine' => $scope->where('employee_id', $self->id),
                 'inbox' => $scope->whereIn('kind', $approvable)->when($self, fn ($q) => $q->where('employee_id', '!=', $self->id)),
                 'all' => $scope->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId)),
             };
             $scope->when($kind !== '', fn ($q) => $q->where('kind', $kind));
-            $scope->when($search !== '', function ($q) use ($search, $view, $entityId) {
+            $scope->when($search !== '', function ($q) use ($search, $view, $teamEntityIds) {
                 $like = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $search).'%';
-                $q->where(function ($w) use ($like, $view, $entityId) {
+                $q->where(function ($w) use ($like, $view, $teamEntityIds) {
                     $w->where('reason', 'like', $like)
                         ->orWhere('destination', 'like', $like)
                         ->orWhere('type_name', 'like', $like);
                     if ($view !== 'mine') {
-                        $w->orWhereIn('employee_id', Employee::query()->where('entity_id', $entityId)
-                            ->where(fn ($e) => $e->where('firstname', 'like', $like)->orWhere('lastname', 'like', $like)->orWhere('employee_code', 'like', $like))
+                        $w->orWhereIn('employee_id', Employee::query()
+                            ->withoutEntityScope()
+                            ->whereIn('entity_id', $teamEntityIds ?: [0])
+                            ->where(fn ($e) => $e
+                                ->where('firstname', 'like', $like)
+                                ->orWhere('lastname', 'like', $like)
+                                ->orWhere('employee_code', 'like', $like)
+                                ->orWhereIn('entity_id', Entity::query()->where('name', 'like', $like)->orWhere('code', 'like', $like)->select('id')))
                             ->select('id'));
                     }
                 });
@@ -126,7 +139,7 @@ class EmployeeRequestsController extends Controller
 
         // --- Badges ---------------------------------------------------------------------------
         $inboxByKind = $perspective['canReview']
-            ? $this->requestFeed->query($entityId)
+            ? $this->requestFeed->query($teamEntityIds)
                 ->where('status', 'pending')
                 ->whereIn('kind', $approvable)
                 ->when($self, fn ($q) => $q->where('employee_id', '!=', $self->id))
@@ -160,27 +173,30 @@ class EmployeeRequestsController extends Controller
                 'inbox' => (int) $inboxByKind->sum(),
                 'inboxByKind' => $inboxByKind,
                 'corrections' => $perspective['canApproveAttendance']
-                    ? AttendanceRequest::query()->where('entity_id', $entityId)->where('request_type', AttendanceRequest::TYPE_CORRECTION)->where('status', 'pending')
+                    ? AttendanceRequest::query()->withoutEntityScope()->whereIn('entity_id', $teamEntityIds ?: [0])->where('request_type', AttendanceRequest::TYPE_CORRECTION)->where('status', 'pending')
                         ->when($self, fn ($q) => $q->where('employee_id', '!=', $self->id))->count()
                     : 0,
             ],
             'self' => $self ? [
-                ...$self->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'gender', 'leave_type_ids']),
+                ...$self->only(['id', 'entity_id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position', 'gender', 'leave_type_ids']),
                 'balances' => $this->leaveService->balanceSummary($self, $year, $leaveTypes),
                 'upcoming' => $this->outOfOffice($entityId, $today, $today->copy()->addDays(60), $self->id)->take(5)->values(),
             ] : null,
             'team' => $perspective['canViewTeam'] ? [
-                'out' => $this->outOfOffice($entityId, $today, $today->copy()->addDays(13)),
-                'stats' => $this->teamStats($entityId, $today, $approvable, $self),
+                'out' => $this->outOfOffice($teamEntityIds, $today, $today->copy()->addDays(13)),
+                'stats' => $this->teamStats($teamEntityIds, $today, $approvable, $self),
             ] : null,
-            'teamBalances' => $view === 'balances' ? $this->teamBalances($entityId, $year, $leaveTypes) : null,
+            'teamBalances' => $view === 'balances' ? $this->teamBalances($teamEntityIds, $year, $leaveTypes) : null,
             'employees' => $perspective['canViewTeam'] || $perspective['canFileOnBehalf']
                 ? Employee::query()
-                    ->where('entity_id', $entityId)
+                    ->withoutEntityScope()
+                    ->whereIn('entity_id', $companyIds ?: [0])
                     ->where('is_active', true)
+                    ->with('entity:id,code,name')
                     ->orderBy('lastname')
-                    ->get(['id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender', 'leave_type_ids'])
+                    ->get(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender', 'leave_type_ids'])
                 : [],
+            'companies' => $companies->map(fn ($c) => $c->only(['id', 'code', 'name']))->values()->all(),
             'leaveTypes' => $leaveTypes->map(fn (LeaveType $t) => [
                 ...$t->only([
                     'id', 'code', 'name', 'legal_basis', 'is_paid', 'balance_tracked', 'annual_entitlement', 'max_days_per_filing',
@@ -225,8 +241,9 @@ class EmployeeRequestsController extends Controller
         }
 
         $onBehalf = $perspective['canFileOnBehalf'];
+        $allowedEntities = $user ? $user->directoryEntities()->pluck('entities.id')->all() : array_filter([$entityId]);
         $employee = $onBehalf && $request->filled('employee_id')
-            ? Employee::query()->where('entity_id', $entityId)->findOrFail($request->integer('employee_id'))
+            ? Employee::query()->withoutEntityScope()->whereIn('entity_id', $allowedEntities ?: [0])->findOrFail($request->integer('employee_id'))
             : $self;
 
         if (! $employee) {
@@ -262,7 +279,7 @@ class EmployeeRequestsController extends Controller
 
     public function reviewLeave(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): RedirectResponse
     {
-        $this->assertEntity($leaveRequest->entity_id, $entityContext);
+        $this->assertEntity($leaveRequest->entity_id, $request->user(), $entityContext);
         if (! $this->employeeResolver->may($request->user(), 'requests.approve')) {
             abort(403);
         }
@@ -279,7 +296,7 @@ class EmployeeRequestsController extends Controller
 
     public function reviewAttendance(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
     {
-        $this->assertEntity($attendanceRequest->entity_id, $entityContext);
+        $this->assertEntity($attendanceRequest->entity_id, $request->user(), $entityContext);
         if (! $this->employeeResolver->may($request->user(), 'requests.approve')) {
             abort(403);
         }
@@ -293,8 +310,8 @@ class EmployeeRequestsController extends Controller
 
     public function cancelLeave(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): RedirectResponse
     {
-        $this->assertEntity($leaveRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'requests.manage');
+        $this->assertEntity($leaveRequest->entity_id, $request->user(), $entityContext);
+        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $leaveRequest->entity_id, 'requests.manage');
 
         // Once approved leave has begun, only whoever handles employees' requests can withdraw it (the days may
         // already be paid).
@@ -316,8 +333,8 @@ class EmployeeRequestsController extends Controller
      */
     public function leaveAttachment(Request $request, LeaveRequest $leaveRequest, EntityContext $entityContext): StreamedResponse
     {
-        $this->assertEntity($leaveRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $entityContext, 'requests.approve', 'requests.manage');
+        $this->assertEntity($leaveRequest->entity_id, $request->user(), $entityContext);
+        $this->assertOwnerOr($request->user(), $leaveRequest->employee_id, $leaveRequest->entity_id, 'requests.approve', 'requests.manage');
         abort_unless($leaveRequest->attachment_path, 404);
 
         return PrivateFiles::response($leaveRequest->attachment_path);
@@ -328,8 +345,8 @@ class EmployeeRequestsController extends Controller
      */
     public function attendanceAttachment(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): StreamedResponse
     {
-        $this->assertEntity($attendanceRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $entityContext, 'requests.approve', 'requests.manage');
+        $this->assertEntity($attendanceRequest->entity_id, $request->user(), $entityContext);
+        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $attendanceRequest->entity_id, 'requests.approve', 'requests.manage');
         abort_unless($attendanceRequest->attachment_path, 404);
 
         return PrivateFiles::response($attendanceRequest->attachment_path);
@@ -337,8 +354,8 @@ class EmployeeRequestsController extends Controller
 
     public function cancelAttendance(Request $request, AttendanceRequest $attendanceRequest, EntityContext $entityContext): RedirectResponse
     {
-        $this->assertEntity($attendanceRequest->entity_id, $entityContext);
-        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $entityContext, 'requests.manage');
+        $this->assertEntity($attendanceRequest->entity_id, $request->user(), $entityContext);
+        $this->assertOwnerOr($request->user(), $attendanceRequest->employee_id, $attendanceRequest->entity_id, 'requests.manage');
 
         $this->attendanceRequests->cancel($attendanceRequest);
 
@@ -384,12 +401,25 @@ class EmployeeRequestsController extends Controller
 
     /**
      * Approved leave and official business overlapping a window — "who's out".
+     *
+     * @param  int|list<int>|null  $entityId
      */
-    private function outOfOffice(?int $entityId, Carbon $from, Carbon $to, ?int $employeeId = null): Collection
+    private function outOfOffice(int|array|null $entityId, Carbon $from, Carbon $to, ?int $employeeId = null): Collection
     {
+        $whereEntity = fn ($q) => is_array($entityId)
+            ? $q->whereIn('entity_id', $entityId ?: [0])
+            : $q->where('entity_id', $entityId);
+
+        $employeeRelation = [
+            'employee' => fn ($q) => $q->withoutGlobalScope('entity')
+                ->select(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender'])
+                ->with('entity:id,code,name'),
+        ];
+
         $leaves = LeaveRequest::query()
-            ->with([EmployeeRequestFeed::EMPLOYEE_COLUMNS, 'type:id,code,name'])
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->with([...$employeeRelation, 'type:id,code,name'])
+            ->tap($whereEntity)
             ->where('status', LeaveRequest::STATUS_APPROVED)
             ->whereDate('start_date', '<=', $to)
             ->whereDate('end_date', '>=', $from)
@@ -407,8 +437,9 @@ class EmployeeRequestsController extends Controller
             ]);
 
         $business = AttendanceRequest::query()
-            ->with(EmployeeRequestFeed::EMPLOYEE_COLUMNS)
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->with($employeeRelation)
+            ->tap($whereEntity)
             ->where('request_type', AttendanceRequest::TYPE_OFFICIAL_BUSINESS)
             ->where('status', 'approved')
             ->whereBetween('work_date', [$from->toDateString(), $to->toDateString()])
@@ -428,8 +459,15 @@ class EmployeeRequestsController extends Controller
         return $leaves->concat($business)->sortBy('date_from')->values();
     }
 
-    private function teamStats(?int $entityId, Carbon $today, array $approvable, ?Employee $self): array
+    /**
+     * @param  int|list<int>|null  $entityId
+     */
+    private function teamStats(int|array|null $entityId, Carbon $today, array $approvable, ?Employee $self): array
     {
+        $whereEntity = fn ($q) => is_array($entityId)
+            ? $q->whereIn('entity_id', $entityId ?: [0])
+            : $q->where('entity_id', $entityId);
+
         $oldest = $approvable
             ? $this->requestFeed->query($entityId)->where('status', 'pending')->whereIn('kind', $approvable)
                 ->when($self, fn ($q) => $q->where('employee_id', '!=', $self->id))
@@ -437,11 +475,12 @@ class EmployeeRequestsController extends Controller
             : null;
 
         $month = [$today->copy()->startOfMonth(), $today->copy()->endOfMonth()];
-        $decidedThisMonth = LeaveRequest::query()->where('entity_id', $entityId)->whereIn('status', ['approved', 'declined'])->whereBetween('approved_at', $month)->count()
-            + AttendanceRequest::query()->where('entity_id', $entityId)->whereIn('status', ['approved', 'rejected'])->whereBetween('reviewed_at', $month)->count();
+        $decidedThisMonth = LeaveRequest::query()->withoutEntityScope()->tap($whereEntity)->whereIn('status', ['approved', 'declined'])->whereBetween('approved_at', $month)->count()
+            + AttendanceRequest::query()->withoutEntityScope()->tap($whereEntity)->whereIn('status', ['approved', 'rejected'])->whereBetween('reviewed_at', $month)->count();
 
         $leaveDaysThisMonth = (float) LeaveRequest::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->tap($whereEntity)
             ->where('status', LeaveRequest::STATUS_APPROVED)
             ->whereBetween('start_date', [$month[0]->toDateString(), $month[1]->toDateString()])
             ->sum('days_count');
@@ -453,22 +492,34 @@ class EmployeeRequestsController extends Controller
         ];
     }
 
-    private function teamBalances(?int $entityId, int $year, Collection $leaveTypes): array
+    /**
+     * @param  int|list<int>|null  $entityId
+     */
+    private function teamBalances(int|array|null $entityId, int $year, Collection $leaveTypes): array
     {
+        $whereEntity = fn ($q) => is_array($entityId)
+            ? $q->whereIn('entity_id', $entityId ?: [0])
+            : $q->where('entity_id', $entityId);
+
         $employees = Employee::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->tap($whereEntity)
             ->where('is_active', true)
+            ->with('entity:id,code,name')
             ->orderBy('lastname')
             ->get();
 
         $balances = LeaveBalance::query()
-            ->where('entity_id', $entityId)
+            ->withoutEntityScope()
+            ->tap($whereEntity)
             ->where('year', $year)
             ->get()
             ->groupBy('employee_id');
 
         return $employees->map(fn (Employee $e) => [
-            'employee' => $e->only(['id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position']),
+            'employee' => $e->only(['id', 'entity_id', 'employee_code', 'firstname', 'lastname', 'name', 'avatar_url', 'position']) + [
+                'entity' => $e->entity ? $e->entity->only(['id', 'code', 'name']) : null,
+            ],
             'balances' => collect($this->leaveService->balanceSummary($e, $year, $leaveTypes, ($balances->get($e->id) ?? collect())->keyBy('leave_type_id')))
                 ->keyBy('code'),
         ])->all();
@@ -484,21 +535,25 @@ class EmployeeRequestsController extends Controller
         ]);
     }
 
-    private function assertEntity(?int $entityId, EntityContext $entityContext): void
+    private function assertEntity(?int $entityId, ?User $user, EntityContext $entityContext): void
     {
-        if ((int) $entityId !== (int) $entityContext->id()) {
+        $allowed = $user
+            ? $user->directoryEntities()->pluck('entities.id')->map(fn ($id) => (int) $id)->all()
+            : array_filter([(int) $entityContext->id()]);
+
+        if (! in_array((int) $entityId, $allowed, true)) {
             abort(404);
         }
     }
 
     /** The employee the request is for, or a user holding one of these permissions. */
-    private function assertOwnerOr(User $user, int $employeeId, EntityContext $entityContext, string ...$abilities): void
+    private function assertOwnerOr(User $user, int $employeeId, ?int $entityId, string ...$abilities): void
     {
         if ($this->employeeResolver->may($user, ...$abilities)) {
             return;
         }
 
-        if ($this->employeeResolver->forUser($user, $entityContext->id())?->id !== $employeeId) {
+        if ($this->employeeResolver->forUser($user, $entityId)?->id !== $employeeId) {
             abort(403);
         }
     }

@@ -24,6 +24,7 @@ import {
     REQUESTS_URL,
     STATUS,
     type Badges,
+    type Company,
     type FeedPage,
     type Filters,
     type Kind,
@@ -51,14 +52,30 @@ type Props = {
     team: TeamOverview | null;
     teamBalances: TeamBalanceRow[] | null;
     employees: (Person & LeaveEligibility)[];
+    companies?: Company[];
     leaveTypes: LeaveTypeOption[];
     overtimePolicy: OvertimePolicy;
     today: string;
 };
 
 export default function EmployeeRequestsPage(props: Props) {
-    const { perspective, views, view, filters, feed, statusCounts, badges, self, team, teamBalances, employees, leaveTypes, overtimePolicy, today } =
-        props;
+    const {
+        perspective,
+        views,
+        view,
+        filters,
+        feed,
+        statusCounts,
+        badges,
+        self,
+        team,
+        teamBalances,
+        employees,
+        companies = [],
+        leaveTypes,
+        overtimePolicy,
+        today,
+    } = props;
     const { canReview, canViewTeam, hasSelf, canApproveLeave, canApproveAttendance } = perspective;
 
     const [fileKind, setFileKind] = React.useState<Kind | null | undefined>(undefined); // undefined = closed, null = pick a type
@@ -131,6 +148,7 @@ export default function EmployeeRequestsPage(props: Props) {
         selfId: self?.id ?? null,
         statusCounts,
         employees,
+        companies,
         onFilter: navigate,
         onDecide: (item: RequestItem, d: 'approved' | 'declined') => setDecision({ item, decision: d }),
         onCancel: setCancelItem,
@@ -331,7 +349,14 @@ export default function EmployeeRequestsPage(props: Props) {
                 )}
 
                 {view === 'balances' && teamBalances && (
-                    <TeamBalances rows={teamBalances} leaveTypes={leaveTypes} year={year} today={today} onYear={(y) => navigate({ year: y })} />
+                    <TeamBalances
+                        rows={teamBalances}
+                        companies={companies}
+                        leaveTypes={leaveTypes}
+                        year={year}
+                        today={today}
+                        onYear={(y) => navigate({ year: y })}
+                    />
                 )}
             </div>
 

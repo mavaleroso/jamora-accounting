@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\AttendanceRequest;
 use App\Models\DtrEntry;
+use App\Models\LeaveRequest;
 use App\Services\Optical\OpticalDatabase;
 use App\Services\Optical\OpticalSource;
 use App\Support\Audit\AuditLogger;
@@ -61,6 +62,16 @@ class AppServiceProvider extends ServiceProvider
         Route::bind('attendanceRequest', function (string $value) {
             $user = request()->user();
             $query = AttendanceRequest::query()->withoutEntityScope();
+            if ($user) {
+                $query->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id'));
+            }
+
+            return $query->findOrFail($value);
+        });
+
+        Route::bind('leaveRequest', function (string $value) {
+            $user = request()->user();
+            $query = LeaveRequest::query()->withoutEntityScope();
             if ($user) {
                 $query->whereIn('entity_id', $user->directoryEntities()->pluck('entities.id'));
             }

@@ -61,22 +61,22 @@ class DtrEntry extends Model
 
     public function employee(): BelongsTo
     {
-        return $this->belongsTo(Employee::class);
+        return $this->belongsTo(Employee::class)->withoutEntityScope();
     }
 
     public function roster(): BelongsTo
     {
-        return $this->belongsTo(ShiftRoster::class, 'shift_roster_id');
+        return $this->belongsTo(ShiftRoster::class, 'shift_roster_id')->withoutEntityScope();
     }
 
     public function leaveRequest(): BelongsTo
     {
-        return $this->belongsTo(LeaveRequest::class);
+        return $this->belongsTo(LeaveRequest::class)->withoutEntityScope();
     }
 
     public function payrollPeriod(): BelongsTo
     {
-        return $this->belongsTo(PayrollPeriod::class);
+        return $this->belongsTo(PayrollPeriod::class)->withoutEntityScope();
     }
 
     public function approver(): BelongsTo

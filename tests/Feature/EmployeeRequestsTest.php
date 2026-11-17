@@ -8,9 +8,12 @@ use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
 use App\Models\PayrollPeriod;
+use App\Models\PayrollRun;
+use App\Models\Payslip;
 use App\Models\ShiftRoster;
 use App\Models\User;
 use App\Services\People\AttendanceCalculator;
+use App\Services\People\TeamBoard;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -121,7 +124,6 @@ test('leave and day-level requests share one feed and one approval flow', functi
         'end_date' => '2026-10-20',
         'reason' => 'Family trip',
     ])->assertSessionHasNoErrors()->assertSessionHas('status');
-
 
     ($this->as)($this->staffUser)->post('/employee-management/requests', [
         'kind' => 'official_business',
@@ -300,7 +302,7 @@ test('approved official business credits the whole scheduled day, with no times 
     Carbon::setTestNow('2026-10-15 10:30:00');
     ($this->as)($this->staffUser)->get('/employee-management/attendance?view=clock')
         ->assertInertia(fn (Assert $page) => $page->where('myDay.officialBusiness.destination', 'Supplier warehouse'));
-    $board = app(\App\Services\People\TeamBoard::class)->build($this->entity->id);
+    $board = app(TeamBoard::class)->build($this->entity->id);
     $row = collect($board['rows'])->firstWhere('employee.id', $this->staffEmployee->id);
     expect($row['status'])->toBe('official_business')
         ->and($row['official_business'])->toBe('Supplier warehouse');
@@ -440,9 +442,9 @@ test('the portal summarises the employee day, requests, credits, posted payslips
 
     // One computed (not yet posted) and one posted run.
     foreach (['computed' => 'PP-A', 'posted' => 'PP-B'] as $status => $code) {
-        $period = \App\Models\PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => $code, 'start_date' => '2026-09-16', 'end_date' => '2026-09-30', 'pay_date' => '2026-10-05', 'status' => 'draft']);
-        $run = \App\Models\PayrollRun::create(['entity_id' => $this->entity->id, 'payroll_period_id' => $period->id, 'run_no' => $code, 'status' => $status]);
-        \App\Models\Payslip::create([
+        $period = PayrollPeriod::create(['entity_id' => $this->entity->id, 'code' => $code, 'start_date' => '2026-09-16', 'end_date' => '2026-09-30', 'pay_date' => '2026-10-05', 'status' => 'draft']);
+        $run = PayrollRun::create(['entity_id' => $this->entity->id, 'payroll_period_id' => $period->id, 'run_no' => $code, 'status' => $status]);
+        Payslip::create([
             'payroll_run_id' => $run->id, 'employee_id' => $this->staffEmployee->id, 'basic_pay' => 15000, 'ot_pay' => 0, 'absences' => 0, 'tardiness' => 0,
             'gross_pay' => 15000, 'sss' => 750, 'philhealth' => 375, 'pagibig' => 200, 'withholding_tax' => 0, 'other_deductions' => 0, 'net_pay' => 13675,
         ]);
@@ -558,16 +560,13 @@ test('a pay period can be changed until payroll is computed for it', function ()
         ->assertSessionHasErrors('start_date');
 });
 
-test('checking out needs a check-in, the accomplishment of the day, and a remark when a break punch is missing', function () {
+test('checking out needs the accomplishment of the day and a remark when a punch is missing', function () {
     $punch = fn (array $data) => ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', [
         'employee_id' => $this->staffEmployee->id,
         'latitude' => 14.5547,
         'longitude' => 121.0244,
         ...$data,
     ]);
-
-    // A forgotten check-in is fixed with a time correction, not at check-out.
-    $punch(['punch_type' => 'check_out', 'accomplishment' => 'Fitted 6 patients', 'notes' => 'Forgot to check in'])->assertSessionHasErrors('punch_type');
 
     $punch(['punch_type' => 'check_in'])->assertSessionHasNoErrors();
     Carbon::setTestNow('2026-10-14 18:00:00');
@@ -579,6 +578,46 @@ test('checking out needs a check-in, the accomplishment of the day, and a remark
     expect($dtr->time_out)->toBe('18:00:00')
         ->and($dtr->accomplishment)->toBe('Fitted 6 patients')
         ->and($dtr->notes)->toContain('Worked through lunch');
+});
+
+test('a missed check-out yesterday does not carry over to today and the clock allows flexible punch modes', function () {
+    $punch = fn (string $type, array $extra = []) => ($this->as)($this->staffUser)->post('/employee-management/attendance/punch', [
+        'employee_id' => $this->staffEmployee->id,
+        'punch_type' => $type,
+        'latitude' => 14.5547,
+        'longitude' => 121.0244,
+        ...$extra,
+    ]);
+
+    // Yesterday afternoon check-in with no check-out (e.g. error when checking out).
+    Carbon::setTestNow('2026-10-13 15:33:00');
+    $punch('check_in')->assertSessionHasNoErrors();
+
+    // Next morning: My Clock starts fresh for today (today is null, so default mode is Check in).
+    Carbon::setTestNow('2026-10-14 08:50:00');
+    ($this->as)($this->staffUser)->get('/employee-management/attendance?view=clock')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page->where('myDay.today', null));
+
+    // Employee can punch break_out, break_in, and check_out on today's record even if check_in was missed.
+    Carbon::setTestNow('2026-10-14 12:00:00');
+    $punch('break_out')->assertSessionHasNoErrors();
+
+    Carbon::setTestNow('2026-10-14 13:00:00');
+    $punch('break_in')->assertSessionHasNoErrors();
+
+    Carbon::setTestNow('2026-10-14 18:00:00');
+    $punch('check_out', ['accomplishment' => 'Assisted patients', 'notes' => 'Could not check in earlier'])->assertSessionHasNoErrors();
+
+    $yesterday = DtrEntry::where('employee_id', $this->staffEmployee->id)->whereDate('work_date', '2026-10-13')->firstOrFail();
+    $today = DtrEntry::where('employee_id', $this->staffEmployee->id)->whereDate('work_date', '2026-10-14')->firstOrFail();
+
+    expect($yesterday->time_out)->toBeNull()
+        ->and($today->time_in)->toBeNull()
+        ->and($today->break_out)->toBe('12:00:00')
+        ->and($today->break_in)->toBe('13:00:00')
+        ->and($today->time_out)->toBe('18:00:00')
+        ->and($today->attendance_status)->toBe('incomplete');
 });
 
 test('a full day with a break checks out with only the accomplishment', function () {
@@ -728,4 +767,104 @@ test('the approval sheet approves and unapproves per employee', function () {
     ($this->as)($this->staffUser)->post('/employee-management/attendance/reopen-bulk', [
         'date_from' => '2026-10-01', 'date_to' => '2026-10-15', 'employee_ids' => [$this->staffEmployee->id],
     ])->assertForbidden();
+});
+
+test('a time correction for an employee in another company of the directory can be approved and rejected from the timesheet', function () {
+    $otherBranch = Entity::create(['code' => 'OTHER-BRANCH', 'name' => 'Second Clinic', 'type' => 'branch', 'status' => 'active', 'currency' => 'PHP']);
+    $this->hrUser->entities()->attach($otherBranch->id, ['is_default' => false]);
+
+    $otherStaff = Employee::create([
+        'entity_id' => $otherBranch->id,
+        'employee_code' => 'STF-2',
+        'firstname' => 'Sharmila',
+        'lastname' => 'Llena',
+        'position' => 'Staff',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 25000,
+        'rest_days' => ['sun'],
+    ]);
+
+    $dtr = new DtrEntry([
+        'entity_id' => $otherBranch->id,
+        'employee_id' => $otherStaff->id,
+        'work_date' => '2026-10-13',
+        'time_in' => '09:30:00',
+        'time_out' => '15:00:00',
+    ]);
+    app(AttendanceCalculator::class)->compute($dtr, $otherStaff)->save();
+
+    $correction = AttendanceRequest::create([
+        'entity_id' => $otherBranch->id,
+        'employee_id' => $otherStaff->id,
+        'dtr_entry_id' => $dtr->id,
+        'request_type' => AttendanceRequest::TYPE_CORRECTION,
+        'work_date' => '2026-10-13',
+        'requested_time_in' => '09:09:00',
+        'requested_break_out' => '12:00:00',
+        'requested_break_in' => '13:00:00',
+        'requested_time_out' => '18:00:00',
+        'reason' => 'Still attending to a patient',
+        'status' => 'pending',
+    ]);
+
+    // Active session entity is $this->entity, while $dtr and $correction belong to $otherBranch.
+    ($this->as)($this->hrUser)->post("/employee-management/attendance/{$dtr->id}/approve")->assertSessionHasNoErrors();
+
+    $dtr->refresh();
+    expect($dtr->status)->toBe(DtrEntry::STATUS_APPROVED)
+        ->and($dtr->time_in)->toBe('09:09:00')
+        ->and($dtr->time_out)->toBe('18:00:00')
+        ->and($correction->fresh()->status)->toBe('approved');
+});
+
+test('employee requests lists employees and requests across all companies in the user directory with their company attached', function () {
+    $secondBranch = Entity::create(['code' => 'SECOND-CLINIC', 'name' => 'Second Clinic', 'type' => 'branch', 'status' => 'active', 'currency' => 'PHP']);
+    $this->hrUser->entities()->attach($secondBranch->id, ['is_default' => false]);
+
+    $otherStaff = Employee::create([
+        'entity_id' => $secondBranch->id,
+        'employee_code' => 'STF-2',
+        'firstname' => 'Leah',
+        'lastname' => 'Banias',
+        'position' => 'Optometrist',
+        'employment_status' => 'active',
+        'pay_type' => 'monthly',
+        'basic_pay' => 28000,
+        'rest_days' => ['sun'],
+        'is_active' => true,
+    ]);
+
+    // HR files a leave request on behalf of an employee in the second company while the first company is active.
+    ($this->as)($this->hrUser)->post('/employee-management/requests', [
+        'kind' => 'leave',
+        'employee_id' => $otherStaff->id,
+        'leave_type_id' => $this->vl->id,
+        'start_date' => '2026-10-20',
+        'end_date' => '2026-10-20',
+        'reason' => 'Branch seminar',
+    ])->assertSessionHasNoErrors();
+
+    $leave = LeaveRequest::withoutEntityScope()->where('employee_id', $otherStaff->id)->firstOrFail();
+
+    ($this->as)($this->hrUser)->get('/employee-management/requests')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('companies', 2)
+            ->has('employees', 3)
+            ->where('badges.inbox', 1)
+            ->where('feed.data.0.employee.id', $otherStaff->id)
+            ->where('feed.data.0.employee.entity.name', 'Second Clinic'));
+
+    ($this->as)($this->hrUser)->get('/employee-management/requests?view=balances')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('teamBalances', 3)
+            ->where('teamBalances.0.employee.entity.name', 'Second Clinic'));
+
+    // Approving a leave request from the second company works without switching the active company.
+    ($this->as)($this->hrUser)->post("/employee-management/requests/leave/{$leave->id}/review", ['decision' => 'approved'])
+        ->assertSessionHasNoErrors();
+
+    expect($leave->fresh()->status)->toBe(LeaveRequest::STATUS_APPROVED);
 });

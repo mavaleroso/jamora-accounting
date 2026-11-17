@@ -77,16 +77,16 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
     const { schedule, today: entry, employee } = myDay;
     const ob = myDay.officialBusiness;
     const done = Boolean(entry?.time_out);
-    const onBreak = Boolean(entry?.break_out && !entry?.break_in);
-    const working = Boolean(entry?.time_in) && !done && !onBreak;
-    const notIn = !entry?.time_in;
-    const missingAtCheckout = [!entry?.break_out && 'break-out', !entry?.break_in && 'break-in'].filter(Boolean) as string[];
+    const onBreak = Boolean(entry?.break_out && !entry?.break_in && !done);
+    const working = Boolean(entry?.time_in || entry?.break_in) && !done && !onBreak;
+    const notIn = !entry?.time_in && !entry?.break_out && !entry?.break_in && !entry?.time_out;
+    const missingAtCheckout = [!entry?.time_in && 'check-in', !entry?.break_out && 'break-out', !entry?.break_in && 'break-in'].filter(Boolean) as string[];
 
     const shiftStart = schedule.start ? atToday(schedule.start, now) : null;
     const presetBreak = schedule.break_start ? `${fmtTime(schedule.break_start)} – ${fmtTime(schedule.break_end)}` : null;
     const breakFrom = schedule.break_start ? atToday(schedule.break_start, now) : null;
     const breakTo = schedule.break_end ? atToday(schedule.break_end, now) : null;
-    const lateNow = notIn && shiftStart && now > new Date(shiftStart.getTime() + schedule.grace_minutes * 60000);
+    const lateNow = !entry?.time_in && shiftStart && now > new Date(shiftStart.getTime() + schedule.grace_minutes * 60000);
 
     const punch = (type: PunchType, checkout?: { accomplishment: string; remark: string }) => {
         if (type === 'check_out' && !checkout) {
@@ -119,18 +119,67 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
         );
     };
 
-    // What the person should do next, as one obvious button.
-    const primary: { type: PunchType; label: string; icon: typeof LogIn; className: string } | null = notIn
-        ? { type: 'check_in', label: 'Check in', icon: LogIn, className: 'bg-emerald-600 hover:bg-emerald-700 text-white' }
+    const modeMeta: Record<PunchType, { type: PunchType; key: 'time_in' | 'break_out' | 'break_in' | 'time_out'; label: string; buttonLabel: string; icon: typeof LogIn; className: string; value?: string | null }> = {
+        check_in: {
+            type: 'check_in',
+            key: 'time_in',
+            label: 'Check in',
+            buttonLabel: 'Check in',
+            icon: LogIn,
+            className: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+            value: entry?.time_in,
+        },
+        break_out: {
+            type: 'break_out',
+            key: 'break_out',
+            label: 'Break out',
+            buttonLabel: 'Start break',
+            icon: Coffee,
+            className: 'bg-amber-500 hover:bg-amber-600 text-white',
+            value: entry?.break_out,
+        },
+        break_in: {
+            type: 'break_in',
+            key: 'break_in',
+            label: 'Break in',
+            buttonLabel: 'End break',
+            icon: PlayCircle,
+            className: 'bg-sky-600 hover:bg-sky-700 text-white',
+            value: entry?.break_in,
+        },
+        check_out: {
+            type: 'check_out',
+            key: 'time_out',
+            label: 'Check out',
+            buttonLabel: 'Check out',
+            icon: LogOut,
+            className: 'bg-rose-600 hover:bg-rose-700 text-white',
+            value: entry?.time_out,
+        },
+    };
+
+    // Recommended mode for today (always starts at Check in on a new day), while letting the user pick any unrecorded mode.
+    const defaultMode: PunchType | null = notIn
+        ? 'check_in'
         : onBreak
-          ? { type: 'break_in', label: 'End break', icon: PlayCircle, className: 'bg-sky-600 hover:bg-sky-700 text-white' }
-          : working && !entry?.break_out
-            ? { type: 'break_out', label: 'Start break', icon: Coffee, className: 'bg-amber-500 hover:bg-amber-600 text-white' }
-            : working
-              ? { type: 'check_out', label: 'Check out', icon: LogOut, className: 'bg-rose-600 hover:bg-rose-700 text-white' }
+          ? 'break_in'
+          : working && !entry?.break_out && !entry?.break_in
+            ? 'break_out'
+            : !done
+              ? 'check_out'
               : null;
-    // Check out stays reachable without a break or while on one. A forgotten check-in is fixed with a time correction.
-    const secondary = (working && !entry?.break_out) || onBreak ? { type: 'check_out' as const, label: 'Check out', icon: LogOut } : null;
+
+    const [selectedMode, setSelectedMode] = React.useState<PunchType | null>(defaultMode);
+    React.useEffect(() => {
+        setSelectedMode(defaultMode);
+    }, [defaultMode, entry?.time_in, entry?.break_out, entry?.break_in, entry?.time_out]);
+
+    const activeMode = selectedMode && !modeMeta[selectedMode].value ? modeMeta[selectedMode] : defaultMode ? modeMeta[defaultMode] : null;
+    // Quick secondary shortcut to Check out when Start break / End break / Check in is selected.
+    const secondary =
+        activeMode && activeMode.type !== 'check_out' && !entry?.time_out
+            ? { type: 'check_out' as const, label: 'Check out', icon: LogOut }
+            : null;
 
     const statusLine = (() => {
         if (ob) {
@@ -155,8 +204,11 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
             };
         }
         if (working) {
-            const mins = minutesBetween(atToday(entry!.time_in!, now), now);
-            const text = `Working since ${fmtTime(entry!.time_in)} · ${fmtMinutes(mins)}${Number(entry!.tardiness_minutes) > 0 ? ` · ${fmtMinutes(entry!.tardiness_minutes)} late` : ''}`;
+            const since = entry?.time_in ?? entry?.break_in;
+            const mins = since ? minutesBetween(atToday(since, now), now) : 0;
+            const text = since
+                ? `${entry?.time_in ? 'Working since' : 'Back from break at'} ${fmtTime(since)} · ${fmtMinutes(mins)}${Number(entry?.tardiness_minutes) > 0 ? ` · ${fmtMinutes(entry!.tardiness_minutes)} late` : ''}`
+                : 'Working today';
             // Point the employee to their preset break.
             if (!entry?.break_out && breakFrom && breakTo && now >= breakFrom && now < breakTo) {
                 return { tone: 'text-amber-700 dark:text-amber-300', text: `It’s your break time (${presetBreak}). ${text}` };
@@ -173,13 +225,7 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
         return { tone: 'text-muted-foreground', text: 'Ready when you are.' };
     })();
 
-    const steps = [
-        { key: 'time_in', label: 'Check in', icon: LogIn, value: entry?.time_in },
-        { key: 'break_out', label: 'Break out', icon: Coffee, value: entry?.break_out },
-        { key: 'break_in', label: 'Break in', icon: PlayCircle, value: entry?.break_in },
-        { key: 'time_out', label: 'Check out', icon: LogOut, value: entry?.time_out },
-    ] as const;
-    const nextStep = steps.findIndex((s) => !s.value);
+    const steps = [modeMeta.check_in, modeMeta.break_out, modeMeta.break_in, modeMeta.check_out] as const;
 
     return (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -222,16 +268,16 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                             <Briefcase className="size-5 shrink-0" />
                             <div className="text-sm">No need to check in or out today. Your approved official business covers the whole day.</div>
                         </div>
-                    ) : primary ? (
+                    ) : activeMode ? (
                         <div className="flex flex-col gap-2 sm:flex-row">
                             <Button
                                 size="lg"
-                                className={cn('h-16 flex-1 text-lg font-semibold shadow-sm', primary.className)}
+                                className={cn('h-16 flex-1 text-lg font-semibold shadow-sm', activeMode.className)}
                                 disabled={Boolean(submitting) || !geo.canPunch}
-                                onClick={() => punch(primary.type)}
+                                onClick={() => punch(activeMode.type)}
                             >
-                                {submitting === primary.type ? <Loader2 className="size-5 animate-spin" /> : <primary.icon className="size-5" />}
-                                {primary.label}
+                                {submitting === activeMode.type ? <Loader2 className="size-5 animate-spin" /> : <activeMode.icon className="size-5" />}
+                                {activeMode.buttonLabel}
                             </Button>
                             {secondary && (
                                 <Button
@@ -269,32 +315,50 @@ export function MyClock({ myDay, branch, today, onRequestCorrection, onOpenReque
                     {/* Location */}
                     <LocationRow geo={geo} branch={branch} />
 
-                    {/* Stepper */}
-                    <ol className="grid grid-cols-4 gap-2">
-                        {steps.map((s, i) => {
-                            const isDone = Boolean(s.value);
-                            const isNext = i === nextStep && !done;
-                            const skipped = !isDone && done;
-                            return (
-                                <li
-                                    key={s.key}
-                                    className={cn(
-                                        'rounded-lg border p-2.5 text-center sm:text-left',
-                                        isDone && 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/30',
-                                        isNext && 'border-primary/50 ring-2 ring-primary/15',
-                                    )}
-                                >
-                                    <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground sm:justify-start">
-                                        {isDone ? <Check className="size-3.5 text-emerald-600" /> : <s.icon className="size-3.5" />}
-                                        <span className="hidden sm:inline">{s.label}</span>
-                                    </div>
-                                    <div className={cn('mt-1 font-mono text-sm font-semibold', !isDone && 'text-muted-foreground')}>
-                                        {isDone ? fmtTime(s.value) : skipped ? 'skipped' : isNext ? 'next' : '—'}
-                                    </div>
-                                </li>
-                            );
-                        })}
-                    </ol>
+                    {/* Flexible mode selector / stepper */}
+                    <div className="space-y-1.5">
+                        {!ob && steps.some((s) => !s.value) && (
+                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span>Clock mode — select a step below to switch punch mode if a previous step was missed</span>
+                                {selectedMode && selectedMode !== defaultMode && defaultMode && (
+                                    <button type="button" className="font-medium text-primary hover:underline" onClick={() => setSelectedMode(defaultMode)}>
+                                        Reset to default
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                        <ol className="grid grid-cols-4 gap-2">
+                            {steps.map((s) => {
+                                const isDone = Boolean(s.value);
+                                const isSelected = !ob && !isDone && activeMode?.type === s.type;
+                                const canSelect = !ob && !isDone;
+                                return (
+                                    <li key={s.key}>
+                                        <button
+                                            type="button"
+                                            disabled={!canSelect || Boolean(submitting)}
+                                            onClick={() => canSelect && setSelectedMode(s.type)}
+                                            className={cn(
+                                                'w-full rounded-lg border p-2.5 text-center transition-colors sm:text-left',
+                                                isDone && 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/30',
+                                                isSelected && 'border-primary bg-primary/5 ring-2 ring-primary/20',
+                                                canSelect && !isSelected && 'hover:border-primary/40 hover:bg-muted/50 cursor-pointer',
+                                                !canSelect && 'cursor-default',
+                                            )}
+                                        >
+                                            <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-muted-foreground sm:justify-start">
+                                                {isDone ? <Check className="size-3.5 text-emerald-600" /> : <s.icon className={cn('size-3.5', isSelected && 'text-primary')} />}
+                                                <span className={cn('hidden sm:inline', isSelected && 'font-semibold text-foreground')}>{s.label}</span>
+                                            </div>
+                                            <div className={cn('mt-1 font-mono text-sm font-semibold', !isDone && !isSelected && 'text-muted-foreground', isSelected && 'text-primary')}>
+                                                {isDone ? fmtTime(s.value) : isSelected ? 'active' : 'select'}
+                                            </div>
+                                        </button>
+                                    </li>
+                                );
+                            })}
+                        </ol>
+                    </div>
                 </div>
             </div>
 

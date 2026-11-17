@@ -20,17 +20,23 @@ class EmployeeRequestFeed
 
     /**
      * Both request tables as one queryable feed. Attendance "rejected" is reported as "declined".
+     *
+     * @param  int|list<int>|null  $entityId
      */
-    public function query(?int $entityId): Builder
+    public function query(int|array|null $entityId): Builder
     {
+        $whereEntity = fn ($q) => is_array($entityId)
+            ? $q->whereIn('entity_id', $entityId ?: [0])
+            : $q->where('entity_id', $entityId);
+
         // reason / destination / type_name are carried only so history can be searched.
         $leave = DB::table('leave_requests')
-            ->where('entity_id', $entityId)
-            ->selectRaw("'leave' as kind, id, employee_id, status, created_at, start_date as date_from, reason, null as destination, (select name from leave_types where leave_types.id = leave_requests.leave_type_id) as type_name");
+            ->tap($whereEntity)
+            ->selectRaw("'leave' as kind, id, entity_id, employee_id, status, created_at, start_date as date_from, reason, null as destination, (select name from leave_types where leave_types.id = leave_requests.leave_type_id) as type_name");
 
         $attendance = DB::table('attendance_requests')
-            ->where('entity_id', $entityId)
-            ->selectRaw("request_type as kind, id, employee_id, case when status = 'rejected' then 'declined' else status end as status, created_at, work_date as date_from, reason, destination, null as type_name");
+            ->tap($whereEntity)
+            ->selectRaw("request_type as kind, id, entity_id, employee_id, case when status = 'rejected' then 'declined' else status end as status, created_at, work_date as date_from, reason, destination, null as type_name");
 
         return DB::query()->fromSub($leave->unionAll($attendance), 'requests');
     }
@@ -43,14 +49,22 @@ class EmployeeRequestFeed
         $leaveIds = $rows->where('kind', 'leave')->pluck('id');
         $attendanceIds = $rows->where('kind', '!=', 'leave')->pluck('id');
 
+        $employeeRelation = [
+            'employee' => fn ($q) => $q->withoutGlobalScope('entity')
+                ->select(['id', 'entity_id', 'employee_code', 'firstname', 'middlename', 'lastname', 'avatar', 'position', 'gender'])
+                ->with('entity:id,code,name'),
+        ];
+
         $leaves = LeaveRequest::query()
-            ->with([self::EMPLOYEE_COLUMNS, 'type', 'approver:id,firstname,lastname', 'filer:id,firstname,lastname', 'canceller:id,firstname,lastname'])
+            ->withoutEntityScope()
+            ->with([...$employeeRelation, 'type', 'approver:id,firstname,lastname', 'filer:id,firstname,lastname', 'canceller:id,firstname,lastname'])
             ->whereIn('id', $leaveIds)
             ->get()
             ->keyBy('id');
 
         $attendance = AttendanceRequest::query()
-            ->with([self::EMPLOYEE_COLUMNS, 'dtrEntry', 'reviewer:id,firstname,lastname', 'filer:id,firstname,lastname'])
+            ->withoutEntityScope()
+            ->with([...$employeeRelation, 'dtrEntry' => fn ($q) => $q->withoutGlobalScope('entity'), 'reviewer:id,firstname,lastname', 'filer:id,firstname,lastname'])
             ->whereIn('id', $attendanceIds)
             ->get()
             ->keyBy('id');

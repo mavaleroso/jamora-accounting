@@ -44,12 +44,12 @@ class ShiftRoster extends Model
 
     public function employee(): BelongsTo
     {
-        return $this->belongsTo(Employee::class);
+        return $this->belongsTo(Employee::class)->withoutEntityScope();
     }
 
     public function template(): BelongsTo
     {
-        return $this->belongsTo(ShiftTemplate::class, 'shift_template_id');
+        return $this->belongsTo(ShiftTemplate::class, 'shift_template_id')->withoutEntityScope();
     }
 
     public function publisher(): BelongsTo

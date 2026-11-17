@@ -4,17 +4,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils';
 import type { ColumnDef } from '@tanstack/react-table';
 import * as React from 'react';
-import { fullName, type LeaveTypeOption, type TeamBalanceRow } from '../lib';
+import { companyDot, fullName, type Company, type LeaveTypeOption, type TeamBalanceRow } from '../lib';
 
 /** Available / entitled credits per employee for every balance-tracked leave type. */
 export function TeamBalances({
     rows,
+    companies = [],
     leaveTypes,
     year,
     today,
     onYear,
 }: {
     rows: TeamBalanceRow[];
+    companies?: Company[];
     leaveTypes: LeaveTypeOption[];
     year: number;
     today: string;
@@ -31,7 +33,9 @@ export function TeamBalances({
                 header: ({ column }) => <DataTableColumnHeader column={column} title="Employee" />,
                 filterFn: (row, _id, value: string) => {
                     const e = row.original.employee;
-                    return `${fullName(e)} ${e.employee_code} ${e.position ?? ''}`.toLowerCase().includes(value.toLowerCase());
+                    return `${fullName(e)} ${e.employee_code} ${e.position ?? ''} ${e.entity?.name ?? ''} ${e.entity?.code ?? ''}`
+                        .toLowerCase()
+                        .includes(value.toLowerCase());
                 },
                 enableHiding: false,
                 cell: ({ row: { original: r } }) => (
@@ -43,6 +47,23 @@ export function TeamBalances({
                         </div>
                     </div>
                 ),
+            },
+            {
+                id: 'company',
+                accessorFn: (r) => r.employee.entity?.name ?? '',
+                header: ({ column }) => <DataTableColumnHeader column={column} title="Company" />,
+                cell: ({ row: { original: r } }) =>
+                    r.employee.entity ? (
+                        <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
+                            <span
+                                className={cn('size-2 shrink-0 rounded-full', companyDot(companies, r.employee.entity_id ?? r.employee.entity.id))}
+                                aria-hidden
+                            />
+                            {r.employee.entity.name}
+                        </span>
+                    ) : (
+                        <span className="text-muted-foreground">—</span>
+                    ),
             },
             ...tracked.map(
                 (t): ColumnDef<TeamBalanceRow> => ({
@@ -73,7 +94,7 @@ export function TeamBalances({
                 }),
             ),
         ],
-        [tracked],
+        [tracked, companies],
     );
 
     return (
@@ -81,8 +102,8 @@ export function TeamBalances({
             columns={columns}
             data={rows}
             filterableColumns={{ employee: 'Employee' }}
-            filterPlaceholder="Search employee, position…"
-            columnLabels={Object.fromEntries([['employee', 'Employee'], ...tracked.map((t) => [t.code, t.name])])}
+            filterPlaceholder="Search employee, company, position…"
+            columnLabels={Object.fromEntries([['employee', 'Employee'], ['company', 'Company'], ...tracked.map((t) => [t.code, t.name])])}
             enableRowSelection={false}
             initialSorting={[{ id: 'employee', desc: false }]}
             title={`${year} leave credits`}

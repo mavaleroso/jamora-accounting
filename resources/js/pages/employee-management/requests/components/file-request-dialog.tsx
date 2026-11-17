@@ -289,6 +289,7 @@ function RequestForm({
                                 <SelectItem key={e.id} value={String(e.id)}>
                                     {fullName(e)}
                                     {self?.id === e.id ? ' (me)' : ''}
+                                    {e.entity?.name ? <span className="text-muted-foreground"> · {e.entity.name}</span> : null}
                                     {e.position ? <span className="text-muted-foreground"> · {e.position}</span> : null}
                                 </SelectItem>
                             ))}

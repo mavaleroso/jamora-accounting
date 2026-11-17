@@ -101,12 +101,12 @@ class AttendanceRequest extends Model
 
     public function employee(): BelongsTo
     {
-        return $this->belongsTo(Employee::class);
+        return $this->belongsTo(Employee::class)->withoutEntityScope();
     }
 
     public function dtrEntry(): BelongsTo
     {
-        return $this->belongsTo(DtrEntry::class);
+        return $this->belongsTo(DtrEntry::class)->withoutEntityScope();
     }
 
     /**

@@ -11,12 +11,14 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Check, Eye, MoreHorizontal, Paperclip,
 import * as React from 'react';
 import {
     canDecide,
+    companyDot,
     fullName,
     KIND_ORDER,
     KINDS,
     STATUS,
     timeAgo,
     TONE,
+    type Company,
     type FeedPage,
     type Filters,
     type Kind,
@@ -41,6 +43,7 @@ type Props = {
     /** Kinds offered in the type filter. */
     kinds: Kind[];
     employees: Person[];
+    companies?: Company[];
     onFilter: (changes: FeedChange) => void;
     onDecide: (item: RequestItem, decision: 'approved' | 'declined') => void;
     onCancel: (item: RequestItem) => void;
@@ -48,6 +51,7 @@ type Props = {
 
 const COLUMN_LABELS: Record<string, string> = {
     employee: 'Employee',
+    company: 'Company',
     request: 'Request',
     date: 'Date',
     details: 'Details',
@@ -87,6 +91,7 @@ export function RequestDataTable({
     kindCounts,
     kinds,
     employees,
+    companies = [],
     onFilter,
     onDecide,
     onCancel,
@@ -155,6 +160,22 @@ export function RequestDataTable({
                     </div>
                 </div>
             ),
+        },
+        {
+            id: 'company',
+            header: 'Company',
+            cell: ({ row: { original: item } }) =>
+                item.employee?.entity ? (
+                    <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
+                        <span
+                            className={cn('size-2 shrink-0 rounded-full', companyDot(companies, item.employee.entity_id ?? item.employee.entity.id))}
+                            aria-hidden
+                        />
+                        {item.employee.entity.name}
+                    </span>
+                ) : (
+                    <span className="text-muted-foreground">—</span>
+                ),
         },
         {
             id: 'request',
@@ -326,6 +347,7 @@ export function RequestDataTable({
                         {employees.map((e) => (
                             <SelectItem key={e.id} value={String(e.id)}>
                                 {fullName(e)}
+                                {e.entity?.name && <span className="text-muted-foreground"> · {e.entity.name}</span>}
                             </SelectItem>
                         ))}
                     </SelectContent>

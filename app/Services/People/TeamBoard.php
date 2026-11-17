@@ -92,7 +92,7 @@ class TeamBoard
                 $status = 'done';
             } elseif ($dtr?->break_out && ! $dtr->break_in) {
                 $status = 'on_break';
-            } elseif ($dtr?->time_in) {
+            } elseif ($dtr?->time_in || $dtr?->break_in) {
                 $status = 'working';
             } elseif ($leave) {
                 $status = 'on_leave';

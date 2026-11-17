@@ -122,7 +122,18 @@ export function OutPanel({ title, items, today, showEmployee, empty }: { title: 
                                 )}
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-baseline justify-between gap-2">
-                                        <span className="truncate text-sm font-medium">{showEmployee ? fullName(i.employee) : i.title}</span>
+                                        <span className="truncate text-sm font-medium">
+                                            {showEmployee ? (
+                                                <>
+                                                    {fullName(i.employee)}
+                                                    {i.employee.entity?.name && (
+                                                        <span className="text-muted-foreground text-xs font-normal"> · {i.employee.entity.name}</span>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                i.title
+                                            )}
+                                        </span>
                                         <span className={cn('shrink-0 text-[11px]', whenLabel(i, today) === 'Today' ? 'font-semibold text-violet-600 dark:text-violet-400' : 'text-muted-foreground')}>
                                             {whenLabel(i, today)}
                                         </span>

@@ -365,7 +365,7 @@ class AttendanceController extends Controller
                 ->first();
 
             // Past midnight on a night shift, breaks and the check-out go to the shift that began yesterday.
-            if ($punchType !== 'check_in' && ! $dtr?->time_in) {
+            if ($punchType !== 'check_in' && ! $dtr) {
                 $dtr = $this->attendanceCalculator->openOvernightShift((int) $validated['employee_id'], $punchTime) ?? $dtr;
             }
 
@@ -379,13 +379,12 @@ class AttendanceController extends Controller
                 ]);
             }
 
-            // Enforce the punch sequence: in -> (break out -> break in) -> out.
+            // Each punch mode can be recorded once per day, in any order when another punch was missed.
             $sequenceError = match ($punchType) {
                 'check_in' => $dtr->time_in ? 'You have already checked in today.' : null,
-                'break_out' => ! $dtr->time_in ? 'Check in before starting a break.' : ($dtr->break_out ? 'Break-out is already recorded.' : ($dtr->time_out ? 'You have already checked out.' : null)),
-                'break_in' => ! $dtr->break_out ? 'Record a break-out first.' : ($dtr->break_in ? 'Break-in is already recorded.' : ($dtr->time_out ? 'You have already checked out.' : null)),
-                // A forgotten check-in is fixed with a time correction request, not at check-out.
-                'check_out' => ! $dtr->time_in ? 'Check in before checking out. Forgot to check in? File a time correction.' : ($dtr->time_out ? 'You have already checked out today.' : null),
+                'break_out' => $dtr->break_out ? 'Break-out is already recorded.' : null,
+                'break_in' => $dtr->break_in ? 'Break-in is already recorded.' : null,
+                'check_out' => $dtr->time_out ? 'You have already checked out today.' : null,
             };
             if ($sequenceError) {
                 return redirect()->back()->withErrors(['punch_type' => $sequenceError]);
@@ -402,6 +401,7 @@ class AttendanceController extends Controller
                 }
 
                 $missing = array_keys(array_filter([
+                    'check-in' => ! $dtr->time_in,
                     'break-out' => ! $dtr->break_out,
                     'break-in' => ! $dtr->break_in,
                 ]));
@@ -437,6 +437,8 @@ class AttendanceController extends Controller
                 }
                 $statusMsg = "Checked out at {$display}. See you next shift!";
             }
+            $dtr->location_status ??= $locationStatus;
+            $dtr->distance_meters ??= $distance;
             $dtr->source = 'web_geofence';
 
             if (! empty($validated['notes'])) {
@@ -892,15 +894,12 @@ class AttendanceController extends Controller
             return [
                 'date' => $date->toDateString(),
                 'is_rest_day' => $this->attendanceCalculator->scheduleFor($employee, $date)->isRestDay,
-                'entry' => $entry?->only(['id', 'time_in', 'time_out', 'regular_hours', 'ot_hours', 'tardiness_minutes', 'attendance_status', 'status']),
+                'entry' => $entry?->only(['id', 'time_in', 'break_out', 'break_in', 'time_out', 'regular_hours', 'ot_hours', 'tardiness_minutes', 'attendance_status', 'status']),
             ];
         });
 
+        // Each calendar day starts fresh on the clock so a missed check-out yesterday never blocks today's check-in.
         $todayEntry = $weekEntries->get($today->toDateString());
-        // Still on last night's shift: show that record so the employee can take a break or check out.
-        if (! $todayEntry?->time_in) {
-            $todayEntry = $this->attendanceCalculator->openOvernightShift($employee->id, Carbon::now()) ?? $todayEntry;
-        }
 
         return [
             'employee' => $employee->only(['id', 'employee_code', 'firstname', 'lastname', 'position', 'avatar_url']) + ['name' => $employee->name],

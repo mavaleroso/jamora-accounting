@@ -1,7 +1,7 @@
 import { ArrowLeftRight, Briefcase, CalendarClock, CalendarX, FilePenLine, Hourglass, Palmtree, type LucideIcon } from 'lucide-react';
-import type { Paginated, Person } from '../attendance/lib';
+import type { Company, Paginated, Person } from '../attendance/lib';
 
-export { firstError, fmtDate, fmtHours, fmtTime, fullName, TONE, toTimeInput, weekday, type Paginated, type Person } from '../attendance/lib';
+export { companyDot, firstError, fmtDate, fmtHours, fmtTime, fullName, TONE, toTimeInput, weekday, type Company, type Paginated, type Person } from '../attendance/lib';
 
 export const REQUESTS_URL = '/employee-management/requests';
 

@@ -202,8 +202,8 @@ class AttendanceRequestService
             throw ValidationException::withMessages(['status' => "This request was already {$request->status}."]);
         }
 
-        $employee = $request->employee;
-        if ($employee?->user_id && $employee->user_id === $reviewer->id) {
+        $employee = $request->employee ?? Employee::query()->withoutEntityScope()->withTrashed()->findOrFail($request->employee_id);
+        if ($employee->user_id && $employee->user_id === $reviewer->id) {
             throw ValidationException::withMessages(['approver' => 'You cannot review your own request.']);
         }
 

@@ -126,7 +126,7 @@ const STATUS_PILL: Record<DtrRow['status'] | 'working', { label: string; icon: L
 };
 
 /** A day can be approved when it has both punches, or a pending correction that may supply them. */
-const canApproveDay = (e: DtrRow) => e.status === 'open' && (e.attendance_status !== 'incomplete' || !!e.pending_correction);
+const canApproveDay = (e: DtrRow) => (e.status === 'open' || !!e.pending_correction) && (e.attendance_status !== 'incomplete' || !!e.pending_correction);
 /** Bulk approval leaves out days with a correction — those are approved one at a time. */
 const bulkReady = (e: DtrRow) => e.status === 'open' && e.attendance_status !== 'incomplete' && !e.pending_correction;
 
@@ -1282,7 +1282,7 @@ function EntryRow({
                     </span>
                 ) : canManage ? (
                     <SplitAction label="Edit" onClick={() => onEdit(e)}>
-                        {e.status === 'open' && (
+                        {(e.status === 'open' || !!fix) && (
                             <>
                                 <DropdownMenuItem disabled={busy || working || !canApproveDay(e)} onClick={() => onApprove(e)}>
                                     <Check className="size-4" /> {fix ? 'Approve with correction' : 'Approve'}

@@ -134,7 +134,14 @@ export function RequestCard({ item, showEmployee, canDecide, canCancel, emphasiz
                     )}
                     <div className="min-w-0 flex-1 space-y-1.5">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                            {showEmployee && <span className="font-medium">{fullName(item.employee)}</span>}
+                            {showEmployee && (
+                                <span className="font-medium">
+                                    {fullName(item.employee)}
+                                    {item.employee?.entity?.name && (
+                                        <span className="text-muted-foreground font-normal"> · {item.employee.entity.name}</span>
+                                    )}
+                                </span>
+                            )}
                             {showEmployee ? (
                                 <Badge variant="outline" className={cn('gap-1', TONE[meta.tone])}>
                                     <meta.icon className="size-3" /> {item.title}

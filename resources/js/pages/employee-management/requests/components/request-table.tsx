@@ -13,12 +13,14 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronLeft, ChevronRight, Eye,
 import * as React from 'react';
 import {
     canDecide,
+    companyDot,
     fullName,
     KIND_ORDER,
     KINDS,
     STATUS,
     timeAgo,
     TONE,
+    type Company,
     type FeedPage,
     type Filters,
     type Kind,
@@ -40,6 +42,7 @@ type Props = {
     /** Kinds offered in the type filter. */
     kinds: Kind[];
     employees: Person[];
+    companies?: Company[];
     onFilter: (changes: Partial<Filters>) => void;
     onDecide: (item: RequestItem, decision: 'approved' | 'declined') => void;
     onCancel: (item: RequestItem) => void;
@@ -61,6 +64,7 @@ export function RequestTable({
     statusCounts,
     kinds,
     employees,
+    companies = [],
     onFilter,
     onDecide,
     onCancel,
@@ -69,7 +73,7 @@ export function RequestTable({
     const showEmployee = view !== 'mine';
     const total = statusCounts ? Object.values(statusCounts).reduce((a, b) => a + b, 0) : 0;
     const [open, setOpen] = React.useState<RequestItem | null>(null);
-    const columns = 7 + (showEmployee ? 1 : 0);
+    const columns = 7 + (showEmployee ? 2 : 0);
 
     const rights = (item: RequestItem) => {
         const own = selfId !== null && item.employee?.id === selfId;
@@ -142,6 +146,7 @@ export function RequestTable({
                                 {employees.map((e) => (
                                     <SelectItem key={e.id} value={String(e.id)}>
                                         {fullName(e)}
+                                        {e.entity?.name && <span className="text-muted-foreground"> · {e.entity.name}</span>}
                                     </SelectItem>
                                 ))}
                             </SelectContent>
@@ -155,7 +160,12 @@ export function RequestTable({
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-muted/40 hover:bg-muted/40">
-                                {showEmployee && <TableHead className="min-w-[200px]">Employee</TableHead>}
+                                {showEmployee && (
+                                    <>
+                                        <TableHead className="min-w-[200px]">Employee</TableHead>
+                                        <TableHead className="min-w-[140px]">Company</TableHead>
+                                    </>
+                                )}
                                 <TableHead className="min-w-[180px]">Request</TableHead>
                                 <SortHead label="Date" column="date" filters={filters} onFilter={onFilter} />
                                 <TableHead className="min-w-[180px]">Details</TableHead>
@@ -190,21 +200,39 @@ export function RequestTable({
                                             onClick={() => setOpen(item)}
                                         >
                                             {showEmployee && (
-                                                <TableCell>
-                                                    <div className="flex items-center gap-2.5">
-                                                        <PersonAvatar
-                                                            src={item.employee?.avatar_url}
-                                                            seed={item.employee?.employee_code ?? item.key}
-                                                            className="size-8"
-                                                        />
-                                                        <div className="min-w-0">
-                                                            <div className="truncate text-sm font-medium">{fullName(item.employee)}</div>
-                                                            <div className="text-muted-foreground truncate text-[11px]">
-                                                                {item.employee?.position}
+                                                <>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-2.5">
+                                                            <PersonAvatar
+                                                                src={item.employee?.avatar_url}
+                                                                seed={item.employee?.employee_code ?? item.key}
+                                                                className="size-8"
+                                                            />
+                                                            <div className="min-w-0">
+                                                                <div className="truncate text-sm font-medium">{fullName(item.employee)}</div>
+                                                                <div className="text-muted-foreground truncate text-[11px]">
+                                                                    {item.employee?.position}
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                </TableCell>
+                                                    </TableCell>
+                                                    <TableCell className="text-sm whitespace-nowrap">
+                                                        {item.employee?.entity ? (
+                                                            <span className="inline-flex items-center gap-2">
+                                                                <span
+                                                                    className={cn(
+                                                                        'size-2 shrink-0 rounded-full',
+                                                                        companyDot(companies, item.employee.entity_id ?? item.employee.entity.id),
+                                                                    )}
+                                                                    aria-hidden
+                                                                />
+                                                                {item.employee.entity.name}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-muted-foreground">—</span>
+                                                        )}
+                                                    </TableCell>
+                                                </>
                                             )}
                                             <TableCell>
                                                 <div className="flex items-center gap-2.5">
