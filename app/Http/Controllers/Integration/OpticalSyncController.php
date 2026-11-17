@@ -12,6 +12,7 @@ use App\Services\Optical\OpticalSource;
 use App\Services\Optical\OpticalSyncService;
 use App\Support\EntityContext;
 use App\Support\SystemSettings;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -79,7 +80,11 @@ class OpticalSyncController extends Controller
         ]);
     }
 
-    public function run(Request $request): RedirectResponse
+    /**
+     * Check the POS now. The page asks for JSON and does not wait on this page for the answer: it shows the progress
+     * in a toast that follows the user around (see status()), so the run must not depend on the browser staying.
+     */
+    public function run(Request $request): RedirectResponse|JsonResponse
     {
         $validated = $request->validate([
             'full' => ['nullable', 'boolean'],
@@ -95,19 +100,62 @@ class OpticalSyncController extends Controller
                 fn () => $this->syncService->run($request->user(), ['full' => (bool) ($validated['full'] ?? false)])
             );
         } catch (\RuntimeException $e) {
-            return redirect()->back()->with('error', $e->getMessage());
+            return $request->expectsJson()
+                ? response()->json(['ok' => false, 'message' => $e->getMessage()], 409)
+                : redirect()->back()->with('error', $e->getMessage());
         }
 
-        return redirect()->back()->with(
-            $run->status === 'completed' ? 'status' : 'error',
-            match (true) {
-                $run->status === 'failed' => 'The optical POS could not be read: '.$run->message,
-                $run->failed > 0 => "Checked the optical POS: {$run->created_entries} booked, {$run->failed} failed. See the exceptions.",
-                $run->status !== 'completed' => 'Checked the optical POS, with errors: '.$run->message,
-                $run->created_entries > 0 => "Checked the optical POS: {$run->created_entries} booked.",
-                default => 'Checked the optical POS: nothing new, the books are up to date.',
-            }
-        );
+        $ok = $run->status === 'completed';
+        $message = $this->outcome($run);
+
+        return $request->expectsJson()
+            ? response()->json(['ok' => $ok, 'message' => $message, 'run' => $this->progress($run)])
+            : redirect()->back()->with($ok ? 'status' : 'error', $message);
+    }
+
+    /**
+     * The check this user started, while it runs and once it is done: what the progress toast shows on every page.
+     * Checks the books make on their own are not reported, so nobody is told about work they did not ask for.
+     */
+    public function status(Request $request): JsonResponse
+    {
+        $this->syncService->active(); // closes runs that stopped without finishing
+
+        $mine = SyncRun::query()->where('triggered_by', $request->user()->id);
+        $running = (clone $mine)->where('status', 'running')->latest('id')->first();
+        $latest = (clone $mine)->where('status', '!=', 'running')->latest('id')->first();
+
+        return response()->json([
+            'running' => $running ? $this->progress($running) : null,
+            'latest' => $latest ? [...$this->progress($latest), 'ok' => $latest->status === 'completed', 'message' => $this->outcome($latest)] : null,
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function progress(SyncRun $run): array
+    {
+        return [
+            'id' => $run->id,
+            'status' => $run->status,
+            'step' => $run->status === 'running' ? $run->message : null,
+            'read' => (int) $run->processed,
+            'booked' => (int) $run->created_entries,
+            'failed' => (int) $run->failed,
+        ];
+    }
+
+    /** One sentence on how a finished check went. */
+    private function outcome(SyncRun $run): string
+    {
+        return match (true) {
+            $run->status === 'failed' => 'The optical POS could not be read: '.$run->message,
+            $run->failed > 0 => "Checked the optical POS: {$run->created_entries} booked, {$run->failed} failed. See the exceptions.",
+            $run->status !== 'completed' => 'Checked the optical POS, with errors: '.$run->message,
+            $run->created_entries > 0 => "Checked the optical POS: {$run->created_entries} booked.",
+            default => 'Checked the optical POS: nothing new, the books are up to date.',
+        };
     }
 
     public function exceptions(Request $request): Response

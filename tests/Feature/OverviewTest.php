@@ -1,7 +1,6 @@
 <?php
 
 use App\Models\Entity;
-use App\Models\LeaveRequest;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -50,10 +49,10 @@ test('overview loads metrics for every module the user can access', function () 
             ->component('overview')
             ->missing('modules')
             ->loadDeferredProps(fn (Assert $reload) => $reload
-                ->has('modules', 9)
-                ->has('modules.Accounting')
-                ->has('modules.Admin', 3)
-                ->where('modules.Billing.1.label', 'Overdue invoices')
+                ->has('modules', 5)
+                ->has('modules.Books')
+                ->has('modules.Setup', 7)
+                ->where('modules.Daily Work.1.label', 'Overdue invoices')
             )
         );
 });
@@ -65,10 +64,10 @@ test('overview only returns metrics the user is permitted to see', function () {
             ->loadDeferredProps(fn (Assert $reload) => $reload
                 // Whoever decides on employees' requests sees both queues.
                 ->has('modules', 1)
-                ->has('modules.Employee Management', 2)
-                ->where('modules.Employee Management.0.label', 'Leave to approve')
-                ->where('modules.Employee Management.0.value', 0)
-                ->where('modules.Employee Management.1.label', 'Attendance requests')
+                ->has('modules.People', 2)
+                ->where('modules.People.0.label', 'Leave to approve')
+                ->where('modules.People.0.value', 0)
+                ->where('modules.People.1.label', 'Attendance requests')
             )
         );
 });
@@ -80,8 +79,8 @@ test('overview omits metrics that link to pages the user cannot open', function 
         ->assertInertia(fn (Assert $page) => $page
             ->loadDeferredProps(fn (Assert $reload) => $reload
                 ->has('modules', 1)
-                ->has('modules.Employee Management', 1)
-                ->where('modules.Employee Management.0.label', 'Latest payroll')
+                ->has('modules.People', 1)
+                ->where('modules.People.0.label', 'Latest payroll')
             )
         );
 });

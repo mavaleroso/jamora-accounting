@@ -33,7 +33,7 @@ use Inertia\Response;
 use Spatie\Permission\Models\Role;
 
 /**
- * Landing page after login: a snapshot of every module the user can access.
+ * Landing page after login: what is waiting on the user, then a snapshot of every part of the system they can access.
  *
  * Each metric is gated by the same permissions as the sidebar link it points to,
  * so users only ever see figures for modules they can open.
@@ -55,16 +55,13 @@ class OverviewController extends Controller
         $today = Carbon::now('Asia/Manila')->startOfDay();
         $can = fn (array $permissions): bool => $user->canAny($permissions);
 
+        // Keyed by the menu's groups (see use-nav-groups.ts), which follow the job being done rather than the module.
         $modules = [
-            'Accounting' => $this->accounting($can, $today),
-            'Billing' => $this->billing($can, $today),
-            'Inventory Integration' => $this->integration($can),
-            'Accounts Payable' => $this->payables($can, $today),
-            'Banks' => $this->banks($can),
-            'Employee Management' => $this->employees($can, $today),
+            'Daily Work' => [...$this->billing($can, $today), ...$this->payables($can, $today), ...$this->integration($can)],
+            'Books' => [...$this->accounting($can, $today), ...$this->banks($can)],
+            'People' => $this->employees($can, $today),
             'Reports' => $this->reports($can, $today),
-            'Libraries' => $this->libraries($can),
-            'Admin' => $this->admin($can, $today),
+            'Setup' => [...$this->libraries($can), ...$this->admin($can, $today)],
         ];
 
         return array_filter(array_map(fn (array $metrics) => array_values(array_filter($metrics)), $modules));

@@ -1,9 +1,9 @@
 import { AppearanceToggle } from '@/components/appearance-toggle';
 import { Breadcrumbs } from '@/components/breadcrumbs';
+import { CommandPaletteButton } from '@/components/command-palette';
 import { EntitySwitcher } from '@/components/entity-switcher';
 import LayoutToggleDropdown from '@/components/layout-toggle-dropdown';
 import { SidebarTrigger } from '@/components/ui/sidebar';
-import { ViewModeSwitch } from '@/components/view-mode-switch';
 import type { BreadcrumbItem as BreadcrumbItemType } from '@/types';
 import { usePage } from '@inertiajs/react';
 
@@ -37,15 +37,17 @@ export function AppSidebarHeader({ breadcrumbs = [] }: { breadcrumbs?: Breadcrum
     const showEntitySwitcher = isEntityScopedPath(url);
 
     return (
-        <header className="border-sidebar-border/50 flex h-16 shrink-0 items-center gap-2 border-b px-6 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 md:px-4">
-            <div className="flex flex-1 items-center gap-2">
+        <header className="border-sidebar-border/50 max-md:bg-background/95 flex h-16 shrink-0 items-center gap-2 border-b px-6 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 max-md:sticky max-md:top-0 max-md:z-30 max-md:h-14 max-md:gap-1 max-md:px-3 max-md:backdrop-blur md:px-4 print:hidden">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
                 <SidebarTrigger className="-ml-1" />
                 <Breadcrumbs breadcrumbs={breadcrumbs} />
             </div>
             {showEntitySwitcher ? <EntitySwitcher variant="header" /> : null}
-            <ViewModeSwitch />
+            <div className="max-md:hidden">
+                <CommandPaletteButton />
+            </div>
             <AppearanceToggle />
-            <LayoutToggleDropdown />
+            <LayoutToggleDropdown className="max-md:hidden" />
         </header>
     );
 }

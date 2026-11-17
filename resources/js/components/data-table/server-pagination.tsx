@@ -31,7 +31,7 @@ export type ServerPaginationProps = {
 /** Footer for server-paginated lists: "Showing x–y of z", rows per page, and page buttons. */
 export function ServerPagination({ page, lastPage, perPage, total, from, to, disabled = false, pageSizes = PAGE_SIZES, onPage, onPerPage }: ServerPaginationProps) {
     const nav = (target: number, label: string, icon: React.ReactNode, className?: string) => (
-        <Button variant="outline" size="icon" className={cn('size-8', className)} disabled={disabled || target < 1 || target > lastPage || target === page} onClick={() => onPage(target)} aria-label={label} title={label}>
+        <Button variant="outline" size="icon" className={cn('size-8 max-sm:size-10', className)} disabled={disabled || target < 1 || target > lastPage || target === page} onClick={() => onPage(target)} aria-label={label} title={label}>
             {icon}
         </Button>
     );
@@ -78,7 +78,7 @@ export function ServerPagination({ page, lastPage, perPage, total, from, to, dis
                                 key={p}
                                 variant={p === page ? 'default' : 'outline'}
                                 size="icon"
-                                className="size-8 min-w-8 tabular-nums"
+                                className="size-8 min-w-8 tabular-nums max-sm:size-10"
                                 disabled={disabled && p !== page}
                                 onClick={() => p !== page && onPage(p)}
                                 aria-label={`Page ${p}`}

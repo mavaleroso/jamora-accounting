@@ -6,6 +6,7 @@ import {
     Banknote,
     BarChart3,
     BookOpen,
+    Briefcase,
     Building2,
     Calculator,
     CalendarCheck,
@@ -20,12 +21,12 @@ import {
     Landmark,
     LayoutDashboard,
     LayoutGrid,
-    Library,
     Link2,
     ListTree,
     Package,
     Receipt,
     Scale,
+    Settings2,
     Shield,
     SlidersHorizontal,
     Star,
@@ -40,12 +41,16 @@ export type NavGroup = {
     title: string;
     icon: LucideIcon;
     items: NavItem[];
+    /** When set, menus show this one link (a page that lists the group's items) instead of every item. */
+    hub?: NavItem;
 };
+
+export const REPORTS_HUB_URL = '/reports';
 
 export const overviewNavItem: NavItem = { title: 'Overview', href: '/overview', icon: Home };
 
 const accountingNavItems: NavItem[] = [
-    { title: 'Dashboard', href: '/accounting/dashboard', icon: LayoutGrid },
+    { title: 'Financial Dashboard', href: '/accounting/dashboard', icon: LayoutGrid },
     { title: 'Non-Cash Journals', href: '/accounting/journal-entries', icon: Receipt },
     { title: 'Cash & Bank Records', href: '/accounting/cash-bank-records', icon: Wallet },
     { title: 'Chart of Accounts', href: '/accounting/chart-of-accounts', icon: BookOpen },
@@ -72,7 +77,7 @@ const banksNavItems: NavItem[] = [
 ];
 
 const employeeMgmtNavItems: NavItem[] = [
-    { title: 'Dashboard', href: '/employee-management', icon: LayoutDashboard },
+    { title: 'People Dashboard', href: '/employee-management', icon: LayoutDashboard },
     { title: 'Employee Directory', href: '/libraries/employees', icon: UserRound },
     { title: 'Shift & Roster', href: '/employee-management/roster', icon: CalendarCheck },
     { title: 'Time & Attendance', href: '/employee-management/attendance', icon: Clock },
@@ -96,20 +101,93 @@ const SELF_SERVICE_HREFS = [
     '/employee-management/my-pay',
 ];
 
+const FINANCIAL = 'Financial statements';
+const RECEIVABLES = 'Receivables & payables';
+const TAX_OPERATIONS = 'Tax & operations';
+
+/** Sections of the Reports page, in display order. */
+export const REPORT_SECTIONS = [FINANCIAL, RECEIVABLES, TAX_OPERATIONS] as const;
+
 const reportsNavItems: NavItem[] = [
-    { title: 'Trial Balance', href: '/reports/trial-balance', icon: Scale },
-    { title: 'Income Statement', href: '/reports/income-statement', icon: FileSpreadsheet },
-    { title: 'Balance Sheet', href: '/reports/balance-sheet', icon: Wallet },
-    { title: 'Cash Flow', href: '/reports/cash-flow', icon: Calculator },
-    { title: 'Journal Register', href: '/reports/journal-register', icon: ListTree },
-    { title: 'AR Aging', href: '/reports/ar-aging', icon: FileSpreadsheet },
-    { title: 'AP Aging', href: '/reports/ap-aging', icon: FileSpreadsheet },
-    { title: 'Daily Sales', href: '/reports/operations/daily-sales', icon: Receipt },
-    { title: 'VAT Summary', href: '/reports/operations/vat-summary', icon: Calculator },
-    { title: 'Withholding Tax (2307)', href: '/reports/operations/ewt-2307', icon: Calculator },
-    { title: 'Cost of Goods Sold', href: '/reports/operations/cogs', icon: Package },
-    { title: 'Collections by Method', href: '/reports/operations/collections', icon: CreditCard },
-    { title: 'Deposits Liability', href: '/reports/operations/deposits', icon: Wallet },
+    {
+        title: 'Trial Balance',
+        href: '/reports/trial-balance',
+        icon: Scale,
+        section: FINANCIAL,
+        description: 'Debit and credit balance of every account for a period.',
+    },
+    {
+        title: 'Income Statement',
+        href: '/reports/income-statement',
+        icon: FileSpreadsheet,
+        section: FINANCIAL,
+        description: 'Revenue, expenses and net income.',
+    },
+    {
+        title: 'Balance Sheet',
+        href: '/reports/balance-sheet',
+        icon: Wallet,
+        section: FINANCIAL,
+        description: 'Assets, liabilities and equity as of a date.',
+    },
+    { title: 'Cash Flow', href: '/reports/cash-flow', icon: Calculator, section: FINANCIAL, description: 'Where cash came from and where it went.' },
+    {
+        title: 'Journal Register',
+        href: '/reports/journal-register',
+        icon: ListTree,
+        section: FINANCIAL,
+        description: 'Every journal entry in date order.',
+    },
+    {
+        title: 'AR Aging',
+        href: '/reports/ar-aging',
+        icon: FileSpreadsheet,
+        section: RECEIVABLES,
+        description: 'Unpaid invoices by how long they have been due.',
+    },
+    {
+        title: 'AP Aging',
+        href: '/reports/ap-aging',
+        icon: FileSpreadsheet,
+        section: RECEIVABLES,
+        description: 'Unpaid bills by how long they have been due.',
+    },
+    {
+        title: 'Collections by Method',
+        href: '/reports/operations/collections',
+        icon: CreditCard,
+        section: RECEIVABLES,
+        description: 'Payments received, split by cash, card, bank and e-wallet.',
+    },
+    {
+        title: 'Deposits Liability',
+        href: '/reports/operations/deposits',
+        icon: Wallet,
+        section: RECEIVABLES,
+        description: 'Customer deposits not yet applied to an invoice.',
+    },
+    { title: 'Daily Sales', href: '/reports/operations/daily-sales', icon: Receipt, section: TAX_OPERATIONS, description: 'Sales per day.' },
+    {
+        title: 'VAT Summary',
+        href: '/reports/operations/vat-summary',
+        icon: Calculator,
+        section: TAX_OPERATIONS,
+        description: 'Output and input VAT for the period.',
+    },
+    {
+        title: 'Withholding Tax (2307)',
+        href: '/reports/operations/ewt-2307',
+        icon: Calculator,
+        section: TAX_OPERATIONS,
+        description: 'Expanded withholding tax per supplier.',
+    },
+    {
+        title: 'Cost of Goods Sold',
+        href: '/reports/operations/cogs',
+        icon: Package,
+        section: TAX_OPERATIONS,
+        description: 'Cost of the items sold in the period.',
+    },
 ];
 
 const librariesNavItems: NavItem[] = [
@@ -318,7 +396,7 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
             if (!isEmployee) return item;
 
             if (item.href === '/employee-management/portal') {
-                return { ...item, title: 'Dashboard' };
+                return { ...item, title: 'Home' };
             }
 
             if (item.href === '/employee-management/attendance') {
@@ -362,18 +440,43 @@ export function useNavGroups(): { groups: NavGroup[]; isEmployee: boolean } {
             }
         });
 
+    const hrefIs = (href: string) => (item: NavItem) => item.href === href;
+    const hrefIsNot = (href: string) => (item: NavItem) => item.href !== href;
+    const CASH_BANK = '/accounting/cash-bank-records';
+    const POSTING_RULES = '/integration/optical/rules';
+
+    // Grouped by the job being done rather than by module: the day's transactions, the books they end up in, the
+    // people side, reports, and the setup behind it all.
     const groups: NavGroup[] = isEmployee
-        ? [{ title: 'Employee Management', icon: Users, items: filteredEmployeeMgmt }]
+        ? [{ title: 'My Work', icon: Users, items: filteredEmployeeMgmt }]
         : [
-              { title: 'Accounting', icon: BookOpen, items: filteredAccounting },
-              { title: 'Billing', icon: Receipt, items: filteredBilling },
-              { title: 'Inventory Integration', icon: Package, items: filteredIntegration },
-              { title: 'Accounts Payable', icon: CreditCard, items: filteredAp },
-              { title: 'Banks', icon: Landmark, items: filteredBanks },
-              { title: 'Employee Management', icon: Users, items: filteredEmployeeMgmt },
-              { title: 'Reports', icon: BarChart3, items: filteredReports },
-              { title: 'Libraries', icon: Library, items: filteredLibraries },
-              { title: 'Admin', icon: Shield, items: filteredAdmin },
+              {
+                  title: 'Daily Work',
+                  icon: Briefcase,
+                  items: [
+                      ...filteredBilling,
+                      ...filteredAp,
+                      ...filteredAccounting.filter(hrefIs(CASH_BANK)),
+                      ...filteredIntegration.filter(hrefIsNot(POSTING_RULES)).reverse(),
+                  ],
+              },
+              {
+                  title: 'Books',
+                  icon: BookOpen,
+                  items: [...filteredAccounting.filter(hrefIsNot(CASH_BANK)), ...filteredBanks.filter(hrefIs('/banks/reconciliations'))],
+              },
+              { title: 'People', icon: Users, items: filteredEmployeeMgmt },
+              { title: 'Reports', icon: BarChart3, items: filteredReports, hub: { title: 'Reports', href: REPORTS_HUB_URL, icon: BarChart3 } },
+              {
+                  title: 'Setup',
+                  icon: Settings2,
+                  items: [
+                      ...filteredBanks.filter(hrefIs('/banks/accounts')),
+                      ...filteredIntegration.filter(hrefIs(POSTING_RULES)),
+                      ...filteredLibraries,
+                      ...filteredAdmin,
+                  ],
+              },
           ];
 
     return { groups: groups.filter((group) => group.items.length > 0), isEmployee };

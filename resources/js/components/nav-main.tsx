@@ -71,7 +71,7 @@ export function NavMain({ items = [], title, icon: Icon }: { items: NavItem[]; t
                                 <SidebarMenuButton
                                     asChild
                                     isActive={url !== '' && url === activeUrl}
-                                    className="data-[active=true]:font-semibold data-[active=true]:shadow-[inset_3px_0_0_var(--sidebar-primary)]"
+                                    className="data-[active=true]:font-semibold data-[active=true]:shadow-[inset_3px_0_0_var(--sidebar-primary)] max-md:h-11"
                                     tooltip={{ children: item.title }}
                                 >
                                     <Link href={item.href} prefetch onClick={(e) => handleLibraryClick(e, url)}>
@@ -109,7 +109,7 @@ export function NavMain({ items = [], title, icon: Icon }: { items: NavItem[]; t
                     >
                         <SidebarMenuItem className="group/collapsible">
                             <CollapsibleTrigger asChild>
-                                <SidebarMenuButton className={parentClassName}>
+                                <SidebarMenuButton className={cn(parentClassName, 'max-md:h-11')}>
                                     {Icon && <Icon />}
                                     <span className="min-w-0 flex-1 truncate">{title}</span>
                                     <ChevronRight className="ml-auto size-4 opacity-70 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[state=open]/collapsible:rotate-90" />
@@ -125,7 +125,7 @@ export function NavMain({ items = [], title, icon: Icon }: { items: NavItem[]; t
                                                     asChild
                                                     size="sm"
                                                     isActive={url !== '' && url === activeUrl}
-                                                    className="text-sidebar-foreground/80 data-[active=true]:text-sidebar-primary h-7 data-[active=true]:font-semibold data-[active=true]:shadow-[inset_2px_0_0_var(--sidebar-primary)] [&>svg]:size-3.5 [&>svg]:text-current"
+                                                    className="text-sidebar-foreground/80 data-[active=true]:text-sidebar-primary h-7 data-[active=true]:font-semibold data-[active=true]:shadow-[inset_2px_0_0_var(--sidebar-primary)] max-md:h-10 max-md:text-sm [&>svg]:size-3.5 [&>svg]:text-current"
                                                 >
                                                     <Link href={item.href} prefetch onClick={(e) => handleLibraryClick(e, url)}>
                                                         {item.icon && <item.icon />}

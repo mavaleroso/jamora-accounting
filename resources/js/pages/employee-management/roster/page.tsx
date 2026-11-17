@@ -48,7 +48,7 @@ import { toast } from '@/lib/toast';
 import type { Auth, BreadcrumbItem } from '@/types';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management' },
+    { title: 'People', href: '/employee-management' },
     { title: 'Shift & Roster', href: '/employee-management/roster' },
 ];
 

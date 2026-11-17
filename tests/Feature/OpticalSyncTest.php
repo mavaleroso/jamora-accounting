@@ -811,3 +811,40 @@ test('the posting-rules screen gives a service its own revenue account and stays
     $as()->delete("/integration/optical/rules/services/{$rule->id}")->assertSessionHas('status');
     expect(PostingRule::withoutGlobalScope('entity')->where('event', 'sale_service:5')->exists())->toBeFalse();
 });
+
+test('a check asked for as JSON reports how it went, and its progress can be followed from any page', function () {
+    Permission::findOrCreate('integration.optical.sync', 'web');
+    $user = User::factory()->create();
+    $user->givePermissionTo('integration.optical.sync');
+    $jam = Entity::where('code', 'JAM_OPTICUS')->firstOrFail();
+    $user->entities()->attach([$jam->id => ['is_default' => true]]);
+    $as = fn () => $this->actingAs($user)->withSession(['current_entity_id' => $jam->id]);
+
+    // Nothing started by this user yet.
+    $as()->getJson('/integration/optical/status')->assertOk()->assertExactJson(['running' => null, 'latest' => null]);
+
+    $this->api['payments'] = [opticalPayment(opticalOrder())];
+    $as()->postJson('/integration/optical/run')
+        ->assertOk()
+        ->assertJson(['ok' => true, 'message' => 'Checked the optical POS: 1 booked.', 'run' => ['status' => 'completed', 'booked' => 1]]);
+
+    $finished = SyncRun::query()->sole();
+    $as()->getJson('/integration/optical/status')
+        ->assertJson(['running' => null, 'latest' => ['id' => $finished->id, 'ok' => true, 'message' => 'Checked the optical POS: 1 booked.']]);
+
+    // A check in progress reports the step it is on and its counts so far; one the books started on their own is not
+    // this user's to follow.
+    SyncRun::query()->create(['started_at' => now(), 'status' => 'running', 'message' => 'Reading orders', 'processed' => 5]);
+    $as()->getJson('/integration/optical/status')->assertJson(['running' => null]);
+
+    $mine = SyncRun::query()->create(['started_at' => now(), 'status' => 'running', 'triggered_by' => $user->id, 'message' => 'Reading movements', 'processed' => 40, 'created_entries' => 38, 'failed' => 2]);
+    $as()->getJson('/integration/optical/status')
+        ->assertJson(['running' => ['id' => $mine->id, 'step' => 'Reading movements', 'read' => 40, 'booked' => 38, 'failed' => 2]]);
+
+    // Refused while another check runs, with the reason.
+    Cache::lock('optical-sync', 3600)->get();
+    $as()->postJson('/integration/optical/run')->assertStatus(409)->assertJson(['ok' => false]);
+
+    // Only for those who may start a check.
+    $this->actingAs(User::factory()->create())->getJson('/integration/optical/status')->assertForbidden();
+});

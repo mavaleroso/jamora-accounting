@@ -1,4 +1,5 @@
 import { ConfirmProvider } from '@/components/confirm-dialog';
+import { PageLoader } from '@/components/page-loader';
 import { Toaster } from '@/components/ui/sonner';
 import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
@@ -23,6 +24,7 @@ createInertiaApp({
                     <App {...props} />
                 </ConfirmProvider>
                 <Toaster position="top-right" />
+                <PageLoader />
             </StrictMode>,
         );
     },

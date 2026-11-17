@@ -40,7 +40,9 @@ export function EntitySwitcher({ variant = 'sidebar', className }: EntitySwitche
         if (entityId === current.id) {
             return;
         }
-        router.post('/entities/switch', { entity_id: entityId }, { preserveScroll: true });
+        // Pages fetched ahead show the other company's books: drop them, before the switch and again after it.
+        router.flushAll();
+        router.post('/entities/switch', { entity_id: entityId }, { preserveScroll: true, onSuccess: () => router.flushAll() });
     };
 
     if (variant === 'header') {

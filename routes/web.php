@@ -131,6 +131,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     });
 
     Route::prefix('reports')->name('reports.')->group(function () {
+        // Lists the reports the user may open; each report keeps its own permission.
+        Route::inertia('/', 'reports/index')->name('index');
         Route::controller(TrialBalanceController::class)->prefix('trial-balance')->name('trial-balance.')->group(function () {
             Route::get('/', 'index')->name('index')->middleware('permission:reports.trial-balance.view');
             Route::post('data', 'data')->name('data')->middleware('permission:reports.trial-balance.view');
@@ -472,6 +474,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
             Route::post('/run', 'run')
                 ->name('run')
+                ->middleware('permission:integration.optical.sync');
+
+            Route::get('/status', 'status')
+                ->name('status')
                 ->middleware('permission:integration.optical.sync');
 
             Route::get('/exceptions', 'exceptions')

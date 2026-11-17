@@ -71,6 +71,9 @@ class OpticalSyncService
 
     protected bool $outOfTime = false;
 
+    /** What the run is reading right now (a stream, or "retries"), for the progress shown while it runs. */
+    protected ?string $reading = null;
+
     public function __construct(
         protected OpticalSource $source,
         protected OpticalRouter $router,
@@ -179,6 +182,7 @@ class OpticalSyncService
         $this->stats = [];
         $this->resyncOrders = [];
         $this->outOfTime = false;
+        $this->reading = null;
         $this->deadline = ($options['budget'] ?? null) ? microtime(true) + (int) $options['budget'] : null;
         $this->run = SyncRun::query()->create(['triggered_by' => $user?->id, 'started_at' => now(), 'status' => 'running']);
 
@@ -247,6 +251,7 @@ class OpticalSyncService
         };
 
         $this->stats[$stream] = ['read' => 0, 'booked' => 0, 'skipped' => 0, 'failed' => 0];
+        $this->reading = $stream;
         $seen = [];
 
         // Every stream comes oldest change first, so a run that stops resumes after the last record it handled.
@@ -376,6 +381,7 @@ class OpticalSyncService
     protected function retryDocuments($documents): void
     {
         $this->stats['retries'] ??= ['read' => 0, 'booked' => 0, 'skipped' => 0, 'failed' => 0];
+        $this->reading = 'retries';
 
         foreach ($documents->groupBy('source_type') as $type => $docs) {
             try {
@@ -410,10 +416,38 @@ class OpticalSyncService
         }
     }
 
-    /** Tell other requests this run is still alive. */
+    /** Tell other requests this run is still alive, and how far it has got. */
     protected function heartbeat(): void
     {
-        $this->run->touch();
+        $totals = $this->totals();
+
+        $this->run->forceFill([
+            'processed' => $totals['read'],
+            'created_entries' => $totals['booked'],
+            'skipped' => $totals['skipped'],
+            'failed' => $totals['failed'],
+            'message' => match ($this->reading) {
+                null => null,
+                'retries' => 'Retrying documents that failed earlier',
+                default => "Reading {$this->reading}",
+            },
+        ])->touch();
+    }
+
+    /**
+     * @return array{read: int, booked: int, skipped: int, failed: int}
+     */
+    protected function totals(): array
+    {
+        $totals = ['read' => 0, 'booked' => 0, 'skipped' => 0, 'failed' => 0];
+
+        foreach ($this->stats as $s) {
+            foreach ($totals as $key => $value) {
+                $totals[$key] = $value + ($s[$key] ?? 0);
+            }
+        }
+
+        return $totals;
     }
 
     /**
@@ -460,14 +494,11 @@ class OpticalSyncService
 
     protected function finish(bool $quiet = false): void
     {
-        $totals = ['read' => 0, 'booked' => 0, 'skipped' => 0, 'failed' => 0];
+        $totals = $this->totals();
         $parts = [];
         $streamErrors = [];
 
         foreach ($this->stats as $stream => $s) {
-            foreach ($totals as $key => $value) {
-                $totals[$key] = $value + ($s[$key] ?? 0);
-            }
             if (($s['read'] ?? 0) > 0 || isset($s['error'])) {
                 $verb = $stream === 'users' ? 'saved' : 'booked';
                 $parts[] = "{$stream}: {$s['read']} read, {$s['booked']} {$verb}".($s['failed'] ? ", {$s['failed']} failed" : '');

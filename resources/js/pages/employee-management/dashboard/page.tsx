@@ -26,7 +26,7 @@ import { TONE } from '../attendance/lib';
 import { RUN_STATUS, type RunStatus } from '../../payroll/runs/lib';
 import { TrendLine, VizStyles, vizVar } from '../reports/charts';
 
-const breadcrumbs: BreadcrumbItem[] = [{ title: 'Employee Management', href: '/employee-management' }];
+const breadcrumbs: BreadcrumbItem[] = [{ title: 'People', href: '/employee-management' }];
 
 type Card = { id: number; employee_code: string; name: string; position: string | null; avatar_url: string | null };
 type BoardPerson = Card & { status: string; late_by: number | null; tardiness_minutes: number; shift_start: string | null; leave: string | null };

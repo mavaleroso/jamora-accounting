@@ -24,9 +24,13 @@ export function AppSidebar() {
                 ) : (
                     <>
                         <NavMain items={[overviewNavItem]} />
-                        {groups.map((group) => (
-                            <NavMain key={group.title} items={group.items} title={group.title} icon={group.icon} />
-                        ))}
+                        {groups.map((group) =>
+                            group.hub ? (
+                                <NavMain key={group.title} items={[group.hub]} />
+                            ) : (
+                                <NavMain key={group.title} items={group.items} title={group.title} icon={group.icon} />
+                            ),
+                        )}
                     </>
                 )}
             </SidebarContent>

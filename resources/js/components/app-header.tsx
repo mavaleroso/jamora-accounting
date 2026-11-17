@@ -2,14 +2,15 @@ import { AppNavbarMobileNav, AppNavbarNav } from '@/components/app-navbar-nav';
 import { isEntityScopedPath } from '@/components/app-sidebar-header';
 import { AppearanceToggle } from '@/components/appearance-toggle';
 import { Breadcrumbs } from '@/components/breadcrumbs';
+import { CommandPaletteButton } from '@/components/command-palette';
 import { EntitySwitcher } from '@/components/entity-switcher';
 import LayoutToggleDropdown from '@/components/layout-toggle-dropdown';
+import { OPEN_MENU_EVENT } from '@/components/mobile-tab-bar';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { UserInfo } from '@/components/user-info';
 import { UserMenuContent } from '@/components/user-menu-content';
-import { ViewModeSwitch } from '@/components/view-mode-switch';
 import { useContentWidth } from '@/hooks/use-app-layout';
 import { shellContainerClass } from '@/lib/app-shell-layout';
 import { APP_BRAND } from '@/lib/entities';
@@ -17,7 +18,7 @@ import { cn } from '@/lib/utils';
 import type { BreadcrumbItem, SharedData } from '@/types';
 import { Link, usePage } from '@inertiajs/react';
 import { Menu } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type Props = { breadcrumbs?: BreadcrumbItem[] };
 
@@ -40,6 +41,13 @@ export function AppHeader({ breadcrumbs = [] }: Props) {
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const { contentWidth } = useContentWidth();
     const container = shellContainerClass(contentWidth);
+
+    // The tab bar's Menu button opens the same slide-out menu as the button here.
+    useEffect(() => {
+        const open = () => setMobileNavOpen(true);
+        window.addEventListener(OPEN_MENU_EVENT, open);
+        return () => window.removeEventListener(OPEN_MENU_EVENT, open);
+    }, []);
 
     if (!auth.user) return null;
 
@@ -111,9 +119,11 @@ export function AppHeader({ breadcrumbs = [] }: Props) {
                         )}
                     </div>
                     {isEntityScopedPath(url) && <EntitySwitcher variant="header" />}
-                    <ViewModeSwitch />
+                    <div className="max-md:hidden">
+                        <CommandPaletteButton />
+                    </div>
                     <AppearanceToggle />
-                    <LayoutToggleDropdown />
+                    <LayoutToggleDropdown className="max-md:hidden" />
                 </div>
             </div>
         </header>

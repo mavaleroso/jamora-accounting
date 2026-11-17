@@ -9,7 +9,7 @@ export function AppFooter() {
     const year = new Date().getFullYear();
 
     return (
-        <footer className="text-muted-foreground mt-auto border-t px-4 py-3 text-xs md:px-6 print:hidden">
+        <footer className="text-muted-foreground mt-auto border-t px-4 py-3 text-xs max-md:hidden md:px-6 print:hidden">
             <div className="flex flex-col items-center justify-between gap-2 sm:flex-row">
                 <p>
                     © {year} <span className="text-foreground font-medium">{APP_BRAND.name}</span> · {APP_BRAND.tagline} for the JAM Opticus Group

@@ -14,7 +14,7 @@ import { AddItemDialog, AddMonthDialog, DetailDialog, StepDialog, type Step } fr
 import { CATEGORY, COMPLIANCE_URL, daysUntil, dueLabel, fmtDate, mismatch, NEXT_ACTION, peso, STEPS, TONE, type Item } from './lib';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management' },
+    { title: 'People', href: '/employee-management' },
     { title: 'Compliance', href: COMPLIANCE_URL },
 ];
 

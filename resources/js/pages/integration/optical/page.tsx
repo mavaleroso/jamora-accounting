@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import AppLayout from '@/layouts/app-layout';
+import { startOpticalSync, useOpticalSyncRunning } from '@/lib/optical-sync';
 import type { BreadcrumbItem, SyncRun } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -91,7 +92,8 @@ const columns: ColumnDef<SyncRun>[] = [
 
 export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCount, cursors, streams, settings }: Props) {
     const [full, setFull] = React.useState(false);
-    const [syncing, setSyncing] = React.useState(false);
+    // Followed in a toast that stays up on every page (see lib/optical-sync), so the check survives leaving this one.
+    const syncing = useOpticalSyncRunning();
     const confirm = useConfirm();
     const active = lastRun?.status === 'running';
 
@@ -111,8 +113,7 @@ export default function OpticalSyncPage({ runs, lastRun, failedCount, reviewCoun
             confirmLabel: full ? 'Re-read everything' : 'Check now',
         });
         if (!ok) return;
-        setSyncing(true);
-        router.post('/integration/optical/run', { full }, { preserveScroll: true, onFinish: () => setSyncing(false) });
+        void startOpticalSync(full);
     };
 
     return (

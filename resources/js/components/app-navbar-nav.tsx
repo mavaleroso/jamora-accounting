@@ -12,20 +12,13 @@ const navbarLinkClass =
 
 const activeLinkClass = 'bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_-2px_0_var(--sidebar-primary)] hover:bg-sidebar-accent';
 
-/** Shorter group names so the full module list fits a single navbar row. */
-const navbarTitle: Record<string, string> = {
-    'Inventory Integration': 'Inventory',
-    'Accounts Payable': 'Payables',
-    'Employee Management': 'People',
-};
-
 const hrefOf = (href: NavItem['href']) => (typeof href === 'string' ? href : href.url);
 
 /** Most specific match wins, so a section root is not also active on its child pages. */
 function useActiveUrl(groups: NavGroup[]): string | undefined {
     const { isCurrentUrl } = useCurrentUrl();
 
-    return [overviewNavItem, ...groups.flatMap((g) => g.items)]
+    return [overviewNavItem, ...groups.flatMap((g) => (g.hub ? [g.hub] : g.items))]
         .map((item) => hrefOf(item.href))
         .filter((url) => url && isCurrentUrl(url))
         .sort((a, b) => b.length - a.length)[0];
@@ -55,7 +48,7 @@ function NavGroupDropdown({ group, activeUrl }: { group: NavGroup; activeUrl?: s
             <DropdownMenuTrigger asChild>
                 <Button type="button" variant="ghost" className={cn(navbarLinkClass, 'gap-1.5', active && activeLinkClass)}>
                     <Icon className="h-4 w-4 opacity-80" aria-hidden />
-                    {navbarTitle[group.title] ?? group.title}
+                    {group.title}
                     <ChevronDown className="h-3.5 w-3.5 opacity-70" aria-hidden />
                 </Button>
             </DropdownMenuTrigger>
@@ -111,7 +104,21 @@ export function AppNavbarNav({ className }: { className?: string }) {
                               <NavBadge count={item.count} />
                           </Link>
                       ))
-                : groups.map((group) => <NavGroupDropdown key={group.title} group={group} activeUrl={activeUrl} />)}
+                : groups.map((group) =>
+                      group.hub ? (
+                          <Link
+                              key={group.title}
+                              href={group.hub.href}
+                              prefetch
+                              className={cn(navbarLinkClass, hrefOf(group.hub.href) === activeUrl && activeLinkClass)}
+                          >
+                              <group.icon className="h-4 w-4 opacity-80" aria-hidden />
+                              {group.hub.title}
+                          </Link>
+                      ) : (
+                          <NavGroupDropdown key={group.title} group={group} activeUrl={activeUrl} />
+                      ),
+                  )}
         </nav>
     );
 }
@@ -122,7 +129,7 @@ function MobileNavLink({ item, active, onNavigate }: { item: NavItem; active: bo
             href={item.href}
             onClick={onNavigate}
             className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                 active
                     ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_3px_0_0_var(--sidebar-primary)]'
                     : 'text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
@@ -146,7 +153,7 @@ export function AppNavbarMobileNav({ onNavigate }: { onNavigate?: () => void }) 
             {groups.map((group) => (
                 <div key={group.title} className="space-y-1">
                     <p className="text-sidebar-foreground/50 px-3 text-[10px] font-semibold tracking-wider uppercase">{group.title}</p>
-                    {group.items.map((item) => (
+                    {(group.hub ? [group.hub] : group.items).map((item) => (
                         <MobileNavLink key={item.title} item={item} active={hrefOf(item.href) === activeUrl} onNavigate={onNavigate} />
                     ))}
                 </div>

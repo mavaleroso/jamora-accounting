@@ -18,7 +18,7 @@ import { PayrollSection } from './payroll';
 import { WorkforceSection } from './workforce';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Employee Management', href: '/employee-management' },
+    { title: 'People', href: '/employee-management' },
     { title: 'People Reports', href: REPORTS_URL },
 ];
 

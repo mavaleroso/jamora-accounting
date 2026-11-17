@@ -84,7 +84,7 @@ export default function PerformancePage({ canManage, selfId, today, reviewTypes,
     const confirm = useConfirm();
 
     const breadcrumbs: BreadcrumbItem[] = [
-        { title: 'Employee Management', href: canManage ? '/employee-management' : '/employee-management/portal' },
+        { title: 'People', href: canManage ? '/employee-management' : '/employee-management/portal' },
         { title: canManage ? 'Performance Reviews' : 'My Reviews', href: URL },
     ];
 

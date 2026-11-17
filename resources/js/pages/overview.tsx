@@ -1,5 +1,4 @@
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { type NavGroup, useNavGroups } from '@/hooks/use-nav-groups';
 import AppLayout from '@/layouts/app-layout';
@@ -7,7 +6,7 @@ import { formatPhpCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem, SharedData } from '@/types';
 import { Head, Link, usePage } from '@inertiajs/react';
-import { AlertTriangleIcon, ArrowRightIcon, Building2Icon, CalendarDaysIcon, CircleCheckIcon, OctagonAlertIcon } from 'lucide-react';
+import { AlertTriangleIcon, Building2Icon, CalendarDaysIcon, ChevronRightIcon, CircleCheckIcon, OctagonAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Overview', href: '/overview' }];
@@ -41,7 +40,7 @@ const toneText: Record<Tone, string> = {
 };
 
 const toneSurface: Record<Tone, string> = {
-    default: 'border-border bg-muted/30 hover:bg-muted/60',
+    default: 'border-border bg-card hover:bg-muted/60',
     warning: 'border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10',
     danger: 'border-red-500/30 bg-red-500/5 hover:bg-red-500/10',
     success: 'border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10',
@@ -54,6 +53,7 @@ function formatValue(metric: Metric): string {
     return String(metric.value);
 }
 
+/** Something to act on: a warning or danger figure that is not zero. */
 function isAlert(metric: Metric): boolean {
     if (metric.tone !== 'warning' && metric.tone !== 'danger') return false;
     return metric.format === 'text' || Number(metric.value) > 0;
@@ -80,19 +80,23 @@ function useGreeting() {
     return state;
 }
 
-function Hero({ moduleCount }: { moduleCount?: number }) {
+function Hero({ waiting }: { waiting?: number }) {
     const { auth, entity } = usePage<OverviewProps>().props;
     const greeting = useGreeting();
     const firstName = auth?.user?.name?.split(' ')[0];
 
+    let headline = 'Here is what needs you today';
+    if (waiting === 0) headline = 'You are all caught up';
+    else if (waiting !== undefined) headline = `${waiting} ${waiting === 1 ? 'thing needs' : 'things need'} you today`;
+
     return (
-        <section className="from-primary/15 via-primary/5 relative overflow-hidden rounded-xl border bg-gradient-to-br to-transparent p-6">
-            <div className="bg-primary/10 pointer-events-none absolute -top-16 -right-16 size-56 rounded-full blur-3xl" />
-            <p className="text-muted-foreground text-sm font-medium">{greeting?.greeting ?? 'Welcome back'}</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-                {firstName ? `${firstName}, here's your day at a glance` : "Here's your day at a glance"}
-            </h1>
-            <div className="text-muted-foreground mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+        <section className="flex flex-col gap-1">
+            <p className="text-muted-foreground text-sm font-medium">
+                {greeting?.greeting ?? 'Welcome back'}
+                {firstName && `, ${firstName}`}
+            </p>
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{headline}</h1>
+            <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
                 <span className="inline-flex items-center gap-1.5">
                     <CalendarDaysIcon className="size-4" />
                     {greeting?.date ?? <Skeleton className="h-4 w-40" />}
@@ -103,28 +107,24 @@ function Hero({ moduleCount }: { moduleCount?: number }) {
                         {entity.current.name}
                     </span>
                 )}
-                {moduleCount !== undefined && (
-                    <span>
-                        {moduleCount} {moduleCount === 1 ? 'module' : 'modules'} available
-                    </span>
-                )}
             </div>
         </section>
     );
 }
 
-function AttentionStrip({ modules }: { modules?: VisibleModule[] }) {
-    if (!modules) {
+type Alert = { group: NavGroup; metric: Metric };
+
+/** The work queue: one row per thing waiting on the user, most urgent first, each opening the page that clears it. */
+function Inbox({ alerts }: { alerts?: Alert[] }) {
+    if (!alerts) {
         return (
-            <div className="flex flex-wrap gap-2">
+            <div className="space-y-2">
                 {Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} className="h-9 w-48 rounded-full" />
+                    <Skeleton key={i} className="h-[60px] rounded-lg" />
                 ))}
             </div>
         );
     }
-
-    const alerts = modules.flatMap(({ group, metrics }) => metrics.filter(isAlert).map((metric) => ({ group, metric })));
 
     if (alerts.length === 0) {
         return (
@@ -136,38 +136,39 @@ function AttentionStrip({ modules }: { modules?: VisibleModule[] }) {
     }
 
     return (
-        <section aria-labelledby="attention-heading" className="space-y-2">
-            <h2 id="attention-heading" className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
+        <section aria-labelledby="inbox-heading" className="space-y-2">
+            <h2 id="inbox-heading" className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
                 Needs attention
             </h2>
-            <div className="flex flex-wrap gap-2">
+            <ul className="space-y-2">
                 {alerts.map(({ group, metric }) => {
                     const Icon = metric.tone === 'danger' ? OctagonAlertIcon : AlertTriangleIcon;
+                    const className = cn('flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors', toneSurface[metric.tone]);
                     const content = (
                         <>
-                            <Icon className="size-4 shrink-0" />
-                            <span className="font-semibold tabular-nums">{formatValue(metric)}</span>
-                            <span className="text-foreground/80">{metric.label}</span>
-                            <span className="text-muted-foreground hidden sm:inline">· {group.title}</span>
+                            <Icon className={cn('size-5 shrink-0', toneText[metric.tone])} />
+                            <span className={cn('min-w-8 text-lg font-semibold tabular-nums', toneText[metric.tone])}>{formatValue(metric)}</span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium">{metric.label}</span>
+                                <span className="text-muted-foreground block truncate text-xs">{metric.hint ?? group.title}</span>
+                            </span>
+                            {metric.href && <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />}
                         </>
                     );
-                    const className = cn(
-                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors',
-                        toneSurface[metric.tone],
-                        toneText[metric.tone],
-                    );
 
-                    return metric.href ? (
-                        <Link key={`${group.title}-${metric.label}`} href={metric.href} prefetch className={className}>
-                            {content}
-                        </Link>
-                    ) : (
-                        <span key={`${group.title}-${metric.label}`} className={className}>
-                            {content}
-                        </span>
+                    return (
+                        <li key={`${group.title}-${metric.label}`}>
+                            {metric.href ? (
+                                <Link href={metric.href} prefetch className={className}>
+                                    {content}
+                                </Link>
+                            ) : (
+                                <div className={className}>{content}</div>
+                            )}
+                        </li>
                     );
                 })}
-            </div>
+            </ul>
         </section>
     );
 }
@@ -191,93 +192,61 @@ function MetricTile({ metric }: { metric: Metric }) {
     );
 }
 
-function ModuleCard({ group, metrics }: VisibleModule) {
-    const Icon = group.icon;
-    const primary = group.items[0];
+/** The figures behind each part of the menu, for a read of the business once the queue is clear. */
+function Glance({ modules }: { modules?: VisibleModule[] }) {
+    if (!modules) {
+        return (
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, i) => (
+                    <Skeleton key={i} className="h-[68px] rounded-lg" />
+                ))}
+            </div>
+        );
+    }
 
     return (
-        <Card className="gap-4 py-5 transition-shadow hover:shadow-md">
-            <CardHeader className="flex flex-row items-center gap-3 px-5">
-                <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
-                    <Icon className="size-[18px]" />
-                </div>
-                <div className="min-w-0 flex-1">
-                    <CardTitle className="truncate text-base">{group.title}</CardTitle>
-                    <p className="text-muted-foreground text-xs">
-                        {group.items.length} {group.items.length === 1 ? 'page' : 'pages'}
-                    </p>
-                </div>
-                {primary && (
-                    <Link
-                        href={primary.href}
-                        prefetch
-                        aria-label={`Open ${group.title}`}
-                        className="text-muted-foreground hover:bg-accent hover:text-accent-foreground rounded-md p-1.5 transition-colors"
-                    >
-                        <ArrowRightIcon className="size-4" />
-                    </Link>
-                )}
-            </CardHeader>
-
-            <CardContent className="flex flex-1 flex-col gap-4 px-5">
-                <div className="grid grid-cols-2 gap-2">
-                    {metrics.map((metric) => (
-                        <MetricTile key={metric.label} metric={metric} />
-                    ))}
-                </div>
-
-                <div className="mt-auto flex flex-wrap gap-1.5">
-                    {group.items.map((item) => (
-                        <Link key={item.title} href={item.href} prefetch>
-                            <Badge
-                                variant="outline"
-                                className="hover:bg-accent hover:text-accent-foreground gap-1 py-1 font-normal transition-colors"
-                            >
-                                {item.icon && <item.icon className="size-3" />}
-                                {item.title}
-                            </Badge>
-                        </Link>
-                    ))}
-                </div>
-            </CardContent>
-        </Card>
-    );
-}
-
-function ModuleCardSkeleton() {
-    return (
-        <Card className="gap-4 py-5">
-            <CardHeader className="flex flex-row items-center gap-3 px-5">
-                <Skeleton className="size-9 rounded-lg" />
-                <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-4 w-32" />
-                    <Skeleton className="h-3 w-16" />
-                </div>
-            </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-2 px-5">
-                <Skeleton className="h-[68px] rounded-lg" />
-                <Skeleton className="h-[68px] rounded-lg" />
-            </CardContent>
-        </Card>
+        <div className="space-y-5">
+            {modules.map(({ group, metrics }) => (
+                <section key={group.title} aria-label={group.title} className="space-y-2">
+                    <h2 className="text-muted-foreground flex items-center gap-2 text-xs font-semibold tracking-wider uppercase">
+                        <group.icon className="size-3.5" />
+                        {group.title}
+                    </h2>
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+                        {metrics.map((metric) => (
+                            <MetricTile key={metric.label} metric={metric} />
+                        ))}
+                    </div>
+                </section>
+            ))}
+        </div>
     );
 }
 
 const hrefOf = (href: NavGroup['items'][number]['href']) => (typeof href === 'string' ? href : href.url);
+const pathOf = (href: string) => href.split('?')[0];
 
 /**
- * Pair each permitted sidebar group with its metrics, keeping only metrics that link to a page the user can
- * open, and dropping groups left with nothing to show. The server already gates metrics by permission; this
- * keeps the page consistent with the sidebar too.
+ * Pair each permitted menu group with its metrics, keeping only metrics that link to a page the user can open,
+ * and dropping groups left with nothing to show. The server already gates metrics by permission; this keeps the
+ * page consistent with the menu too.
  */
 function visibleModules(groups: NavGroup[], modules: Record<string, Metric[]>): VisibleModule[] {
-    return groups
-        .map((group) => {
-            const allowed = new Set(group.items.map((item) => hrefOf(item.href)));
-            const metrics = (modules[group.title] ?? []).filter((metric) => !metric.href || allowed.has(metric.href));
+    const allowed = new Set(groups.flatMap((group) => group.items.map((item) => hrefOf(item.href))));
 
-            return { group, metrics };
-        })
+    return groups
+        .map((group) => ({
+            group,
+            metrics: (modules[group.title] ?? []).filter((metric) => !metric.href || allowed.has(pathOf(metric.href))),
+        }))
         .filter(({ metrics }) => metrics.length > 0);
+}
+
+/** Overdue and failed items (danger) before things that are merely waiting (warning). */
+function alertsOf(modules: VisibleModule[]): Alert[] {
+    return modules
+        .flatMap(({ group, metrics }) => metrics.filter(isAlert).map((metric) => ({ group, metric })))
+        .sort((a, b) => Number(b.metric.tone === 'danger') - Number(a.metric.tone === 'danger'));
 }
 
 export default function Overview() {
@@ -285,12 +254,13 @@ export default function Overview() {
     const { groups } = useNavGroups();
     // undefined while the deferred metrics are loading.
     const visible = modules ? visibleModules(groups, modules) : undefined;
+    const alerts = visible ? alertsOf(visible) : undefined;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Overview" />
-            <div className="space-y-6 p-4">
-                <Hero moduleCount={visible?.length} />
+            <div className="space-y-6 p-4 sm:p-6">
+                <Hero waiting={alerts?.length} />
 
                 {visible?.length === 0 ? (
                     <Card>
@@ -300,13 +270,12 @@ export default function Overview() {
                     </Card>
                 ) : (
                     <>
-                        <AttentionStrip modules={visible} />
-
-                        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                            {visible
-                                ? visible.map(({ group, metrics }) => <ModuleCard key={group.title} group={group} metrics={metrics} />)
-                                : Array.from({ length: Math.min(Math.max(groups.length, 1), 6) }).map((_, i) => <ModuleCardSkeleton key={i} />)}
-                        </div>
+                        <Inbox alerts={alerts} />
+                        <Glance
+                            modules={visible
+                                ?.map(({ group, metrics }) => ({ group, metrics: metrics.filter((m) => !isAlert(m)) }))
+                                .filter(({ metrics }) => metrics.length > 0)}
+                        />
                     </>
                 )}
             </div>

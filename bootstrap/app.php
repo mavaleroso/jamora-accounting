@@ -4,6 +4,7 @@ use App\Http\Middleware\AuditTrailMiddleware;
 use App\Http\Middleware\HandleAppearance;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\KeepOpticalCurrent;
+use App\Http\Middleware\MergeSessionChanges;
 use App\Http\Middleware\RunDueTasks;
 use App\Http\Middleware\SetCurrentEntity;
 use Illuminate\Foundation\Application;
@@ -32,6 +33,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->encryptCookies(except: ['appearance', 'sidebar_state']);
 
         $middleware->web(append: [
+            // First, so it wraps everything that touches the session after it has been read.
+            MergeSessionChanges::class,
             TrimStrings::class,
             ConvertEmptyStringsToNull::class,
             HandleAppearance::class,
